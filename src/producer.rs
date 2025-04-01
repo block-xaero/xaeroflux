@@ -3,7 +3,6 @@ use crate::event_buffer::DecodedEventBuffer;
 use crate::event_buffer::RawEventBuffer;
 use bincode;
 use bincode::Decode;
-use crossbeam::select;
 use std::any::Any;
 use std::sync::Arc;
 use std::thread;

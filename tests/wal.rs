@@ -1,4 +1,3 @@
-use bincode::config::{Config, Configuration};
 use tempfile::NamedTempFile;
 use std::fs::OpenOptions;
 use std::io::Write;
