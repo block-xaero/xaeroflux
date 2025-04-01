@@ -1,5 +1,5 @@
 use anyhow::Result;
-use rocksdb::{Options, DB};
+use rocksdb::{DB, Options};
 use tempfile::TempDir;
 
 use xaeroflux::storage::RocksDBStorage;

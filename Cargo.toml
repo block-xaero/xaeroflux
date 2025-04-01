@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+libp2p = { version = "0.55.0" }
 anyhow = "1.0.97"
 rocksdb = "0.23.0"
 tempfile = "3.19.1"
@@ -11,4 +12,4 @@ libc = "0.2.171"
 memmap2 = "0.9.5"
 crossbeam = "0.8.4"
 serde = { version = "1.0.219", features = ["derive"] }
-bincode = {version = "2.0.1", features = ["serde"] }
+bincode = { version = "2.0.1", features = ["serde"] }

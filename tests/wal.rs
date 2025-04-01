@@ -1,6 +1,6 @@
-use tempfile::NamedTempFile;
 use std::fs::OpenOptions;
 use std::io::Write;
+use tempfile::NamedTempFile;
 
 use xaeroflux::wal::*;
 
@@ -34,7 +34,7 @@ fn test_multiple_writes_accumulate() {
     wal.write(&b"second".to_vec());
 
     let read = wal.read();
-    println!("length: {}",read.len());
+    println!("length: {}", read.len());
     assert_eq!(read.len(), 11); // "firstsecond" = 11 bytes
 }
 

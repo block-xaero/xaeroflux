@@ -29,4 +29,3 @@ pub fn mm(f: &str) -> MmapMut {
         }
     }
 }
-

@@ -14,7 +14,7 @@ where
 impl<T> Default for DecodedEventBuffer<T>
 where
     T: Any + Send + Sync + bincode::Decode<()> + bincode::Encode,
- {
+{
     fn default() -> Self {
         Self::new()
     }

@@ -1,8 +1,9 @@
-pub mod engine;
-pub mod event_buffer;
 pub mod consumer;
+pub mod engine;
+pub mod event;
+pub mod event_buffer;
+pub mod p2p;
 pub mod producer;
+pub mod storage;
 pub mod sys;
 pub mod wal;
-pub mod event;
-pub mod storage;

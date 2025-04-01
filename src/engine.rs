@@ -1,9 +1,5 @@
-
 use crate::{
-    consumer::ConsumerOps,
-    event_buffer::RawEvent,
-    producer::ProducerOps,
-    storage::Storage,
+    consumer::ConsumerOps, event_buffer::RawEvent, producer::ProducerOps, storage::Storage,
 };
 
 pub struct XaeroFluxEngine {
@@ -12,12 +8,14 @@ pub struct XaeroFluxEngine {
     pub consumers: Box<dyn ConsumerOps>,
 }
 
-trait XaeroFluxEngineOps {
+pub trait XaeroFluxEngineOps {
     fn init(&mut self, path: &str) -> anyhow::Result<()>;
-    fn add_consumer(&mut self, consumer: Box<dyn ConsumerOps>);
-    fn remove_consumer(&mut self, consumer: Box<dyn ConsumerOps>);
-    fn consume(&mut self, event: &RawEvent);
-    fn produce(&mut self, event: &RawEvent);
+    fn start_producers(&mut self) -> anyhow::Result<()>;
+    fn stop_producers(&mut self) -> anyhow::Result<()>;
+    fn start_consumers(&mut self) -> anyhow::Result<()>;
+    fn stop_consumers(&mut self) -> anyhow::Result<()>;
+    fn start_storage(&mut self) -> anyhow::Result<()>;
+    fn stop_storage(&mut self) -> anyhow::Result<()>;
 }
 
 impl XaeroFluxEngineOps for XaeroFluxEngine {
@@ -25,19 +23,27 @@ impl XaeroFluxEngineOps for XaeroFluxEngine {
         todo!()
     }
 
-    fn add_consumer(&mut self, consumer: Box<dyn ConsumerOps>) {
+    fn start_producers(&mut self) -> anyhow::Result<()> {
         todo!()
     }
 
-    fn remove_consumer(&mut self, consumer: Box<dyn ConsumerOps>) {
+    fn stop_producers(&mut self) -> anyhow::Result<()> {
         todo!()
     }
 
-    fn consume(&mut self, event: &RawEvent) {
+    fn start_consumers(&mut self) -> anyhow::Result<()> {
         todo!()
     }
 
-    fn produce(&mut self, event: &RawEvent) {
+    fn stop_consumers(&mut self) -> anyhow::Result<()> {
+        todo!()
+    }
+
+    fn start_storage(&mut self) -> anyhow::Result<()> {
+        todo!()
+    }
+
+    fn stop_storage(&mut self) -> anyhow::Result<()> {
         todo!()
     }
 }
