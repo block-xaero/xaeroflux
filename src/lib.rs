@@ -3,3 +3,4 @@ pub mod producer;
 pub mod sys;
 pub mod wal;
 pub mod event;
+pub mod storage;

@@ -42,13 +42,11 @@ where
     pub raw_event_buffer: Arc<RawEventBuffer>,
     pub decoder: Arc<dyn EventDecoder<T> + Send + Sync>,
 }
-
-trait ProducerOps<T>
+pub trait ProducerOps<T>
 where
     T: Any + Send + Sync + bincode::Decode<()> + bincode::Encode,
 {
     fn spin_wait(&self);
-    fn produce(&self, t: T);
 }
 impl<T> Producer<T>
 where
@@ -76,17 +74,13 @@ where
         let event_buffer = self.event_buffer.clone();
         let decoder = self.decoder.clone();
         thread::spawn(move || {
-            select! {
-                recv(raw_event_buffer.rx) -> raw_event =>{
-                    let bytes = raw_event.unwrap();
-                    let e = decoder.decode(&bytes.data).unwrap();
+            while let Ok(bytes) = raw_event_buffer.rx.recv() {
+                if let Ok(e) = decoder.decode(&bytes.data) {
                     event_buffer.tx.send(e).unwrap();
+                } else {
+                    println!("Failed to decode event");
                 }
             }
         });
-    }
-
-    fn produce(&self, t: T) {
-        todo!()
     }
 }

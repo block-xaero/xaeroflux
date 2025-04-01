@@ -14,7 +14,10 @@ where
     T: Any + Send + Sync + bincode::Decode<()> + bincode::Encode,
 {
     pub fn new() -> Self {
-        let (tx, rx) = crossbeam::channel::bounded(100);
+        let (tx, rx): (
+            crossbeam::channel::Sender<Event<T>>,
+            crossbeam::channel::Receiver<Event<T>>,
+        ) = crossbeam::channel::bounded(100);
         DecodedEventBuffer { tx, rx }
     }
 }
@@ -23,6 +26,7 @@ pub struct RawEventBuffer {
     pub tx: crossbeam::channel::Sender<RawEvent>,
     pub rx: crossbeam::channel::Receiver<RawEvent>,
 }
+
 impl RawEventBuffer {
     pub fn new() -> Self {
         let (tx, rx) = crossbeam::channel::bounded(100);
