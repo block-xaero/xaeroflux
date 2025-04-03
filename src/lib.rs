@@ -1,3 +1,4 @@
+pub mod data_structures;
 pub mod consumer;
 pub mod engine;
 pub mod event;

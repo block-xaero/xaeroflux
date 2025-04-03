@@ -5,9 +5,13 @@ use crate::{
 pub struct XaeroFluxEngine {
     pub storage: Box<dyn Storage>,
     pub raw_event_producer: Box<dyn ProducerOps<RawEvent>>,
-    pub consumers: Box<dyn ConsumerOps>,
+    pub consumers: Box<dyn ConsumerOps<RawEvent>>,
 }
 
+trait XaeroFluxEngineStorageOps {
+    fn push_raw(&mut self, event: RawEvent) -> anyhow::Result<()>;
+    
+}
 pub trait XaeroFluxEngineOps {
     fn init(&mut self, path: &str) -> anyhow::Result<()>;
     fn start_producers(&mut self) -> anyhow::Result<()>;

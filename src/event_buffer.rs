@@ -4,6 +4,7 @@ use bincode::{Decode, Encode};
 
 use crate::event::Event;
 
+#[derive(Debug, Clone)]
 pub struct DecodedEventBuffer<T>
 where
     T: Any + Send + Sync + bincode::Decode<()> + bincode::Encode,
@@ -33,6 +34,7 @@ where
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct RawEventBuffer {
     pub tx: crossbeam::channel::Sender<RawEvent>,
     pub rx: crossbeam::channel::Receiver<RawEvent>,

@@ -1,23 +1,27 @@
-pub struct MerkleNode<T>
-where
-    T: Any + Send + Sync + bincode::Decode<()> + bincode::Encode,
-{
-    pub left: Option<Box<MerkleNode<T>>>,
-    pub right: Option<Box<MerkleNode<T>>>,
-    pub hash: [u8; 32],
-    pub data: Option<T>,
+use std::any::Any;
+
+use rs_merkle::{algorithms::Sha256, MerkleProof, MerkleTree};
+pub struct XaeroMerkleTree {
+    pub underlying: MerkleTree<Sha256>,
 }
 
-trait MerkleTree<T>
-where
-    T: Any + Send + Sync + bincode::Decode<()> + bincode::Encode,
-{
-    fn new() -> Self;
-    fn insert(&mut self, data: T);
-    fn get_root_hash(&self) -> [u8; 32];
-    fn get_node(&self, index: usize) -> Option<&MerkleNode<T>>;
-    fn get_node_mut(&mut self, index: usize) -> Option<&mut MerkleNode<T>>;
-    fn get_leaf(&self, index: usize) -> Option<&T>;
-    fn get_leaf_mut(&mut self, index: usize) -> Option<&mut T>;
+pub struct XaeroMerkleDiffSummary {
+    pub is_equal: bool,                      // Fast flag for exact match
+    pub differing_indices: Option<Vec<usize>>, // Optional: leaf indices that differ (if known)
+    pub peer_leaf_count: usize,              // Peer's tree size
+    pub local_leaf_count: usize,             // Local tree size
+    pub root_hash_local: [u8; 32],           // Local root
+    pub root_hash_peer: [u8; 32],            // Peer root
 }
 
+pub trait XaeroMerkleTreeOps {
+    fn insert_leaf(&mut self, leaf: &[u8]);
+    fn insert_leaves(&mut self, leaves: &[&[u8]]);
+    fn remove_leaf(&mut self, leaf: &[u8]);
+    fn remove_leaves(&mut self, leaves: &[&[u8]]);
+    fn root(&self) -> Vec<u8>;
+    fn generate_proof(&self, leaf_hash: &[u8]) -> Vec<u8>;
+    fn verify_proof(leaf_hash: [u8; 32], proof: &MerkleProof<Sha256>, root: [u8; 32]) -> bool
+    fn diff_root(peer_root: [u8; 32]) -> XaeroMerkleDiffSummary;
+    fn leaf_count() -> usize;
+}    

@@ -1304,6 +1304,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rs_merkle"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bb09b49230ba22e8c676e7b75dfe2887dea8121f18b530ae0ba519ce442d2b21"
+dependencies = [
+ "sha2",
+]
+
+[[package]]
 name = "rustc-hash"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1838,7 +1847,9 @@ dependencies = [
  "libp2p",
  "memmap2",
  "rocksdb",
+ "rs_merkle",
  "serde",
+ "sha2",
  "tempfile",
 ]
 
