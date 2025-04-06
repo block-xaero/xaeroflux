@@ -7,7 +7,7 @@ use crate::{
     producer::EventDecoder,
 };
 
-#[derive(Encode, Decode, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct Consumer<T>
 where
     T: Any + Send + Sync + bincode::Decode<()> + bincode::Encode,
