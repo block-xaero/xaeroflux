@@ -1,15 +1,28 @@
-use crate::data_structures::hash::sha_256;
 use std::any::Any;
 
-use super::hash::concat_sha_256;
+use crate::data_structures::hash::sha_256;
 
+use super::hash::sha_256_concat;
+
+trait MerkleData:
+    Any
+    + Send
+    + Sync
+    + AsRef<[u8]>
+    + AsMut<[u8]>
+    + std::fmt::Debug
+    + Clone
+    + std::cmp::PartialEq
+    + Default
+{
+}
 /// Models a node in the Merkle tree.
 /// # Generic Parameters
 /// * `T` - The type of the data stored in the node.
 #[derive(Clone, Debug)]
 pub struct XaeroMerkleNode<T>
 where
-    T: Any + Send + Sync + AsRef<[u8]> + AsMut<[u8]> + std::fmt::Debug + Clone,
+    T: MerkleData,
 {
     pub node_hash: [u8; 32],
     pub node_data: Option<T>,
@@ -17,7 +30,7 @@ where
 }
 impl<T> XaeroMerkleNode<T>
 where
-    T: Any + Send + Sync + AsRef<[u8]> + AsMut<[u8]> + std::fmt::Debug + Clone,
+    T: MerkleData,
 {
     pub fn new(node_data: Option<T>, is_left: bool) -> Self {
         let hash = match node_data {
@@ -45,29 +58,76 @@ pub struct XaeroMerkleProof {
 
 pub struct XaeroMerkleTree<T>
 where
-    T: Any + Send + Sync + AsRef<[u8]> + AsMut<[u8]> + std::fmt::Debug + Clone,
+    T: MerkleData,
 {
     pub root_hash: [u8; 32],
     pub leaves: Vec<XaeroMerkleNode<T>>,
 }
 
+impl<T> XaeroMerkleTree<T>
+where
+    T: MerkleData,
+{
+    fn _traverse_update_hash(&mut self, idx: usize)
+    where
+        T: Any + Send + Sync + AsRef<[u8]> + AsMut<[u8]> + std::fmt::Debug + Clone,
+    {
+        if idx == 0 {
+            self.root_hash = self.leaves[idx].node_hash;
+            return;
+        }
+        let is_even: bool = idx % 2 == 0;
+        let parent_hash: [u8; 32] = if is_even {
+            sha_256_concat(&self.leaves[idx - 1], &self.leaves[idx])
+        } else {
+            sha_256_concat(&self.leaves[idx], &self.leaves[idx + 1])
+        };
+        let parent_idx = (idx - 1) / 2;
+        self.leaves[parent_idx].node_hash = parent_hash;
+        self._traverse_update_hash(parent_idx)
+    }
+
+    fn _traverse_generate_proof<'a>(
+        &mut self,
+        mut idx: usize,
+        proof: &'a mut XaeroMerkleProof,
+    ) -> Option<&'a mut XaeroMerkleProof> {
+        if idx == 0 {
+            return Some(proof);
+        } else {
+            let is_even: bool = idx % 2 == 0;
+            let parent_idx = (idx - 1) / 2;
+            let proof_segment = XaeroMerkleProofSegment {
+                node_hash: self.leaves[parent_idx].node_hash,
+                is_left: is_even,
+            };
+            proof.value.push(proof_segment);
+            if is_even {
+                idx = parent_idx;
+            } else {
+                idx = parent_idx + 1;
+            }
+            return self._traverse_generate_proof(idx, proof);
+        }
+    }
+}
 trait XaeroMerkleTreeOps<T>
 where
-    T: Any + Send + Sync + AsRef<[u8]> + AsMut<[u8]> + std::fmt::Debug + Clone,
+    T: MerkleData,
 {
     /// initialize Merkle tree leaves
     fn init(leaves: Vec<T>) -> XaeroMerkleTree<T>;
     /// merkle tree root hash
     fn root(&self) -> [u8; 32];
     /// prove that data is part of tree and return the path
-    fn generate_proof(&self, data: &T) -> Option<XaeroMerkleProof>;
+    fn generate_proof(&mut self, data: T) -> Option<XaeroMerkleProof>;
     /// verify that proof is valid
-    fn verify_proof(&self, proof: XaeroMerkleProof, data: &T) -> bool;
+    fn verify_proof(&self, proof: XaeroMerkleProof, data: T) -> bool;
 }
 
 impl<T> XaeroMerkleTreeOps<T> for XaeroMerkleTree<T>
 where
-    T: Any + Send + Sync + AsRef<[u8]> + AsMut<[u8]> + std::fmt::Debug + Clone,
+    T: MerkleData,
 {
     /// initialize Merkle tree leaves
     /// # Arguments
@@ -88,53 +148,18 @@ where
             root_hash: [0; 32],
             leaves: Vec::<XaeroMerkleNode<T>>::new(),
         };
-        if data_to_push.len() == 1 {
-            let left = XaeroMerkleNode::new(data_to_push.pop(), true);
-            tree.root_hash = left.node_hash;
-            let mut right = left.clone();
-            right.is_left = false;
-            tree.leaves.push(left);
-            tree.leaves.push(right);
-            return tree;
-        } else if data_to_push.len() == 2 {
-            let left = XaeroMerkleNode::new(data_to_push.pop(), true);
-            let right = XaeroMerkleNode::new(data_to_push.pop(), false);
-            tree.root_hash = concat_sha_256(&left, &right);
-            tree.leaves.push(left);
-            tree.leaves.push(right);
-            return tree;
-        } else {
-            while let Some(node) = data_to_push.pop() {
-                let mut idx = tree.leaves.len();
-                let len = idx;
-                while idx > 0 {
-                    let is_current_tree_even = idx % 2 == 0;
-                    let n = &node;
-                    if is_current_tree_even {
-                        let left = XaeroMerkleNode::new(Some(n), true);
-                        let mut right = left.clone();
-                        right.is_left = false;
-                        let concat_hash = concat_sha_256(&left, &right);
-                        tree.leaves.push(left);
-                        tree.leaves.push(right);
-                        idx = (idx - 1) / 2;
-                        tree.leaves[idx].node_hash = concat_hash;
-                        tree.leaves[idx].is_left = false; // reset is_left for parent node
-                        if idx == 0 {
-                            tree.root_hash = tree.leaves[idx].node_hash;
-                        }
-                    } else {
-                        let right_sibling_to_cur_idx = &XaeroMerkleNode::new(Some(n), false);
-                        tree.leaves[idx - 1].is_left = true;
-                        idx = (idx - 1) / 2;
-                        tree.leaves[idx].node_hash =
-                            concat_sha_256(&tree.leaves[idx - 1], right_sibling_to_cur_idx);
-                        tree.leaves[idx].is_left = false; // reset is_left for parent node
-                        if idx == 0 {
-                            tree.root_hash = tree.leaves[idx].node_hash;
-                        }
-                    }
-                }
+
+        while let Some(data) = data_to_push.pop() {
+            if tree.leaves.len() % 2 == 0 {
+                let left = XaeroMerkleNode::new(Some(data), true);
+                let right = left.clone();
+                tree.leaves.push(left);
+                tree.leaves.push(right);
+                tree._traverse_update_hash(tree.leaves.len() - 1);
+            } else {
+                let right = XaeroMerkleNode::new(Some(data), false);
+                tree.leaves.push(right);
+                tree._traverse_update_hash(tree.leaves.len() - 1);
             }
         }
         tree
@@ -144,11 +169,33 @@ where
         self.root_hash
     }
 
-    fn generate_proof(&self, data: &T) -> Option<XaeroMerkleProof> {
-        todo!()
+    fn generate_proof(&mut self, data: T) -> Option<XaeroMerkleProof> {
+        let mut proof = XaeroMerkleProof {
+            value: Vec::<XaeroMerkleProofSegment>::new(),
+        };
+        let mut idx = usize::MAX;
+        for i in 0..self.leaves.len() {
+            if self.leaves[i]
+                .node_data
+                .as_ref()
+                .map_or(false, |node_data| node_data == &data)
+            {
+                idx = i;
+                break;
+            }
+        }
+        if idx == usize::MAX {
+            println!("Data not found in the tree");
+            return None;
+        }
+        self._traverse_generate_proof(idx, &mut proof);
+        Some(proof)
     }
 
-    fn verify_proof(&self, proof: XaeroMerkleProof, data: &T) -> bool {
-        todo!()
+    fn verify_proof(&self, proof: XaeroMerkleProof, data: T) -> bool {
+
+
+        
     }
+
 }

@@ -22,7 +22,7 @@ where
     node_hash
 }
 
-pub fn concat_sha_256<T>(left: &XaeroMerkleNode<T>, right: &XaeroMerkleNode<T>) -> [u8; 32]
+pub fn sha_256_concat<T>(left: &XaeroMerkleNode<T>, right: &XaeroMerkleNode<T>) -> [u8; 32]
 where
     T: Any + Send + Sync + AsRef<[u8]> + AsMut<[u8]> + std::fmt::Debug + Clone,
 {
