@@ -3,7 +3,14 @@ name = "xaeroflux"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+diagnostics = []
+default = []
 [dependencies]
+crdts = "7.3.2"
+tracing = { version = "0.1.41", features = ["log"] }
+tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+mio = { version = "1.0.3", features = ["os-ext"] }
 sha2 = { version = "0.10.8" }
 libp2p = { version = "0.55.0" }
 anyhow = "1.0.97"

@@ -1,10 +1,10 @@
 use std::any::Any;
 
-use crate::data_structures::hash::sha_256;
+use crate::core::hash::sha_256;
 
 use super::hash::sha_256_concat;
 
-trait MerkleData:
+pub trait MerkleData:
     Any
     + Send
     + Sync
@@ -193,9 +193,14 @@ where
     }
 
     fn verify_proof(&self, proof: XaeroMerkleProof, data: T) -> bool {
+        // hash the data 
+        // check if 
+        let mut idx = 0;
+        while idx < proof.value.len(){
+            let proof_segment = &proof.value[idx];
 
-
-        
+            idx += 1;
+        }
+        true
     }
-
 }

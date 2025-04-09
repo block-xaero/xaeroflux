@@ -2,7 +2,7 @@ use std::any::Any;
 
 use sha2::Digest;
 
-use super::merkle_tree::XaeroMerkleNode;
+use super::merkle_tree::{MerkleData, XaeroMerkleNode};
 
 /// Sha256 hash function for any type of data.
 /// # Generic Parameters
@@ -13,7 +13,7 @@ use super::merkle_tree::XaeroMerkleNode;
 /// * A 32-byte array representing the SHA-256 hash of the input data.
 pub fn sha_256<T>(n: &T) -> [u8; 32]
 where
-    T: Any + Send + Sync + AsRef<[u8]> + AsMut<[u8]> + std::fmt::Debug + Clone,
+    T: MerkleData,
 {
     let mut sha256 = sha2::Sha256::new();
     sha256.update(n.as_ref());
@@ -24,7 +24,7 @@ where
 
 pub fn sha_256_concat<T>(left: &XaeroMerkleNode<T>, right: &XaeroMerkleNode<T>) -> [u8; 32]
 where
-    T: Any + Send + Sync + AsRef<[u8]> + AsMut<[u8]> + std::fmt::Debug + Clone,
+    T: MerkleData,
 {
     let mut combined: [u8; 64] = [0; 64];
     combined[0..32].copy_from_slice(&left.node_hash);

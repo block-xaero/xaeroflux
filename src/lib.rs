@@ -1,10 +1,5 @@
-pub mod data_structures;
-pub mod consumer;
+pub mod core;
 pub mod engine;
-pub mod event;
-pub mod event_buffer;
-pub mod p2p;
-pub mod producer;
-pub mod storage;
+pub mod indexing;
+pub mod logs;
 pub mod sys;
-pub mod wal;
