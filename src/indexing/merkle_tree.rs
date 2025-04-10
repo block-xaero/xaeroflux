@@ -4,45 +4,17 @@ use crate::core::hash::sha_256;
 
 use super::hash::sha_256_concat;
 
-pub trait MerkleData:
-    Any
-    + Send
-    + Sync
-    + AsRef<[u8]>
-    + AsMut<[u8]>
-    + std::fmt::Debug
-    + Clone
-    + std::cmp::PartialEq
-    + Default
-{
-}
 /// Models a node in the Merkle tree.
 /// # Generic Parameters
-/// * `T` - The type of the data stored in the node.
 #[derive(Clone, Debug)]
-pub struct XaeroMerkleNode<T>
-where
-    T: MerkleData,
-{
+pub struct XaeroMerkleNode {
     pub node_hash: [u8; 32],
-    pub node_data: Option<T>,
     pub is_left: bool,
 }
-impl<T> XaeroMerkleNode<T>
-where
-    T: MerkleData,
-{
-    pub fn new(node_data: Option<T>, is_left: bool) -> Self {
-        let hash = match node_data {
-            Some(ref data) => {
-                let node_hash: [u8; 32] = sha_256(data);
-                node_hash
-            }
-            None => [0; 32],
-        };
+impl XaeroMerkleNode {
+    pub fn new(node_hash: [u8; 32], is_left: bool) -> Self {
         Self {
             node_hash: hash,
-            node_data,
             is_left,
         }
     }
@@ -56,22 +28,13 @@ pub struct XaeroMerkleProof {
     pub value: Vec<XaeroMerkleProofSegment>,
 }
 
-pub struct XaeroMerkleTree<T>
-where
-    T: MerkleData,
-{
+pub struct XaeroMerkleTree {
     pub root_hash: [u8; 32],
-    pub leaves: Vec<XaeroMerkleNode<T>>,
+    pub leaves: Vec<XaeroMerkleNode>,
 }
 
-impl<T> XaeroMerkleTree<T>
-where
-    T: MerkleData,
-{
-    fn _traverse_update_hash(&mut self, idx: usize)
-    where
-        T: Any + Send + Sync + AsRef<[u8]> + AsMut<[u8]> + std::fmt::Debug + Clone,
-    {
+impl XaeroMerkleTree {
+    fn _traverse_update_hash(&mut self, idx: usize) {
         if idx == 0 {
             self.root_hash = self.leaves[idx].node_hash;
             return;
@@ -111,24 +74,18 @@ where
         }
     }
 }
-trait XaeroMerkleTreeOps<T>
-where
-    T: MerkleData,
-{
+trait XaeroMerkleTreeOps {
     /// initialize Merkle tree leaves
-    fn init(leaves: Vec<T>) -> XaeroMerkleTree<T>;
+    fn init(leaves: Vec<[u8; 32]>) -> XaeroMerkleTree;
     /// merkle tree root hash
     fn root(&self) -> [u8; 32];
     /// prove that data is part of tree and return the path
-    fn generate_proof(&mut self, data: T) -> Option<XaeroMerkleProof>;
+    fn generate_proof(&mut self, data: [u8; 32]) -> Option<XaeroMerkleProof>;
     /// verify that proof is valid
     fn verify_proof(&self, proof: XaeroMerkleProof, data: T) -> bool;
 }
 
-impl<T> XaeroMerkleTreeOps<T> for XaeroMerkleTree<T>
-where
-    T: MerkleData,
-{
+impl XaeroMerkleTreeOps for XaeroMerkleTree {
     /// initialize Merkle tree leaves
     /// # Arguments
     /// * `leaves` - vector of leaves to be added to the tree
@@ -140,7 +97,7 @@ where
     /// let tree = XaeroMerkleTree::init(leaves);
     /// ```
     ///  Gotchas: Leaves are cloned to balance the tree if necessary.
-    fn init(mut data_to_push: Vec<T>) -> XaeroMerkleTree<T> {
+    fn init(mut data_to_push: Vec<[u8; 32]>) -> XaeroMerkleTree {
         if data_to_push.is_empty() {
             panic!("Cannot create a Merkle tree with no leaves");
         }
@@ -151,13 +108,13 @@ where
 
         while let Some(data) = data_to_push.pop() {
             if tree.leaves.len() % 2 == 0 {
-                let left = XaeroMerkleNode::new(Some(data), true);
+                let left = XaeroMerkleNode::new(data, true);
                 let right = left.clone();
                 tree.leaves.push(left);
                 tree.leaves.push(right);
                 tree._traverse_update_hash(tree.leaves.len() - 1);
             } else {
-                let right = XaeroMerkleNode::new(Some(data), false);
+                let right = XaeroMerkleNode::new(data, false);
                 tree.leaves.push(right);
                 tree._traverse_update_hash(tree.leaves.len() - 1);
             }
@@ -169,7 +126,7 @@ where
         self.root_hash
     }
 
-    fn generate_proof(&mut self, data: T) -> Option<XaeroMerkleProof> {
+    fn generate_proof(&mut self, data: [u8; 32]) -> Option<XaeroMerkleProof> {
         let mut proof = XaeroMerkleProof {
             value: Vec::<XaeroMerkleProofSegment>::new(),
         };
@@ -192,11 +149,11 @@ where
         Some(proof)
     }
 
-    fn verify_proof(&self, proof: XaeroMerkleProof, data: T) -> bool {
-        // hash the data 
-        // check if 
+    fn verify_proof(&self, proof: XaeroMerkleProof, data: [u8; 32]) -> bool {
+        // hash the data
+        // check if
         let mut idx = 0;
-        while idx < proof.value.len(){
+        while idx < proof.value.len() {
             let proof_segment = &proof.value[idx];
 
             idx += 1;

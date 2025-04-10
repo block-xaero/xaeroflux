@@ -1,23 +1,85 @@
 use std::{cmp::min, fs::File, os::fd::AsRawFd, sync::Arc, usize};
 
-use log;
 use memmap2::MmapMut;
 use mio::{unix::SourceFd, Events, Interest, Poll, Token};
 use tracing::event;
 
 use crate::sys::{get_page_size, mm};
 
-use super::merkle_tree::{MerkleData, XaeroMerkleTree};
+use super::merkle_tree::{MerkleData, XaeroMerkleNode, XaeroMerkleTree};
 
 pub struct XaeroMerkleStorageConfig {
     pub page_size: usize,
     pub max_pages: usize,
+    pub nodes_per_page: usize,
     pub file_path: String,
 }
 pub struct XaeroMerklePage {
     pub page: [u8; 1024 * 16], // 16KB pages
     pub version: u64,
     pub is_dirty: bool,
+}
+
+impl TryFrom<&[u8]> for XaeroMerklePage {
+    type Error = anyhow::Error;
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        if value.len() != 1024 * 16 {
+            return Err(anyhow::anyhow!("Invalid page size").into());
+        }
+        let mut page = [0; 1024 * 16];
+        page.copy_from_slice(value);
+        Ok(XaeroMerklePage {
+            page,
+            version: 0,
+            is_dirty: false,
+        })
+    }
+}
+pub struct XaeroMerklePageDecoder<T>
+where
+    T: MerkleData,
+{
+    pub input: crossbeam::channel::Receiver<XaeroMerklePage>,
+    pub output: crossbeam::channel::Sender<XaeroMerkleNode<T>>,
+    pub config: Arc<XaeroMerkleStorageConfig>,
+}
+
+impl<T> XaeroMerklePageDecoder<T>
+where
+    T: MerkleData,
+{
+    fn init(
+        &self,
+        receiver: crossbeam::channel::Receiver<XaeroMerklePage>,
+        sender: crossbeam::channel::Sender<XaeroMerkleNode<T>>,
+    ) {
+        self.input = receiver;
+        self.output = sender;
+        self.config = Arc::new(XaeroMerkleStorageConfig {
+            page_size: get_page_size(),
+            max_pages: 1024,
+            nodes_per_page: 512,
+            file_path: String::new(),
+        });
+    }
+
+    fn start(&self) {
+        loop {
+            match self.input.recv() {
+                Ok(page) => {
+                    let raw_nodes: [u8; self.config.nodes_per_page] = page.page;
+                    let mut nodes  = Vec::new();
+
+                }
+                Err(err) => {
+                    // Handle the error, e.g., log it or break the loop
+                    break;
+                }
+            }
+
+            }
+        }
+    }
 }
 pub struct XaeroMerkleStorage {
     pub poll: Arc<Poll>,
@@ -29,7 +91,6 @@ pub struct XaeroMerkleStorage {
     pub config: Arc<XaeroMerkleStorageConfig>,
     merkle_mmap_buffer: MmapMut,
 }
-
 pub trait XaeroMerkleStorageOps<T>
 where
     T: MerkleData,
@@ -72,7 +133,6 @@ impl XaeroMerkleStorage {
             for event in &self.events {
                 match event.token() {
                     Token(0) => {
-                        event!(log::Level::INFO, "Merkle storage file ready event");
                         // read the whole file and accumulate pages
                         let read_size = min(
                             self.config.page_size,
