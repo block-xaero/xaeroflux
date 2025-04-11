@@ -1,11 +1,11 @@
-use std::any::Any;
-
 use bincode::{Decode, Encode};
+
+use super::XaeroData;
 
 #[derive(Debug, Clone, Encode, Decode)]
 pub struct Event<T>
 where
-    T: Any + Send + Sync + bincode::Decode<()> + bincode::Encode,
+    T: XaeroData,
 {
     pub data: T,
     pub timestamp: u64,
@@ -13,7 +13,7 @@ where
 
 impl<T> Event<T>
 where
-    T: Any + Send + Sync + bincode::Decode<()> + bincode::Encode,
+    T: XaeroData,
 {
     pub fn new(data: T, timestamp: u64) -> Self {
         Event { data, timestamp }

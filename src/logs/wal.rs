@@ -26,7 +26,7 @@ impl Wal {
 }
 
 pub trait WalOps {
-    fn write(&mut self, raw_buffer: &Vec<u8>);
+    fn write(&mut self, raw_buffer: &[u8]);
     fn read(&self) -> Vec<u8>;
     fn flush(&mut self);
     fn sync(&mut self);
@@ -35,7 +35,7 @@ pub trait WalOps {
 }
 
 impl WalOps for Wal {
-    fn write(&mut self, raw_buffer: &Vec<u8>) {
+    fn write(&mut self, raw_buffer: &[u8]) {
         let mut offset = 0;
         while offset < raw_buffer.len() {
             let remaining = raw_buffer.len() - offset;

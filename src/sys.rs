@@ -1,6 +1,4 @@
-///! This file is part of the `sys` module, which provides system-level functionality
-/// //! for the event buffer library.
-/// //! It includes functions to get the page size and the number of CPU cores.
+//! This file is part of the `sys` module, which provides system-level functionality
 use libc;
 use memmap2::MmapMut;
 pub const FILE_SIZE: usize = 1024 * 1024;
@@ -15,6 +13,7 @@ pub fn mm(f: &str) -> MmapMut {
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .open(f)
         .unwrap();
     unsafe {
@@ -29,4 +28,3 @@ pub fn mm(f: &str) -> MmapMut {
         }
     }
 }
-
