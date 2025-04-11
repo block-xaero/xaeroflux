@@ -7,6 +7,10 @@ version = "0.1.0"
 edition = "2024"
 license-file = "LICENSE"
 
+[lib]
+name = "xaeroflux"  # This should match your library name without the "lib" prefix
+crate-type = ["staticlib", "cdylib"] 
+
 [dependencies]
 crdts = "7.3.2"
 tracing = { version = "0.1.41", features = ["log"] }
