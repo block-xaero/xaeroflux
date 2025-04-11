@@ -4,7 +4,11 @@ use memmap2::MmapMut;
 pub const FILE_SIZE: usize = 1024 * 1024;
 
 pub fn get_page_size() -> usize {
-    unsafe { libc::sysconf(libc::_SC_PAGESIZE).try_into().unwrap() }
+    unsafe {
+        libc::sysconf(libc::_SC_PAGESIZE)
+            .try_into()
+            .expect("failed to find page_size")
+    }
 }
 
 /// MMapMut creates a memory-mapped file for reading and writing.
@@ -15,7 +19,7 @@ pub fn mm(f: &str) -> MmapMut {
         .create(true)
         .truncate(false)
         .open(f)
-        .unwrap();
+        .expect("Failed to open file");
     unsafe {
         f.set_len(FILE_SIZE as u64)
             .expect("Failed to set file length");

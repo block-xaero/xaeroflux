@@ -35,8 +35,15 @@ impl Storage for RocksDBStorage {
     }
 
     fn init(&mut self, path: &str) -> Result<()> {
-        let d = rocksdb::DB::open(&Options::default(), path).unwrap();
-        self.db = d;
-        Ok(())
+        let d = rocksdb::DB::open(&Options::default(), path);
+        match d {
+            Ok(db) => {
+                self.db = db;
+                Ok(())
+            }
+            Err(e) => {
+                Err(anyhow::anyhow!("Failed to open database: {}", e))
+            }
+        }
     }
 }

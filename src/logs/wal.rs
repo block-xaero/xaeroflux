@@ -48,7 +48,7 @@ impl WalOps for Wal {
             self.offset += write_size;
             if offset + write_size >= self.mmap.len() {
                 offset = 0;
-                self.mmap.flush().unwrap();
+                self.mmap.flush().expect("Failed to flush mmap");
             }
         }
     }
@@ -60,11 +60,11 @@ impl WalOps for Wal {
     }
 
     fn flush(&mut self) {
-        self.mmap.flush().unwrap();
+        self.mmap.flush().expect("Failed to flush mmap");
     }
 
     fn sync(&mut self) {
-        self.mmap.flush().unwrap();
+        self.mmap.flush().expect("Failed to sync mmap");
     }
 
     fn close(&mut self) {
