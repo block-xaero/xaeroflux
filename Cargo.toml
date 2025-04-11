@@ -3,9 +3,6 @@ name = "xaeroflux"
 version = "0.1.0"
 edition = "2024"
 
-[features]
-diagnostics = []
-default = []
 [dependencies]
 crdts = "7.3.2"
 tracing = { version = "0.1.41", features = ["log"] }
