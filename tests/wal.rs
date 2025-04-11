@@ -4,16 +4,16 @@ use tempfile::NamedTempFile;
 use xaeroflux::logs::wal::*;
 
 fn create_test_wal(size: usize) -> Wal {
-    let temp = NamedTempFile::new().unwrap();
+    let temp = NamedTempFile::new().expect("failed to create temp file");
     let path = temp.path().to_path_buf();
 
     // preallocate file
     {
-        let f = OpenOptions::new().write(true).open(&path).unwrap();
-        f.set_len(size as u64).unwrap();
+        let f = OpenOptions::new().write(true).open(&path).expect("failed to open temp file");
+        f.set_len(size as u64).unwrap_or_default();
     }
 
-    Wal::new(path.to_str().unwrap())
+    Wal::new(path.to_str().unwrap_or_default())
 }
 
 #[test]

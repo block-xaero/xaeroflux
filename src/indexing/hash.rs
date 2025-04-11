@@ -17,7 +17,7 @@ where
     let mut sha256 = sha2::Sha256::new();
     sha256.update(n.as_ref());
     let hash = sha256.finalize();
-    let node_hash: [u8; 32] = hash.as_slice().try_into().unwrap();
+    let node_hash: [u8; 32] = hash.as_slice().try_into().unwrap_or_default();
     node_hash
 }
 

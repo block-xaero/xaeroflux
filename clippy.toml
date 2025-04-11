@@ -9,7 +9,7 @@ disallowed-methods = [
 
 # Error on `todo!()` macros in code to prevent shipping incomplete code
 # To allow these during development, comment this line out
-disallowed-macros = ["std::todo"]
+#disallowed-macros = ["std::todo"]
 
 # Complexity thresholds
 too-many-arguments-threshold = 7

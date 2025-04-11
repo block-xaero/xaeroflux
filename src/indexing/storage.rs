@@ -1,4 +1,4 @@
-use std::{cmp::min, fs::File, os::fd::AsRawFd, str::FromStr, sync::Arc};
+use std::{cmp::min, fs::File, os::fd::AsRawFd, sync::Arc};
 
 use memmap2::MmapMut;
 use mio::{unix::SourceFd, Events, Interest, Poll, Token};
@@ -55,7 +55,7 @@ impl XaeroMerklePageDecoder {
             page_size: get_page_size(),
             max_pages: 1024,
             nodes_per_page: 512,
-            file_path: String::from_str("merkle_storage.bin").unwrap(),
+            file_path: "merkle_storage.bin".to_string(),
         });
     }
 
@@ -141,7 +141,7 @@ impl XaeroMerkleStorage {
                         page: self.merkle_mmap_buffer
                             [last_read_offset..last_read_offset + read_size]
                             .try_into()
-                            .unwrap(),
+                            .expect("Failed to convert slice to array"),
                         version: 0,
                         is_dirty: false,
                     };
@@ -152,7 +152,7 @@ impl XaeroMerkleStorage {
                             self.last_read_offset += read_size;
                             if self.last_read_offset >= self.merkle_mmap_buffer.len() {
                                 self.last_read_offset = 0;
-                                self.merkle_mmap_buffer.flush().unwrap();
+                                self.merkle_mmap_buffer.flush().expect("Failed to flush mmap buffer");
                             }
                         }
                         Err(err) => {
