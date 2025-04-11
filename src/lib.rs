@@ -21,6 +21,7 @@ enum XaeroEngineState {
 }
 
 #[derive(Clone, Debug)]
+
 /// Represents the configuration for the XaeroFlux engine
 /// # Fields
 /// * `f_path` - Path to the storage
@@ -37,6 +38,7 @@ pub struct XaeroFluxConfig {
     pub peer_sync_interval: usize,
     pub root_zero_id: Vec<&str>,
 }
+
 type XaeroResult<T> = std::result::Result<T, anyhow::Error>;
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 /// Represents a key in the database
@@ -87,15 +89,27 @@ trait XaeroFluxDB {
     /// * `event` - Raw event to be verified
     /// * `proof` - Proof of the event
     /// * # Returns true if the proof is valid
-    ///
     fn verify_proof(&self, event: RawEvent) -> XaeroResult<()>;
 }
 
+/// Meta db trait for advanced operations, such as diagnostics and rebuilding the merkle index
 trait XaeroFluxMetaDB: XaeroFluxDB {
     /// Activates diagnostic mode if the provided `zero_id` matches the boot-time value.
+    /// This is a one-time operation and should be used with caution.
+    /// # Arguments
+    ///     * `zero_id` - The zero_id to be verified
+    /// # Returns
+    ///     * `Ok(())` if the operation was successful
+    ///    * `Err(anyhow::Error)` if the operation failed
     fn enable_diagnostics(&self, zero_id: &str) -> XaeroResult<()>;
 
-    /// Diagnostics report using zero_id given
+    /// Diagnostics report using zero_id given.
+    /// # Arguments
+    /// * `zero_id` - The zero_id to be verified
+    /// # Returns
+    /// * `Ok(Diagnostics)` if the operation was successful
+    /// * `Err(anyhow::Error)` if the operation failed
+    /// # Returns empty vector if no paths are found
     fn diagnostics_report(&self, zero_id: &str) -> XaeroResult<Diagnostics>;
 
     /// Rebuild the merkle index using the given timestamps

@@ -23,7 +23,9 @@ impl Pool {
             let handle = thread::spawn(move || loop {
                 let work = self.work.recv();
                 match work {
-                    Ok(w) => {}
+                    Ok(w) => {
+                        
+                    }
                     Err(_) => {
                         println!("Error receiving work");
                     }

@@ -12,7 +12,7 @@ pub struct XaeroMerkleStorageConfig {
     pub page_size: usize,
     pub max_pages: usize,
     pub nodes_per_page: usize,
-    pub file_path: String,
+    pub file_path: &str,
 }
 pub struct XaeroMerklePage {
     pub page: [u8; 1024 * 16], // 16KB pages
@@ -59,7 +59,7 @@ where
             page_size: get_page_size(),
             max_pages: 1024,
             nodes_per_page: 512,
-            file_path: String::new(),
+            file_path: "merkle_storage.bin",
         });
     }
 
@@ -108,6 +108,7 @@ impl XaeroMerkleStorage {
             page_size: get_page_size(),
             max_pages: 1024,
             file_path: fp.to_string(),
+            nodes_per_page: 512,
         };
         mm(fp);
         let merkle_mmap_buffer = mm(fp);
