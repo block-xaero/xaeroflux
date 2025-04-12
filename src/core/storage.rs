@@ -41,9 +41,7 @@ impl Storage for RocksDBStorage {
                 self.db = db;
                 Ok(())
             }
-            Err(e) => {
-                Err(anyhow::anyhow!("Failed to open database: {}", e))
-            }
+            Err(e) => Err(anyhow::anyhow!("Failed to open database: {}", e)),
         }
     }
 }

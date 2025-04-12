@@ -9,7 +9,10 @@ fn create_test_wal(size: usize) -> Wal {
 
     // preallocate file
     {
-        let f = OpenOptions::new().write(true).open(&path).expect("failed to open temp file");
+        let f = OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .expect("failed to open temp file");
         f.set_len(size as u64).unwrap_or_default();
     }
 

@@ -9,12 +9,15 @@ pub mod indexing;
 pub mod logs;
 pub mod sys;
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum XaeroEngineMode {
     Normal,
     Debug,
     Test,
     PerformanceTesting,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum XaeroEngineState {
     Running(XaeroEngineMode),
     Stopped(XaeroEngineMode),
@@ -41,6 +44,7 @@ pub struct XaeroFluxConfig {
     pub root_zero_id: [u8; 32],
 }
 
+/// Represents the result of the XaeroFlux engine
 pub type XaeroResult<T> = std::result::Result<T, anyhow::Error>;
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 /// Represents a key in the database
@@ -60,6 +64,8 @@ pub struct XaeroFluxKey {
     pub timestamp: [u8; 8],
     pub hash: [u8; 32],
 }
+
+/// Represents the XaeroFlux database
 pub struct XaeroFluxDB {
     pub config: Arc<XaeroFluxConfig>,
     pub storage_path: String,
@@ -75,6 +81,7 @@ pub trait XaeroFluxDBOps {
     /// # Returns false if the database was not truncated successfully
     /// TODO: NOTE This function would require a zeroId to be implemented.
     fn truncate(&self /* zeroId: */) -> XaeroResult<()>;
+    /// Closes
     fn close(&self) -> XaeroResult<()>;
     /// Get range of events from the database
     /// # Arguments

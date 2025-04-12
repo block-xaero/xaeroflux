@@ -152,7 +152,9 @@ impl XaeroMerkleStorage {
                             self.last_read_offset += read_size;
                             if self.last_read_offset >= self.merkle_mmap_buffer.len() {
                                 self.last_read_offset = 0;
-                                self.merkle_mmap_buffer.flush().expect("Failed to flush mmap buffer");
+                                self.merkle_mmap_buffer
+                                    .flush()
+                                    .expect("Failed to flush mmap buffer");
                             }
                         }
                         Err(err) => {

@@ -92,3 +92,6 @@ pubspec.lock
 # Other tools
 .cbindgen.err
 /uniffi-bindgen.path
+
+# tar gz files
+*.tar.gz

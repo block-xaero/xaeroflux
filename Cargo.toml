@@ -9,8 +9,10 @@ license-file = "LICENSE"
 
 [lib]
 name = "xaeroflux"  # This should match your library name without the "lib" prefix
-crate-type = ["staticlib", "cdylib"] 
+crate-type = ["staticlib", "cdylib", "rlib"] 
 
+[dev-dependencies]
+xaeroflux = { path = "." }  # Adjust the path as necessary
 [dependencies]
 crdts = "7.3.2"
 tracing = { version = "0.1.41", features = ["log"] }
