@@ -1,4 +1,4 @@
-use super::hash::sha_256_concat;
+use super::hash::{sha_256_concat, sha_256_concat_hash};
 
 /// Models a node in the Merkle tree.
 /// # Generic Parameters
@@ -79,17 +79,6 @@ pub trait XaeroMerkleTreeOps {
 }
 
 impl XaeroMerkleTreeOps for XaeroMerkleTree {
-    /// initialize Merkle tree leaves
-    /// # Arguments
-    /// * `leaves` - vector of leaves to be added to the tree
-    /// # Returns
-    /// * `XaeroMerkleTree<T>` - initialized Merkle tree with leaves
-    /// # Example
-    /// ```
-    /// let leaves = vec![1, 2, 3, 4];
-    /// let tree = XaeroMerkleTree::init(leaves);
-    /// ```
-    ///  Gotchas: Leaves are cloned to balance the tree if necessary.
     fn init(mut data_to_push: Vec<[u8; 32]>) -> XaeroMerkleTree {
         if data_to_push.is_empty() {
             panic!("Cannot create a Merkle tree with no leaves");
@@ -138,15 +127,60 @@ impl XaeroMerkleTreeOps for XaeroMerkleTree {
         Some(proof)
     }
 
-    fn verify_proof(&self, proof: XaeroMerkleProof, _data: [u8; 32]) -> bool {
-        // hash the data
-        // check if
-        let mut idx = 0;
-        while idx < proof.value.len() {
-            let _proof_segment = &proof.value[idx];
-
-            idx += 1;
+    fn verify_proof(&self, proof: XaeroMerkleProof, data: [u8; 32]) -> bool {
+        let mut data_leaf_idx = 0;
+        for i in 0..proof.value.len() {
+            if data == proof.value[i].node_hash {
+                data_leaf_idx = i;
+                break;
+            }
         }
-        true
+        let mut idx = data_leaf_idx;
+        let mut hash = [0; 32];
+        while idx > 0 {
+            if proof.value[idx].is_left {
+                hash = sha_256_concat_hash(
+                    &proof.value[idx].node_hash,
+                    &proof.value[idx + 1].node_hash,
+                );
+            } else {
+                hash = sha_256_concat_hash(
+                    &proof.value[idx - 1].node_hash,
+                    &proof.value[idx].node_hash,
+                );
+            }
+            idx = (idx - 1) / 2;
+        }
+        hash == self.root_hash
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::logs::init_logging;
+
+    #[test]
+    fn test_insert_leaves() {
+        init_logging();
+    }
+
+    #[test]
+    fn test_verify_proof_no_data() {
+        init_logging();
+    }
+
+    #[test]
+    fn test_verify_proof_happy() {}
+
+    #[test]
+    fn test_generate_proof_happy() {}
+
+    #[test]
+    fn test_generate_proof_no_data() {}
+
+    #[test]
+    fn test_empty_tree() {}
+
+    #[test]
+    fn test_zero_data_leaves() {}
 }

@@ -1,0 +1,11 @@
+[toolchain]
+channel = "nightly"
+
+[components]
+rustfmt = true
+clippy = true
+rust-analyzer = true
+rust-src = true
+rustc = true
+rust-docs = true
+rust-std = true
