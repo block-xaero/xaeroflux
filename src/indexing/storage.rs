@@ -1,7 +1,13 @@
-use std::{cmp::min, fs::File, os::fd::AsRawFd, sync::Arc};
+use std::{
+    cmp::min,
+    fs::{self, File},
+    os::fd::AsRawFd,
+    sync::Arc,
+};
 
 use memmap2::MmapMut;
-use mio::{unix::SourceFd, Events, Interest, Poll, Token};
+use mio::{Events, Interest, Poll, Token, unix::SourceFd};
+use serde::Deserialize;
 
 use super::merkle_tree::{XaeroMerkleNode, XaeroMerkleTree};
 use crate::{
@@ -9,13 +15,36 @@ use crate::{
     sys::{get_page_size, mm},
 };
 
+pub const XAERO_MERKLE_PAGE_MARKER: &[u8; 4] = b"XAER";
+pub const XAERO_MERKLE_NODE_MARKER: &[u8; 2] = b"XN";
+
+#[derive(Deserialize, Debug)]
 pub struct XaeroMerkleStorageConfig {
     pub page_size: usize,
     pub max_pages: usize,
     pub nodes_per_page: usize,
     pub file_path: String,
 }
+
+impl XaeroMerkleStorageConfig {
+    pub fn new(conf_path: &str) -> Self {
+        let s = fs::read_to_string(conf_path).expect("Unable to read config file");
+        let s: XaeroMerkleStorageConfig = toml::de::from_str(&s).expect("failed to parse config");
+        Self {
+            page_size: s.page_size,
+            max_pages: s.max_pages,
+            nodes_per_page: s.nodes_per_page,
+            file_path: s.file_path,
+        }
+    }
+}
+
+pub struct XaeroPageHeader {
+    pub marker: [u8; 4],
+    pub event_type: u8,
+}
 pub struct XaeroMerklePage {
+    pub header: XaeroPageHeader,
     pub page: [u8; 1024 * 16], // 16KB pages
     pub version: u64,
     pub is_dirty: bool,
@@ -25,12 +54,29 @@ impl TryFrom<&[u8]> for XaeroMerklePage {
     type Error = anyhow::Error;
 
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        let h: [u8; 4] = value[..4]
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("Invalid marker"))?;
+        if h != *XAERO_MERKLE_PAGE_MARKER {
+            return Err(anyhow::anyhow!("Invalid marker"));
+        }
+
+        let event_type_arr: [u8; 1] = value[4..5]
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("Invalid event type"))?;
+        let event_type = event_type_arr[0];
+        let header = XaeroPageHeader {
+            marker: *XAERO_MERKLE_PAGE_MARKER,
+            event_type,
+        };
+
         if value.len() != 1024 * 16 {
             return Err(anyhow::anyhow!("Invalid page size"));
         }
         let mut page = [0; 1024 * 16];
         page.copy_from_slice(value);
         Ok(XaeroMerklePage {
+            header,
             page,
             version: 0,
             is_dirty: false,
@@ -137,15 +183,22 @@ impl XaeroMerkleStorage {
                         self.config.page_size,
                         self.last_read_offset + self.config.page_size,
                     );
-                    let page = XaeroMerklePage {
+                    let _read_page = self.merkle_mmap_buffer
+                        [last_read_offset..last_read_offset + read_size]
+                        .to_vec();
+                    let _page = XaeroMerklePage {
                         page: self.merkle_mmap_buffer
                             [last_read_offset..last_read_offset + read_size]
                             .try_into()
                             .expect("Failed to convert slice to array"),
                         version: 0,
                         is_dirty: false,
+                        header: XaeroPageHeader {
+                            marker: *XAERO_MERKLE_PAGE_MARKER,
+                            event_type: 0, // Replace with the appropriate event type
+                        },
                     };
-                    let res = self.pages.1.send(page);
+                    let res = self.pages.1.send(_page);
                     match res {
                         Ok(_) => {
                             println!("Page sent successfully");

@@ -2,7 +2,7 @@
 # Comprehensive settings based on popular open source Rust projects
 
 # Edition compatibility
-edition = "2021"
+edition = "2024"
 
 # Basic formatting preferences
 max_width = 100
@@ -69,4 +69,4 @@ error_on_line_overflow = false
 error_on_unformatted = false
 # report_todo and report_fixme removed as they're no longer supported
 unstable_features = true  # Enable for access to unstable features
-style_edition = "2021"   # Updated from version = "Two"
+style_edition = "2024"   # Updated from version = "Two"

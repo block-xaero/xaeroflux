@@ -53,9 +53,9 @@ pub type XaeroResult<T> = std::result::Result<T, anyhow::Error>;
 /// * `hash` - Hash of the event
 /// # Example
 /// ```
-/// use xaero_flux::XaeroFluxKey;
+/// use xaeroflux::XaeroFluxKey;
 /// let key = XaeroFluxKey {
-///     timestamp: 0,
+///     timestamp: [0; 8],
 ///     hash: [0; 32],
 /// };
 /// ```
@@ -106,22 +106,8 @@ pub trait XaeroFluxDBOps {
 
 /// Meta db trait for advanced operations, such as diagnostics and rebuilding the merkle index
 pub trait XaeroFluxMetaDBOps: XaeroFluxDBOps {
-    /// Activates diagnostic mode if the provided `zero_id` matches the boot-time value.
-    /// This is a one-time operation and should be used with caution.
-    /// # Arguments
-    ///     * `zero_id` - The zero_id to be verified
-    /// # Returns
-    ///     * `Ok(())` if the operation was successful
-    ///    * `Err(anyhow::Error)` if the operation failed
     fn enable_diagnostics(&self, zero_id: &str) -> XaeroResult<()>;
 
-    /// Diagnostics report using zero_id given.
-    /// # Arguments
-    /// * `zero_id` - The zero_id to be verified
-    /// # Returns
-    /// * `Ok(Diagnostics)` if the operation was successful
-    /// * `Err(anyhow::Error)` if the operation failed
-    /// # Returns empty vector if no paths are found
     fn diagnostics_report(&self, zero_id: &str) -> XaeroResult<Diagnostics>;
 
     /// Rebuild the merkle index using the given timestamps
