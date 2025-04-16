@@ -54,10 +54,11 @@ impl Debug for XaeroMerkleTree {
     }
 }
 impl XaeroMerkleTree {
+    // Traverse the tree to update the hash of the parent node till root node.
     fn _traverse_update_hash(&mut self, idx: usize) {
         trace!("<<< _traverse_update_hash: {}", idx);
         let parent_hash: [u8; 32] = sha_256_concat(&self.leaves[idx - 1], &self.leaves[idx]);
-        let parent_idx = (idx - 1) / 2; // parent index
+        let parent_idx = idx / 2; // parent index
         trace!(
             "<<< _traverse_update_hash: {:#?} parent_idx: {:#?}",
             idx, parent_idx
@@ -117,63 +118,68 @@ impl XaeroMerkleTreeOps for XaeroMerkleTree {
             leaves: Vec::<XaeroMerkleNode>::new(),
         };
         let len = data_to_push.len();
-        if len == 0 {
-            warn!("No data to insert");
-            return tree;
-        } else if len == 1 {
-            trace!("Single data point to insert : {:#?}", data_to_push[0]);
-            tree.root_hash = data_to_push[0];
-            tree.leaves
-                .push(XaeroMerkleNode::new(data_to_push[0], true));
-            return tree;
-        } else if len == 2 {
-            trace!(
-                "inserting two nodes from {:#?} , {:#?}",
-                data_to_push[0], data_to_push[1]
-            );
-            let left_node = XaeroMerkleNode::new(data_to_push[0], true);
-            let right_node = XaeroMerkleNode::new(data_to_push[1], false);
-            tree.root_hash = sha_256_concat(&left_node, &right_node);
-            tree.leaves.push(left_node);
-            tree.leaves.push(right_node);
-            return tree;
-        } else {
-            trace!("inserting more than two nodes");
-            while let Some(data) = data_to_push.pop() {
-                if tree.leaves.is_empty() {
-                    tree.root_hash = data;
-                    let mut node = XaeroMerkleNode::new(data, true);
-                    node.is_left = true;
-                    trace!("(0) inserting node {:#?}", data);
-                    tree.leaves.push(node);
-                    continue;
-                } else if tree.leaves.len() == 1 {
-                    let mut node = XaeroMerkleNode::new(data, true);
-                    node.is_left = true;
-                    trace!("(1) inserting data {:#?}", data);
-                    tree.leaves.push(node);
-                    continue;
-                } else if tree.leaves.len() == 2 {
-                    let mut node = XaeroMerkleNode::new(data, true);
-                    node.is_left = false;
-                    tree.leaves.push(node);
-                    tree.root_hash = sha_256_concat(&tree.leaves[1], &tree.leaves[2]);
-                    continue;
-                } else {
-                    let mut idx = tree.leaves.len();
-                    let node = XaeroMerkleNode::new(data, true);
-                    tree.leaves.push(node);
-                    while idx > 0 {
-                        if tree.leaves.len() % 2 == 0 {
-                            trace!("(loop) inserting node {:#?}", data);
-                            tree.leaves[idx].is_left = true;
-                            tree._traverse_update_hash(idx);
-                        } else {
-                            tree.leaves[idx].is_left = false;
-                            trace!("(loop) inserting node {:#?}", data);
-                            tree._traverse_update_hash(idx);
+        match len {
+            0 => {
+                warn!("No data to insert");
+                return tree;
+            }
+            1 => {
+                trace!("Single data point to insert : {:#?}", data_to_push[0]);
+                tree.root_hash = data_to_push[0];
+                tree.leaves
+                    .push(XaeroMerkleNode::new(data_to_push[0], true));
+                return tree;
+            }
+            2 => {
+                trace!(
+                    "inserting two nodes from {:#?} , {:#?}",
+                    data_to_push[0], data_to_push[1]
+                );
+                let left_node = XaeroMerkleNode::new(data_to_push[0], true);
+                let right_node = XaeroMerkleNode::new(data_to_push[1], false);
+                tree.root_hash = sha_256_concat(&left_node, &right_node);
+                tree.leaves.push(left_node);
+                tree.leaves.push(right_node);
+                return tree;
+            }
+            _ => {
+                trace!("inserting more than two nodes");
+                while let Some(data) = data_to_push.pop() {
+                    if tree.leaves.is_empty() {
+                        tree.root_hash = data;
+                        let mut node = XaeroMerkleNode::new(data, true);
+                        node.is_left = true;
+                        trace!("(0) inserting node {:#?}", data);
+                        tree.leaves.push(node);
+                        continue;
+                    } else if tree.leaves.len() == 1 {
+                        let mut node = XaeroMerkleNode::new(data, true);
+                        node.is_left = true;
+                        trace!("(1) inserting data {:#?}", data);
+                        tree.leaves.push(node);
+                        continue;
+                    } else if tree.leaves.len() == 2 {
+                        let mut node = XaeroMerkleNode::new(data, true);
+                        node.is_left = false;
+                        tree.leaves.push(node);
+                        tree.root_hash = sha_256_concat(&tree.leaves[1], &tree.leaves[2]);
+                        continue;
+                    } else {
+                        let mut idx = tree.leaves.len();
+                        let node = XaeroMerkleNode::new(data, true);
+                        tree.leaves.push(node);
+                        while idx > 0 {
+                            if tree.leaves.len() % 2 == 0 {
+                                trace!("(loop) inserting node {:#?}", data);
+                                tree.leaves[idx].is_left = true;
+                                tree._traverse_update_hash(idx);
+                            } else {
+                                tree.leaves[idx].is_left = false;
+                                trace!("(loop) inserting node {:#?}", data);
+                                tree._traverse_update_hash(idx);
+                            }
+                            idx -= 1;
                         }
-                        idx -= 1;
                     }
                 }
             }
@@ -197,7 +203,7 @@ impl XaeroMerkleTreeOps for XaeroMerkleTree {
             }
         }
         if idx == usize::MAX {
-            println!("Data not found in the tree");
+            warn!("Data not found in the tree");
             return None;
         }
         self._traverse_generate_proof(idx, &mut proof);
@@ -238,6 +244,27 @@ mod tests {
 
     use super::*;
     use crate::{indexing::hash::sha_256, logs::init_logging};
+
+    #[test]
+    fn test_empty_tree() {
+        init_logging();
+        let data = vec![];
+        let tree = XaeroMerkleTree::init(data);
+        trace!("Tree initialized with leaves: {:#?}", tree.leaves);
+        trace!("Root hash: {:#?}", hex::encode(tree.root_hash));
+        assert_eq!(tree.leaves.len(), 0);
+        assert_eq!(tree.root_hash, [0; 32]);
+    }
+
+    #[test]
+    fn test_single_node_tree() {
+        init_logging();
+        let data = vec![sha_256::<String>(&String::from("XAERO"))];
+        let tree = XaeroMerkleTree::init(data);
+        trace!("Tree initialized with leaves: {:#?}", tree.leaves);
+        trace!("Root hash: {:#?}", hex::encode(tree.root_hash));
+        assert_eq!(tree.leaves.len(), 1);
+    }
     #[test]
     fn test_insert_leaves() {
         init_logging();
@@ -259,17 +286,17 @@ mod tests {
     }
 
     #[test]
-    fn test_verify_proof_happy() {}
+    fn test_verify_proof_happy() {
+        init_logging();
+    }
 
     #[test]
-    fn test_generate_proof_happy() {}
+    fn test_generate_proof_happy() {
+        init_logging();
+    }
 
     #[test]
-    fn test_generate_proof_no_data() {}
-
-    #[test]
-    fn test_empty_tree() {}
-
-    #[test]
-    fn test_zero_data_leaves() {}
+    fn test_generate_proof_no_data() {
+        init_logging();
+    }
 }
