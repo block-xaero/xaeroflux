@@ -19,6 +19,7 @@ impl<T> XaeroData for T where T: Any + Send + Sync + bincode::Decode<()> + binco
 
 pub static CONF: OnceLock<config::Config> = OnceLock::new();
 
+/// Initialize the XaeroFlux core components here.
 pub fn initialize() {
     init_logging();
     show_banner();
@@ -26,6 +27,10 @@ pub fn initialize() {
     info!("XaeroFlux initialized");
 }
 
+/// Load the configuration file and parse it.
+/// The configuration file is expected to be in TOML format.
+/// The default path is `xaeroflux.toml`.
+/// You can override this by setting the `XAERO_CONFIG` environment variable.
 pub fn load_config() -> &'static config::Config {
     CONF.get_or_init(|| {
         let path = std::env::var("XAERO_CONFIG").unwrap_or_else(|_| "xaeroflux.toml".into());
@@ -33,6 +38,8 @@ pub fn load_config() -> &'static config::Config {
         toml::from_str(&s).expect("parse config")
     })
 }
+
+/// Shows the XaeroFlux banner using the FIGlet font.
 pub fn show_banner() {
     info!("XaeroFlux initializing...");
     let slant = FIGfont::standard().expect("load slant font");
