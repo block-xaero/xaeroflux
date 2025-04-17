@@ -1,0 +1,62 @@
+########################################
+# XaeroFlux Core Configuration (TOML)
+########################################
+version = 1                                                            # Version of the XaeroFlux software
+name = "xaeroflux"                                                             # Name of this node
+description = "A distributed event processing node for the XaeroFlux network."
+
+
+# Where on disk to store your RocksDB data, WALs, and Merkle files.
+[storage]
+data_dir = "/var/lib/xaeroflux/data"
+wal_dir = "/var/lib/xaeroflux/wal"
+merkle_index_dir = "/var/lib/xaeroflux/merkle"
+create_if_missing = true
+max_open_files = 512
+
+# Merkle‑tree paging & flushing
+[merkle]
+page_size = 8_192         # bytes per page mmap'd
+flush_interval_ms = 1_000 # how often to fsync pages
+max_nodes_per_page = 256  # how many tree‑nodes per page file
+
+# Peer‑to‑Peer (libp2p / DHT / CRDT) settings
+[p2p]
+listen_address = "/ip4/0.0.0.0/tcp/4001"
+bootstrap_nodes = ["node1.example.com:4001", "node2.example.com:4001"]
+enable_mdns = true
+crdt_strategy = "lww"                                                  # last‑write‑wins merge
+max_msg_size_bytes = 1_048_576                                         # 1 MiB
+
+# Per‑EventType buffering and batching
+[event_buffers]
+# You can add one table for each EventType you support:
+[event_buffers.ApplicationEvent]
+capacity = 1024  # channel capacity
+batch_size = 64  # how many events to pull before processing
+timeout_ms = 500 # max wait before forcing a batch
+
+[event_buffers.SystemEvent]
+capacity = 512
+batch_size = 32
+timeout_ms = 200
+
+[event_buffers.NetworkEvent]
+capacity = 512
+batch_size = 32
+timeout_ms = 200
+
+[event_buffers.StorageEvent]
+capacity = 512
+batch_size = 32
+timeout_ms = 200
+
+# Thread‑pool / event‑loop tuning
+[threads]
+num_worker_threads = 4 # e.g. one per major subsystem
+pin_threads = true     # bind each thread to its own core
+
+# Logging / diagnostics
+[logging]
+level = "info"                  # trace | debug | info | warn | error
+file = "/var/log/xaeroflux.log"
