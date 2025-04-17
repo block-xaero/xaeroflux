@@ -19,6 +19,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 xaeroflux = { path = "." }  # Adjust the path as necessary
 
 [dependencies]
+lru = { version = "0.14.0"}
 hex = "0.4.3"
 toml = "0.8.20"
 crdts = "7.3.2"

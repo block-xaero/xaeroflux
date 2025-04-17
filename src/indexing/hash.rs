@@ -3,6 +3,19 @@ use sha2::Digest;
 use super::merkle_tree::XaeroMerkleNode;
 use crate::core::XaeroData;
 
+///// Trait for hashing data in the Xaero system.
+/// This trait defines a method for hashing data of type `T`
+/// to produce a 32-byte hash. The `T` type must implement the `XaeroData` trait,
+/// as well as `AsRef<[u8]>` and `std::fmt::Debug`.
+///  # Generic Parameters
+/// * `T` - The type of the data to be hashed.
+pub trait XaeroHasher<T>
+where
+    T: XaeroData + AsRef<[u8]> + std::fmt::Debug,
+{
+    fn hash(&self, t: &T) -> [u8; 32];
+}
+
 /// Sha256 hash function for any type of data.
 /// # Generic Parameters
 /// * `T` - The type of the data to be hashed.
