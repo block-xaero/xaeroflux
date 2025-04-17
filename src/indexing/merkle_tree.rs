@@ -1,11 +1,11 @@
-use std::{fmt::Debug, usize};
+use std::fmt::Debug;
 
 use tracing::{trace, warn};
 
-use super::hash::{sha_256_concat, sha_256_concat_hash};
-use crate::{indexing::hash::sha_256, logs::init_logging};
+use super::hash::sha_256_concat_hash;
+use crate::logs::init_logging;
+
 /// Models a node in the Merkle tree.
-/// # Generic Parameters
 #[derive(Clone, Default)]
 pub struct XaeroMerkleNode {
     pub node_hash: [u8; 32],
@@ -104,19 +104,19 @@ impl XaeroMerkleTreeOps for XaeroMerkleTree {
         }
         // symmetrically add the last node if odd number of leaves
         if data_to_push.len() % 2 != 0 {
-            let n = *data_to_push.last().unwrap();
+            let n = *data_to_push.last().expect("Last node should exist");
             data_to_push.push(n);
             trace!("Added dummy node: {:#?}", hex::encode(n));
         }
         // TODO: Timeseries sort before initializing??
-        let L = data_to_push.len();
-        let tree_size = 2 * L - 1; // L + L/2 + L4 + ... + 1
+        let input_data_size = data_to_push.len();
+        let tree_size = 2 * input_data_size - 1; // L + L/2 + L4 + ... + 1
         trace!("Tree size: {}", tree_size);
         let mut nodes = Vec::<XaeroMerkleNode>::with_capacity(tree_size);
         nodes.resize_with(tree_size, XaeroMerkleNode::default);
-        let leaf_start = tree_size - L;
+        let leaf_start = tree_size - input_data_size;
         trace!("Leaf start set as  {}", leaf_start);
-        trace!("building tree now with {} leaves", L);
+        trace!("building tree now with {} leaves", input_data_size);
         for (i, data) in data_to_push.iter().enumerate() {
             nodes[leaf_start + i] = XaeroMerkleNode::new(*data, true);
             trace!(
@@ -285,9 +285,8 @@ mod tests {
         ];
         let xaer3_tree = XaeroMerkleTree::init(data);
         trace!("XAER3: Tree initialized with leaves: {:#?}", tree.nodes);
-        assert_eq!(
-            xaer3_tree.verify_proof(proof.expect("Proof provided was invalid"), data_to_prove),
-            false
+        assert!(
+            !xaer3_tree.verify_proof(proof.expect("Proof provided was invalid"), data_to_prove)
         );
     }
 
@@ -317,9 +316,8 @@ mod tests {
         ];
         let xaer3_tree = XaeroMerkleTree::init(data);
         trace!("XAER3: Tree initialized with leaves: {:#?}", tree.nodes);
-        assert_eq!(
-            xaer3_tree.verify_proof(proof.expect("Proof provided was invalid"), data_to_prove),
-            false
+        assert!(
+            !xaer3_tree.verify_proof(proof.expect("Proof provided was invalid"), data_to_prove)
         );
     }
 
@@ -337,7 +335,7 @@ mod tests {
         let proof = tree.generate_proof(data_to_prove);
         trace!("XAER0 Proof: {:#?}", proof);
         assert!(proof.is_some());
-        let is_valid = tree.verify_proof(proof.unwrap(), data_to_prove);
+        let is_valid = tree.verify_proof(proof.expect("proof expected"), data_to_prove);
         trace!("XAER0 is_valid: {:#?}", is_valid);
         assert!(is_valid);
         let data_to_prove = sha_256::<String>(&String::from("XAER3"));
