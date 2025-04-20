@@ -5,7 +5,6 @@ pub mod config;
 pub mod event;
 pub mod event_buffer;
 pub mod listeners;
-pub mod pool;
 
 use figlet_rs::FIGfont;
 use tracing::info;
