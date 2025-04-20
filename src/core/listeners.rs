@@ -1,36 +1,55 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc, thread::JoinHandle};
 
-use crossbeam::channel::*;
+use crossbeam::channel::{Sender, *};
 
-use super::event::EventType;
-use crate::core::{XaeroData, event::Event};
+use super::{XaeroData, event::Event};
 
+/// Event listener forms the crux of our event plumbing.
+/// Mostly event listener is bound to a thread-pool and is organized in a tree like
+/// hierarchy, an event processed spawns new events which are sent to children.
+/// hierarchy also helps in filtering events.
 pub struct EventListener<T>
 where
-    T: XaeroData,
+    T: XaeroData + 'static,
 {
-    pub id: usize,
-    pub filter: EventType,
+    pub id: u64,
     pub rx: Receiver<Event<T>>,
-    pub handler: Box<dyn Fn(Event<T>) + Send + Sync>,
+    children: HashMap<JoinHandle<()>, Sender<Event<T>>>,
+    pub handler: Arc<dyn Fn(Event<T>) + Send + Sync>,
 }
 
-pub struct EventListenerRouter<T>
+impl<T> EventListener<T>
 where
-    T: XaeroData,
+    T: XaeroData + 'static,
 {
-    pub listeners: HashMap<usize, EventListener<T>>,
-    pub next_id: usize,
-    pub inbox: Receiver<Event<T>>,
+    pub fn new(
+        id: u64,
+        rx: Receiver<Event<T>>,
+        children: HashMap<JoinHandle<()>, Sender<Event<T>>>,
+        handler: Arc<dyn Fn(Event<T>) + Send + Sync>,
+    ) -> Self {
+        EventListener {
+            id,
+            children,
+            rx,
+            handler,
+        }
+    }
 }
 
-pub trait EventListenerRouterOps<T>
+pub fn bootstrap_listener<T>(
+    id: u64,
+    rx: Receiver<Event<T>>,
+    children: Vec<Sender<Event<T>>>,
+    handler: Arc<dyn Fn(Event<T>) + Send + Sync>,
+) -> EventListener<T>
 where
-    T: XaeroData,
+    T: XaeroData + 'static,
 {
-    fn add_listener<F>(&mut self, filter: EventType, handler: F) -> usize
-    where
-        F: Fn(Event<T>) + Send + Sync + 'static;
-    fn start(&self) -> Result<(), String>;
-    fn stop(&self) -> Result<(), String>;
+    let j = std::thread::spawn(move || {
+        while let Ok(event) = rx.recv() {
+            (handler)(event);
+        }
+    });
+    EventListener::new(id, rx, children, handler)
 }

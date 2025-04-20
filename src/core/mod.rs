@@ -1,21 +1,20 @@
 use std::{any::Any, sync::OnceLock};
 
+pub mod aof;
 pub mod config;
-pub mod consumer;
 pub mod event;
 pub mod event_buffer;
 pub mod listeners;
-pub mod producer;
-pub mod storage;
-pub mod storage_meta;
+pub mod pool;
+
 use figlet_rs::FIGfont;
 use tracing::info;
 
 use crate::logs::init_logging;
 
-pub trait XaeroData: Any + Send + Sync + bincode::Decode<()> + bincode::Encode {}
+pub trait XaeroData: Any + Send + Sync + bincode::Decode<()> + bincode::Encode + Clone {}
 
-impl<T> XaeroData for T where T: Any + Send + Sync + bincode::Decode<()> + bincode::Encode {}
+impl<T> XaeroData for T where T: Any + Send + Sync + bincode::Decode<()> + bincode::Encode + Clone {}
 
 pub static CONF: OnceLock<config::Config> = OnceLock::new();
 
@@ -24,7 +23,12 @@ pub fn initialize() {
     init_logging();
     show_banner();
     load_config();
+    initialize_threads();
     info!("XaeroFlux initialized");
+}
+
+fn initialize_threads() -> ThreadPool {
+    
 }
 
 /// Load the configuration file and parse it.

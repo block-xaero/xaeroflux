@@ -1,11 +1,6 @@
-use crate::core::{
-    consumer::ConsumerOps, event_buffer::RawEvent, producer::ProducerOps, storage::Storage,
-};
+use crate::core::event_buffer::RawEvent;
 
 pub struct XaeroFluxEngine {
-    pub storage: Box<dyn Storage>,
-    pub raw_event_producer: Box<dyn ProducerOps<RawEvent>>,
-    pub consumers: Box<dyn ConsumerOps<RawEvent>>,
 }
 
 pub trait XaeroFluxEngineStorageOps {
