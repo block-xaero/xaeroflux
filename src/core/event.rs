@@ -6,17 +6,33 @@ use super::{CONF, XaeroData};
 #[repr(u8)]
 pub enum EventType {
     ApplicationEvent(u8),
-    SystemEvent(u8),
+    SystemEvent(SystemEventKind),
     NetworkEvent(u8),
     StorageEvent(u8),
 }
+/// A small list of built‑in system event kinds.
+#[derive(Debug, Clone, Encode, Decode, Copy, PartialEq, Eq, Hash)]
+pub enum SystemEventKind {
+    Start,
+    Stop,
+    Pause,
+    Resume,
+    Shutdown,
+    Restart,
+}
+
 impl EventType {
     pub fn from_u8(value: u8) -> Self {
         match value {
             0 => EventType::ApplicationEvent(value),
-            1 => EventType::SystemEvent(value),
-            2 => EventType::NetworkEvent(value),
-            3 => EventType::StorageEvent(value),
+            1 => EventType::SystemEvent(SystemEventKind::Start),
+            2 => EventType::SystemEvent(SystemEventKind::Stop),
+            3 => EventType::SystemEvent(SystemEventKind::Pause),
+            4 => EventType::SystemEvent(SystemEventKind::Resume),
+            5 => EventType::SystemEvent(SystemEventKind::Shutdown),
+            6 => EventType::SystemEvent(SystemEventKind::Restart),
+            7 => EventType::NetworkEvent(value),
+            8 => EventType::StorageEvent(value),
             _ => panic!("Invalid event type"),
         }
     }
