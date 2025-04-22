@@ -1,10 +1,9 @@
-use crate::core::event_buffer::RawEvent;
+use crate::core::event::*;
 
-pub struct XaeroFluxEngine {
-}
+pub struct XaeroFluxEngine {}
 
 pub trait XaeroFluxEngineStorageOps {
-    fn push_raw(&mut self, event: RawEvent) -> anyhow::Result<()>;
+    fn push_raw(&mut self, event: Event<Vec<u8>>) -> anyhow::Result<()>;
 }
 pub trait XaeroFluxEngineOps {
     fn init(&mut self, path: &str) -> anyhow::Result<()>;

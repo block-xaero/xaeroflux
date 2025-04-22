@@ -1,9 +1,8 @@
-use std::{any::Any, sync::OnceLock};
+use std::{any::Any, fmt::Debug, hash::Hash, sync::OnceLock};
 
 pub mod aof;
 pub mod config;
 pub mod event;
-pub mod event_buffer;
 pub mod listeners;
 
 use figlet_rs::FIGfont;
@@ -11,9 +10,35 @@ use tracing::info;
 
 use crate::logs::init_logging;
 
-pub trait XaeroData: Any + Send + Sync + bincode::Decode<()> + bincode::Encode + Clone {}
+pub trait XaeroData:
+    Any
+    + Send
+    + Sync
+    + bincode::Decode<()>
+    + bincode::Encode
+    + Clone
+    + Debug
+    + Eq
+    + PartialEq
+    + Hash
+    + Default
+{
+}
 
-impl<T> XaeroData for T where T: Any + Send + Sync + bincode::Decode<()> + bincode::Encode + Clone {}
+impl<T> XaeroData for T where
+    T: Any
+        + Send
+        + Sync
+        + bincode::Decode<()>
+        + bincode::Encode
+        + Clone
+        + Debug
+        + Eq
+        + PartialEq
+        + Hash
+        + Default
+{
+}
 
 pub static CONF: OnceLock<config::Config> = OnceLock::new();
 
@@ -22,12 +47,7 @@ pub fn initialize() {
     init_logging();
     show_banner();
     load_config();
-    initialize_threads();
-    info!("XaeroFlux initialized");
-}
-
-fn initialize_threads() -> ThreadPool {
-    
+    info!("XaeroFslux initialized");
 }
 
 /// Load the configuration file and parse it.
@@ -95,7 +115,10 @@ mod tests {
         let event = event::EventType::from_u8(0);
         assert_eq!(event, event::EventType::ApplicationEvent(0));
         let event = event::EventType::from_u8(1);
-        assert_eq!(event, event::EventType::SystemEvent(1));
+        assert_eq!(
+            event,
+            event::EventType::SystemEvent(event::SystemEventKind::Restart)
+        );
         let event = event::EventType::from_u8(2);
         assert_eq!(event, event::EventType::NetworkEvent(2));
         let event = event::EventType::from_u8(3);

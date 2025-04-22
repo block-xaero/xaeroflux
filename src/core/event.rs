@@ -10,9 +10,15 @@ pub enum EventType {
     NetworkEvent(u8),
     StorageEvent(u8),
 }
+impl Default for EventType {
+    fn default() -> Self {
+        EventType::ApplicationEvent(0)
+    }
+}
 /// A small list of built‑in system event kinds.
-#[derive(Debug, Clone, Encode, Decode, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Encode, Decode, Copy, PartialEq, Eq, Hash, Default)]
 pub enum SystemEventKind {
+    #[default]
     Start,
     Stop,
     Pause,
@@ -37,7 +43,7 @@ impl EventType {
         }
     }
 }
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Clone, Encode, Decode, Default)]
 pub struct Event<T>
 where
     T: XaeroData,
@@ -62,5 +68,71 @@ where
                 .expect("Time went backwards")
                 .as_millis() as u64,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bincode::config::{self, Configuration};
+
+    use super::*;
+    use crate::core::initialize;
+
+    #[test]
+    pub fn test_event_system_type() {
+        let event = EventType::from_u8(6);
+        assert_eq!(event, EventType::SystemEvent(SystemEventKind::Restart));
+    }
+
+    #[test]
+    pub fn test_event_application_type() {
+        let event = EventType::from_u8(0);
+        assert_eq!(event, EventType::ApplicationEvent(0));
+    }
+
+    // serialize, deserialize code
+    #[test]
+    pub fn test_basic_serde() {
+        initialize();
+        let e = Event::<String>::new("test".to_string(), 0);
+        let cfg: Configuration<config::LittleEndian, config::Fixint> =
+            bincode::config::standard().with_fixed_int_encoding();
+        let encoded: Vec<u8> = bincode::encode_to_vec(&e, cfg).expect("failed to encode event");
+        println!("Encoded ({} bytes): {:02x?}", encoded.len(), &encoded);
+        let mut offset = 0;
+
+        // 3a) enum discriminant (u32)
+        let (tag, len) = bincode::decode_from_slice::<
+            u32,
+            Configuration<config::LittleEndian, config::Fixint>,
+        >(&encoded[offset..], cfg)
+        .expect("failed to decode enum discriminant");
+        println!(
+            "discriminant:   offset {} len {} value {}",
+            offset, len, tag
+        );
+        offset += len;
+        println!(
+            "discriminant:   offset {} len {} value {}",
+            offset, len, tag
+        );
+
+        let (payload, len) = bincode::decode_from_slice::<
+            u8,
+            Configuration<config::LittleEndian, config::Fixint>,
+        >(&encoded[offset..], cfg)
+        .expect("failed to decode event");
+        println!(
+            "discriminant:   offset {} len {} value {}",
+            offset, len, payload
+        );
+        offset += len;
+        println!(
+            ">>> discriminant:   offset {} len {} value {}",
+            offset, len, payload
+        );
+        let decoded: (Event<String>, usize) =
+            bincode::decode_from_slice(&encoded, cfg).expect("failed to decode event");
+        assert_eq!(e.event_type, decoded.0.event_type);
     }
 }
