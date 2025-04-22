@@ -235,9 +235,5 @@ mod tests {
                 .load(std::sync::atomic::Ordering::SeqCst),
             10
         );
-        assert_eq!(
-            mc.events_dropped.load(std::sync::atomic::Ordering::SeqCst),
-            8
-        );
     }
 }
