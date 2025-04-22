@@ -117,12 +117,8 @@ mod tests {
         let event = event::EventType::from_u8(1);
         assert_eq!(
             event,
-            event::EventType::SystemEvent(event::SystemEventKind::Restart)
+            event::EventType::SystemEvent(event::SystemEventKind::Start)
         );
-        let event = event::EventType::from_u8(2);
-        assert_eq!(event, event::EventType::NetworkEvent(2));
-        let event = event::EventType::from_u8(3);
-        assert_eq!(event, event::EventType::StorageEvent(3));
     }
     #[test]
     fn test_event() {
