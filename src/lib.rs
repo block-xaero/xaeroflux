@@ -1,4 +1,4 @@
-use core::{event, event_buffer::RawEvent};
+use core::event::*;
 use std::sync::Arc;
 
 use logs::diagnostics::Diagnostics;
@@ -88,20 +88,20 @@ pub trait XaeroFluxDBOps {
     /// * `t1` - Start time.
     /// * `t2` - End time.
     /// # Returns vector of raw events found
-    fn range(&self, t1: u64, t2: u64) -> XaeroResult<Vec<RawEvent>>;
+    fn range(&self, t1: u64, t2: u64) -> XaeroResult<Vec<Event<Vec<u8>>>>;
     /// Append an event to the database
     /// # Arguments
     /// * `key` - Key of the event
     /// * `value` - Raw event to be appended
     /// # Returns true if the event was appended successfully
     /// # Returns false if the event was not appended successfully
-    fn append(&self, key: XaeroFluxKey, value: RawEvent) -> XaeroResult<()>;
+    fn append(&self, key: XaeroFluxKey, value: Vec<Event<Vec<u8>>>) -> XaeroResult<()>;
     /// Verify the proof of the event in the database
     /// # Arguments
     /// * `event` - Raw event to be verified
     /// * `proof` - Proof of the event
     /// * # Returns true if the proof is valid
-    fn verify_proof(&self, event: RawEvent) -> XaeroResult<()>;
+    fn verify_proof(&self, event: Event<Vec<u8>>) -> XaeroResult<()>;
 }
 
 /// Meta db trait for advanced operations, such as diagnostics and rebuilding the merkle index
