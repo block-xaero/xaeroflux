@@ -1,4 +1,5 @@
 use std::{
+    fmt::Debug,
     panic::{self, AssertUnwindSafe},
     sync::{Arc, atomic::AtomicUsize},
     thread::JoinHandle,
@@ -13,10 +14,10 @@ use super::{CONF, XaeroData, event::Event};
 /// Mostly event listener is bound to a thread-pool and is organized in a tree like
 /// hierarchy, an event processed spawns new events which are sent to children.
 /// hierarchy also helps in filtering events.
-#[derive(Debug)]
+#[repr(C)]
 pub struct EventListener<T>
 where
-    T: XaeroData + 'static,
+    T: XaeroData + Send + Sync + 'static,
 {
     pub id: [u8; 32], // auto-generated
     pub address: Option<String>,
@@ -149,7 +150,6 @@ where
         }
     }
 
-    #[tracing::instrument]
     pub fn shutdown(self) {
         tracing::info!("shutting down event listener");
         self.pool.join();
@@ -176,7 +176,7 @@ mod tests {
         let listener = EventListener::<String>::new(
             "test",
             Arc::new(|event| {
-                println!("Received event: {:?}", event);
+                println!("Received event: {:?}", event.data);
             }),
             None,
         );

@@ -20,6 +20,8 @@ xaeroflux = { path = "." }  # Adjust the path as necessary
 
 
 [dependencies]
+rkyv = "0.8.10"
+rkyv_dyn = "0.7.44"
 threadpool = "1.8.1"
 figlet-rs = "0.1.5"
 lru = { version = "0.14.0"}
@@ -38,4 +40,3 @@ libc = "0.2.172"
 memmap2 = "0.9.5"
 crossbeam = "0.8.4"
 serde = { version = "1.0.219", features = ["derive"] }
-bincode = { version = "2.0.1", features = ["serde"] }
