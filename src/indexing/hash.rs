@@ -1,3 +1,5 @@
+use std::convert::TryInto;
+
 use sha2::Digest;
 
 use super::merkle_tree::XaeroMerkleNode;

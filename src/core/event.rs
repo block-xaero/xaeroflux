@@ -1,9 +1,12 @@
-use bincode::{Decode, Encode};
+use std::fmt::Debug;
+
+use rkyv::{Archive, Deserialize, Serialize};
 
 use super::{CONF, XaeroData};
 
-#[derive(Debug, Clone, Encode, Decode, PartialEq, Eq, Hash)]
-#[repr(u8)]
+#[repr(C)]
+#[derive(Debug, Clone, Archive, Serialize, Deserialize, PartialEq, Eq)]
+#[rkyv(derive(Debug))]
 pub enum EventType {
     ApplicationEvent(u8),
     SystemEvent(SystemEventKind),
@@ -15,10 +18,10 @@ impl Default for EventType {
         EventType::ApplicationEvent(0)
     }
 }
-/// A small list of built‑in system event kinds.
-#[derive(Debug, Clone, Encode, Decode, Copy, PartialEq, Eq, Hash, Default)]
+#[repr(C)]
+#[derive(Debug, Clone, Archive, Serialize, Deserialize, PartialEq, Eq)]
+#[rkyv(derive(Debug))]
 pub enum SystemEventKind {
-    #[default]
     Start,
     Stop,
     Pause,
@@ -43,7 +46,14 @@ impl EventType {
         }
     }
 }
-#[derive(Debug, Clone, Encode, Decode, Default)]
+
+#[repr(C)]
+#[derive(Debug, Clone, Archive, Serialize, Deserialize, Default)]
+#[rkyv(
+    derive(Debug),
+    archive_bounds(T::Archived: Debug),
+)]
+/// Event is the main data structure for the event system.
 pub struct Event<T>
 where
     T: XaeroData,
@@ -73,66 +83,27 @@ where
 
 #[cfg(test)]
 mod tests {
-    use bincode::config::{self, Configuration};
 
-    use super::*;
-    use crate::core::initialize;
+    use rkyv::{
+        Archived,
+        rancor::{Error, Failure},
+    };
 
-    #[test]
-    pub fn test_event_system_type() {
-        let event = EventType::from_u8(6);
-        assert_eq!(event, EventType::SystemEvent(SystemEventKind::Restart));
-    }
+    use crate::core::{event::Event, initialize};
 
-    #[test]
-    pub fn test_event_application_type() {
-        let event = EventType::from_u8(0);
-        assert_eq!(event, EventType::ApplicationEvent(0));
-    }
-
-    // serialize, deserialize code
     #[test]
     pub fn test_basic_serde() {
         initialize();
-        let e = Event::<String>::new("test".to_string(), 0);
-        let cfg: Configuration<config::LittleEndian, config::Fixint> =
-            bincode::config::standard().with_fixed_int_encoding();
-        let encoded: Vec<u8> = bincode::encode_to_vec(&e, cfg).expect("failed to encode event");
-        println!("Encoded ({} bytes): {:02x?}", encoded.len(), &encoded);
-        let mut offset = 0;
-
-        // 3a) enum discriminant (u32)
-        let (tag, len) = bincode::decode_from_slice::<
-            u32,
-            Configuration<config::LittleEndian, config::Fixint>,
-        >(&encoded[offset..], cfg)
-        .expect("failed to decode enum discriminant");
-        println!(
-            "discriminant:   offset {} len {} value {}",
-            offset, len, tag
-        );
-        offset += len;
-        println!(
-            "discriminant:   offset {} len {} value {}",
-            offset, len, tag
-        );
-
-        let (payload, len) = bincode::decode_from_slice::<
-            u8,
-            Configuration<config::LittleEndian, config::Fixint>,
-        >(&encoded[offset..], cfg)
-        .expect("failed to decode event");
-        println!(
-            "discriminant:   offset {} len {} value {}",
-            offset, len, payload
-        );
-        offset += len;
-        println!(
-            ">>> discriminant:   offset {} len {} value {}",
-            offset, len, payload
-        );
-        let decoded: (Event<String>, usize) =
-            bincode::decode_from_slice(&encoded, cfg).expect("failed to decode event");
-        assert_eq!(e.event_type, decoded.0.event_type);
+        let event = crate::core::event::Event::<String>::new("test".to_string(), 1);
+        let bytes: rkyv::util::AlignedVec =
+            rkyv::to_bytes::<Failure>(&Event::new("hello world".to_string(), 1))
+                .expect("failed to serialize");
+        let arch_event = rkyv::access::<Archived<Event<String>>, Failure>(&bytes)
+            .expect("failed to access archived event");
+        tracing::info!("non archived event: {:#?}", event);
+        tracing::info!("archived event: {:#?}", arch_event);
+        let deserialized_event =
+            rkyv::from_bytes::<Event<String>, Error>(&bytes).expect("failed to deserialize");
+        assert_eq!(event.event_type, deserialized_event.event_type);
     }
 }

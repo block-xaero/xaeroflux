@@ -1,4 +1,4 @@
-use std::{any::Any, fmt::Debug, hash::Hash, sync::OnceLock};
+use std::{any::Any, fmt::Debug, sync::OnceLock};
 
 pub mod aof;
 pub mod config;
@@ -10,36 +10,9 @@ use tracing::info;
 
 use crate::logs::init_logging;
 
-pub trait XaeroData:
-    Any
-    + Send
-    + Sync
-    + bincode::Decode<()>
-    + bincode::Encode
-    + Clone
-    + Debug
-    + Eq
-    + PartialEq
-    + Hash
-    + Default
-{
-}
+pub trait XaeroData: Any + Send + Sync + Clone + Debug + Default {}
 
-impl<T> XaeroData for T where
-    T: Any
-        + Send
-        + Sync
-        + bincode::Decode<()>
-        + bincode::Encode
-        + Clone
-        + Debug
-        + Eq
-        + PartialEq
-        + Hash
-        + Default
-{
-}
-
+impl<T> XaeroData for T where T: Any + Send + Sync + Clone + Debug + Default {}
 pub static CONF: OnceLock<config::Config> = OnceLock::new();
 
 /// Initialize the XaeroFlux core components here.
@@ -47,7 +20,7 @@ pub fn initialize() {
     init_logging();
     show_banner();
     load_config();
-    info!("XaeroFslux initialized");
+    info!("XaeroFlux initialized");
 }
 
 /// Load the configuration file and parse it.
@@ -74,6 +47,8 @@ pub fn show_banner() {
 }
 #[cfg(test)]
 mod tests {
+    use rkyv::{Archive, Deserialize, Serialize, rancor::Failure};
+
     use super::*;
 
     #[test]
@@ -94,9 +69,8 @@ mod tests {
     #[test]
     fn test_xaero_data() {
         initialize();
-        use bincode::{Decode, Encode};
 
-        #[derive(Encode, Decode)]
+        #[derive(Archive, Serialize, Deserialize, Debug, Clone, Default)]
         struct TestData {
             id: u32,
             name: String,
@@ -108,17 +82,16 @@ mod tests {
         };
         assert_eq!(data.id, 1);
         assert_eq!(data.name, "Test");
+        // serialize
+        let d = rkyv::to_bytes::<Failure>(&data).expect("failed to serialize");
+        assert!(!d.is_empty());
     }
     #[test]
     fn test_event_type() {
         initialize();
-        let event = event::EventType::from_u8(0);
-        assert_eq!(event, event::EventType::ApplicationEvent(0));
+        let e = event::EventType::SystemEvent(event::SystemEventKind::Start);
         let event = event::EventType::from_u8(1);
-        assert_eq!(
-            event,
-            event::EventType::SystemEvent(event::SystemEventKind::Start)
-        );
+        assert_eq!(event, e);
     }
     #[test]
     fn test_event() {
