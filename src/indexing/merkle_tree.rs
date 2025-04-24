@@ -1,12 +1,14 @@
 use std::fmt::Debug;
 
+use rkyv::{Archive, Deserialize, Serialize};
 use tracing::{trace, warn};
 
 use super::hash::sha_256_concat_hash;
 use crate::logs::init_logging;
 
 /// Models a node in the Merkle tree.
-#[derive(Clone, Default)]
+#[derive(Clone, Archive, Serialize, Deserialize, Copy)]
+#[rkyv(derive(Debug))]
 pub struct XaeroMerkleNode {
     pub node_hash: [u8; 32],
     pub is_leaf: bool,
@@ -24,6 +26,9 @@ impl XaeroMerkleNode {
         Self { node_hash, is_leaf }
     }
 }
+
+#[derive(Clone, Archive, Serialize, Deserialize, Copy)]
+#[rkyv(derive(Debug))]
 pub struct XaeroMerkleProofSegment {
     pub node_hash: [u8; 32],
     pub is_left: bool,
@@ -38,6 +43,8 @@ impl Debug for XaeroMerkleProofSegment {
     }
 }
 
+#[derive(Clone, Archive, Serialize, Deserialize)]
+#[rkyv(derive(Debug))]
 pub struct XaeroMerkleProof {
     pub value: Vec<XaeroMerkleProofSegment>,
 }
@@ -57,6 +64,8 @@ impl Debug for XaeroMerkleProof {
     }
 }
 
+#[derive(Clone, Archive, Serialize, Deserialize)]
+#[rkyv(derive(Debug))]
 pub struct XaeroMerkleTree {
     pub root_hash: [u8; 32],
     pub nodes: Vec<XaeroMerkleNode>,
@@ -81,9 +90,17 @@ impl Debug for XaeroMerkleTree {
 }
 pub trait XaeroMerkleTreeOps {
     /// initialize Merkle tree leaves
-    fn init(leaves: Vec<[u8; 32]>) -> XaeroMerkleTree;
+    fn neo(leaves: Vec<[u8; 32]>) -> XaeroMerkleTree;
+
     /// merkle tree root hash
     fn root(&self) -> [u8; 32];
+
+    /// insert page root hash because of global tree.
+    fn insert_root(&mut self, page_root_hash: [u8; 32]) -> bool;
+
+    /// insert page worth of leaves
+    fn insert_page(&mut self, leaves: Vec<[u8; 32]>) -> bool;
+
     /// prove that data is part of tree and return the path
     fn generate_proof(&mut self, data: [u8; 32]) -> Option<XaeroMerkleProof>;
     /// verify that proof is valid
@@ -91,7 +108,7 @@ pub trait XaeroMerkleTreeOps {
 }
 
 impl XaeroMerkleTreeOps for XaeroMerkleTree {
-    fn init(mut data_to_push: Vec<[u8; 32]>) -> XaeroMerkleTree {
+    fn neo(mut data_to_push: Vec<[u8; 32]>) -> XaeroMerkleTree {
         init_logging();
         trace!(">>> data_to_push was: {:#?}", data_to_push);
         if data_to_push.is_empty() {
@@ -109,14 +126,14 @@ impl XaeroMerkleTreeOps for XaeroMerkleTree {
             trace!("Added dummy node: {:#?}", hex::encode(n));
         }
         // TODO: Timeseries sort before initializing??
-        let input_data_size = data_to_push.len();
-        let tree_size = 2 * input_data_size - 1; // L + L/2 + L4 + ... + 1
+        let leaves = data_to_push.len();
+        let tree_size = 2 * leaves - 1; // L + L/2 + L4 + ... + 1
         trace!("Tree size: {}", tree_size);
         let mut nodes = Vec::<XaeroMerkleNode>::with_capacity(tree_size);
-        nodes.resize_with(tree_size, XaeroMerkleNode::default);
-        let leaf_start = tree_size - input_data_size;
+        nodes.resize_with(tree_size, || XaeroMerkleNode::new([0; 32], true));
+        let leaf_start = tree_size - leaves;
         trace!("Leaf start set as  {}", leaf_start);
-        trace!("building tree now with {} leaves", input_data_size);
+        trace!("building tree now with {} leaves", leaves);
         for (i, data) in data_to_push.iter().enumerate() {
             nodes[leaf_start + i] = XaeroMerkleNode::new(*data, true);
             trace!(
@@ -155,6 +172,57 @@ impl XaeroMerkleTreeOps for XaeroMerkleTree {
 
     fn root(&self) -> [u8; 32] {
         self.root_hash
+    }
+
+    fn insert_root(&mut self, page_root_hash: [u8; 32]) -> bool {
+        self.insert_page(vec![page_root_hash])
+    }
+
+    fn insert_page(&mut self, mut page: Vec<[u8; 32]>) -> bool {
+        trace!(">>> insert_page called with {:#?}", page);
+        if page.is_empty() {
+            return false;
+        }
+        let leaf_count = self.total_size - self.leaf_start;
+        // symmetrically add the last node if odd number of leaves
+        if (leaf_count + page.len()) % 2 != 0 {
+            let n = *page.last().expect("Last node should exist");
+            page.push(n);
+            trace!("Added dummy node: {:#?}", hex::encode(n));
+        }
+        let old_leaf_start = self.leaf_start;
+        let new_leaf_count = leaf_count + page.len();
+        self.total_size = 2 * new_leaf_count - 1;
+        self.leaf_start = self.total_size - new_leaf_count;
+        trace!("New leaf count: {}", new_leaf_count);
+        trace!("New leaf start: {}", self.leaf_start);
+        trace!("New total size: {}", self.total_size);
+        // resize the nodes vector to accommodate new leaves
+        self.nodes
+            .resize_with(self.total_size, || XaeroMerkleNode::new([0; 32], true));
+        self.nodes
+            .copy_within(old_leaf_start..old_leaf_start + leaf_count, self.leaf_start);
+
+        for (i, data) in page.iter().enumerate() {
+            let idx = self.leaf_start + leaf_count + i;
+            self.nodes[idx] = XaeroMerkleNode::new(*data, true);
+            trace!("Leaf node: {:#?} at index: {}", hex::encode(data), idx);
+        }
+        let start_indices = leaf_count..(leaf_count + page.len());
+        for leaf_offset in start_indices {
+            let mut idx = self.leaf_start + leaf_offset;
+            while idx > 0 {
+                let parent = (idx - 1) / 2;
+                let l = &self.nodes[2 * parent + 1].node_hash;
+                let r = &self.nodes[2 * parent + 2].node_hash;
+                let h = sha_256_concat_hash(l, r);
+                self.nodes[parent].node_hash = h;
+                idx = parent;
+            }
+        }
+        // re-build the tree from the new leaves
+        trace!("<<< insert_page called with {:#?}", page);
+        true
     }
 
     fn generate_proof(&mut self, data: [u8; 32]) -> Option<XaeroMerkleProof> {
@@ -229,7 +297,7 @@ mod tests {
     fn test_empty_tree() {
         init_logging();
         let data = vec![];
-        let tree = XaeroMerkleTree::init(data);
+        let tree = XaeroMerkleTree::neo(data);
         trace!("Tree initialized with leaves: {:#?}", tree.nodes);
         trace!("Root hash: {:#?}", hex::encode(tree.root_hash));
         assert_eq!(tree.nodes.len(), 0);
@@ -240,7 +308,7 @@ mod tests {
     fn test_single_node_tree() {
         init_logging();
         let data = vec![sha_256::<String>(&String::from("XAERO"))];
-        let tree = XaeroMerkleTree::init(data);
+        let tree = XaeroMerkleTree::neo(data);
         trace!("Tree initialized with leaves: {:#?}", tree.nodes);
         trace!("Root hash: {:#?}", hex::encode(tree.root_hash));
         assert_eq!(tree.nodes.len(), 3);
@@ -254,7 +322,7 @@ mod tests {
             sha_256::<String>(&String::from("XAER1")),
             sha_256::<String>(&String::from("XAER2")),
         ];
-        let tree = XaeroMerkleTree::init(data);
+        let tree = XaeroMerkleTree::neo(data);
         trace!("Tree initialized with leaves: {:#?}", tree.nodes);
         trace!("Root hash: {:#?}", hex::encode(tree.root_hash));
         assert_eq!(tree.nodes.len(), 7);
@@ -269,7 +337,7 @@ mod tests {
             sha_256::<String>(&String::from("XAER1")),
             sha_256::<String>(&String::from("XAER2")),
         ];
-        let mut tree = XaeroMerkleTree::init(data);
+        let mut tree = XaeroMerkleTree::neo(data);
         trace!("Tree initialized with leaves: {:#?}", tree.nodes);
         trace!("Root hash: {:#?}", hex::encode(tree.root_hash));
         let data_to_prove = sha_256::<String>(&String::from("XAER0"));
@@ -283,7 +351,7 @@ mod tests {
             sha_256::<String>(&String::from("XAER5")),
             sha_256::<String>(&String::from("XAER6")),
         ];
-        let xaer3_tree = XaeroMerkleTree::init(data);
+        let xaer3_tree = XaeroMerkleTree::neo(data);
         trace!("XAER3: Tree initialized with leaves: {:#?}", tree.nodes);
         assert!(
             !xaer3_tree.verify_proof(proof.expect("Proof provided was invalid"), data_to_prove)
@@ -300,7 +368,7 @@ mod tests {
             sha_256::<String>(&String::from("XAER1")),
             sha_256::<String>(&String::from("XAER2")),
         ];
-        let mut tree = XaeroMerkleTree::init(data);
+        let mut tree = XaeroMerkleTree::neo(data);
         trace!("Tree initialized with leaves: {:#?}", tree.nodes);
         trace!("Root hash: {:#?}", hex::encode(tree.root_hash));
         let data_to_prove = sha_256::<String>(&String::from("XAER0"));
@@ -314,7 +382,7 @@ mod tests {
             sha_256::<String>(&String::from("XAER5")),
             sha_256::<String>(&String::from("XAER6")),
         ];
-        let xaer3_tree = XaeroMerkleTree::init(data);
+        let xaer3_tree = XaeroMerkleTree::neo(data);
         trace!("XAER3: Tree initialized with leaves: {:#?}", tree.nodes);
         assert!(
             !xaer3_tree.verify_proof(proof.expect("Proof provided was invalid"), data_to_prove)
@@ -330,7 +398,7 @@ mod tests {
             sha_256::<String>(&String::from("XAER1")),
             sha_256::<String>(&String::from("XAER2")),
         ];
-        let mut tree = XaeroMerkleTree::init(data);
+        let mut tree = XaeroMerkleTree::neo(data);
         let data_to_prove = sha_256::<String>(&String::from("XAER0"));
         let proof = tree.generate_proof(data_to_prove);
         trace!("XAER0 Proof: {:#?}", proof);
@@ -356,9 +424,93 @@ mod tests {
             sha_256::<String>(&String::from("XAER1")),
             sha_256::<String>(&String::from("XAER2")),
         ];
-        let mut tree = XaeroMerkleTree::init(data);
+        let mut tree = XaeroMerkleTree::neo(data);
         let proof = tree.generate_proof(sha_256(&String::from("XAER3")));
         trace!("XAER3 Proof: {:#?}", proof);
         assert!(proof.is_none());
+    }
+
+    /// A minimal helper: compute a reference Merkle root of two 32-byte hashes
+    fn ref_root(a: [u8; 32], b: [u8; 32]) -> [u8; 32] {
+        sha_256_concat_hash(&a, &b)
+    }
+
+    #[test]
+    fn insert_empty_page_returns_false() {
+        let mut tree = XaeroMerkleTree::neo(vec![]);
+        assert!(!tree.insert_page(vec![]));
+        // still no leaves
+        assert_eq!(tree.total_size, 0);
+        assert_eq!(tree.leaf_start, 0);
+        assert!(tree.nodes.is_empty());
+    }
+
+    #[test]
+    fn single_leaf_page_gets_padded() {
+        let mut tree = XaeroMerkleTree::neo(vec![]);
+        let one = [0x11u8; 32];
+        assert!(tree.insert_page(vec![one]));
+        // should pad to 2 leaves => total_size = 2*2-1 = 3, leaf_start = 1
+        assert_eq!(tree.total_size, 3);
+        assert_eq!(tree.leaf_start, 1);
+        // both leaves should equal `one`
+        assert_eq!(tree.nodes[1].node_hash, one);
+        assert_eq!(tree.nodes[2].node_hash, one);
+        // root should be hash(one||one)
+        let expected = ref_root(one, one);
+        assert_eq!(tree.nodes[0].node_hash, expected);
+    }
+
+    #[test]
+    fn append_page_to_existing_tree() {
+        // start with two distinct leaves [A,B]
+        let a = [0xAAu8; 32];
+        let b = [0xBBu8; 32];
+        let mut tree = XaeroMerkleTree::neo(vec![a, b]);
+        tree.insert_page(vec![a, b]); // now 2 leaves
+        let old_leaf_count = tree.total_size - tree.leaf_start; // = 2
+
+        // append two new
+        let c = [0xCCu8; 32];
+        let d = [0xDDu8; 32];
+        assert!(tree.insert_page(vec![c, d]));
+
+        // new leaf count = 4, total_size = 2*4-1 = 7, leaf_start = 3
+        assert_eq!(tree.total_size, 7);
+        assert_eq!(tree.leaf_start, 3);
+        let new_leaf_count = tree.total_size - tree.leaf_start;
+        assert_eq!(new_leaf_count, old_leaf_count + 2);
+
+        // check that the *old* leaves stayed where they were moved to:
+        // at indices 3 and 4
+        assert_eq!(tree.nodes[3].node_hash, a);
+        assert_eq!(tree.nodes[4].node_hash, b);
+
+        // new leaves at indices 5 and 6
+        assert_eq!(tree.nodes[5].node_hash, c);
+        assert_eq!(tree.nodes[6].node_hash, d);
+    }
+
+    #[test]
+    fn root_hash_after_multiple_inserts() {
+        // Build a 4-leaf tree: [A, B, C, D]
+        let a = [0x01u8; 32];
+        let b = [0x02u8; 32];
+        let c = [0x03u8; 32];
+        let d = [0x04u8; 32];
+
+        let mut tree = XaeroMerkleTree::neo(vec![a, b, c, d]);
+        tree.insert_page(vec![a, b]); // leaves [A,B]
+        tree.insert_page(vec![c, d]); // leaves [A,B,C,D]
+
+        // Compute expected two-level Merkle root:
+        // left  = h(A||B)
+        // right = h(C||D)
+        // root  = h(left||right)
+        let left = ref_root(a, b);
+        let right = ref_root(c, d);
+        let expected_root = ref_root(left, right);
+
+        assert_eq!(tree.nodes[0].node_hash, expected_root);
     }
 }

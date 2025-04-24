@@ -20,6 +20,7 @@ xaeroflux = { path = "." }  # Adjust the path as necessary
 
 
 [dependencies]
+bytemuck = "1.22.0"
 rkyv = "0.8.10"
 rkyv_dyn = "0.7.44"
 threadpool = "1.8.1"

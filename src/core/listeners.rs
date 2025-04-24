@@ -14,7 +14,6 @@ use super::{CONF, XaeroData, event::Event};
 /// Mostly event listener is bound to a thread-pool and is organized in a tree like
 /// hierarchy, an event processed spawns new events which are sent to children.
 /// hierarchy also helps in filtering events.
-#[repr(C)]
 pub struct EventListener<T>
 where
     T: XaeroData + Send + Sync + 'static,
@@ -87,6 +86,7 @@ where
         name: &str,
         handler: Arc<dyn Fn(Event<T>) + Send + Sync + 'static>,
         event_buffer_size: Option<usize>,
+        pool_size_override: Option<usize>,
     ) -> Self {
         let (tx, rx) = match event_buffer_size {
             Some(size) => {
@@ -100,12 +100,20 @@ where
         };
 
         let id: [u8; 32] = crate::indexing::hash::sha_256::<String>(&name.to_string());
-        let tp = ThreadPool::new(
-            CONF.get()
-                .expect("failed to load config")
-                .threads
-                .num_worker_threads,
-        );
+        let pool_size = match pool_size_override {
+            Some(size) => {
+                tracing::info!("Thread pool size: {}", size);
+                size
+            }
+            None => {
+                tracing::info!("Thread pool size: default");
+                CONF.get()
+                    .expect("failed to load config")
+                    .threads
+                    .num_worker_threads
+            }
+        };
+        let tp = ThreadPool::new(pool_size);
         let events_processed = Arc::new(AtomicUsize::new(0));
         let events_dropped = Arc::new(AtomicUsize::new(0));
         let meta = Arc::new(EventListenerMeta {
@@ -179,6 +187,7 @@ mod tests {
                 println!("Received event: {:?}", event.data);
             }),
             None,
+            None,
         );
         listener
             .inbox
@@ -199,6 +208,7 @@ mod tests {
                 c.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 println!("Received event: {:#?}", event)
             }),
+            None,
             None,
         );
 
@@ -221,6 +231,7 @@ mod tests {
                 println!("Received event: {:#?}", event);
             }),
             Some(2),
+            None, // Added missing pool_size_override argument
         );
         for i in 0..10 {
             listener
