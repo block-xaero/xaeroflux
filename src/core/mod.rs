@@ -1,5 +1,13 @@
 use std::{any::Any, fmt::Debug, sync::OnceLock};
 
+use rkyv::{
+    Archive,
+    bytecheck::CheckBytes,
+    de::Pool,
+    rancor::{Failure, Strategy},
+    util::AlignedVec,
+    validation::{Validator, archive::ArchiveValidator, shared::SharedValidator},
+};
 pub mod aof;
 pub mod config;
 pub mod event;
@@ -10,9 +18,9 @@ use tracing::info;
 
 use crate::logs::init_logging;
 
-pub trait XaeroData: Any + Send + Sync + Clone + Debug + Default {}
+pub trait XaeroData: Any + Send + Sync + Clone + Debug {}
 
-impl<T> XaeroData for T where T: Any + Send + Sync + Clone + Debug + Default {}
+impl<T> XaeroData for T where T: Any + Send + Sync + Clone + Debug {}
 pub static CONF: OnceLock<config::Config> = OnceLock::new();
 
 /// Initialize the XaeroFlux core components here.
@@ -23,6 +31,35 @@ pub fn initialize() {
     info!("XaeroFlux initialized");
 }
 
+/// Serializes the given data to bytes.
+pub fn serialize<T>(data: &T) -> Result<AlignedVec, Failure>
+where
+    T: XaeroData
+        + for<'a> rkyv::Serialize<
+            rkyv::rancor::Strategy<
+                rkyv::ser::Serializer<
+                    rkyv::util::AlignedVec,
+                    rkyv::ser::allocator::ArenaHandle<'a>,
+                    rkyv::ser::sharing::Share,
+                >,
+                rkyv::rancor::Failure,
+            >,
+        >,
+{
+    rkyv::to_bytes::<Failure>(data)
+}
+
+/// Deserializes bytes to the given type.
+pub fn deserialize<T>(data: &[u8]) -> Result<T, Failure>
+where
+    T: XaeroData + rkyv::Archive,
+    for<'a> <T as Archive>::Archived: CheckBytes<
+        Strategy<Validator<ArchiveValidator<'a>, SharedValidator>, rkyv::rancor::Failure>,
+    >,
+    <T as Archive>::Archived: rkyv::Deserialize<T, Strategy<Pool, Failure>>,
+{
+    rkyv::from_bytes::<T, Failure>(data)
+}
 /// Load the configuration file and parse it.
 /// The configuration file is expected to be in TOML format.
 /// The default path is `xaeroflux.toml`.
@@ -50,6 +87,7 @@ mod tests {
     use rkyv::{Archive, Deserialize, Serialize, rancor::Failure};
 
     use super::*;
+    use crate::core::event::Event;
 
     #[test]
     fn test_initialize() {
@@ -103,5 +141,16 @@ mod tests {
             event.version,
             CONF.get().expect("failed to load config").version
         );
+    }
+
+    #[test]
+    fn test_serialize_deserialize() {
+        initialize();
+        let data = event::EventType::from_u8(0);
+        let event = event::Event::<event::EventType>::new(data.clone(), 0);
+        let bytes: AlignedVec = serialize(&event).expect("failed to serialize");
+        let deserialized_event: Event<event::EventType> =
+            deserialize(&bytes).expect("failed to deserialize");
+        assert_eq!(event.event_type, deserialized_event.event_type);
     }
 }

@@ -45,6 +45,20 @@ impl EventType {
             _ => panic!("Invalid event type"),
         }
     }
+
+    pub fn to_u8(&self) -> u8 {
+        match self {
+            EventType::ApplicationEvent(value) => *value,
+            EventType::SystemEvent(SystemEventKind::Start) => 1,
+            EventType::SystemEvent(SystemEventKind::Stop) => 2,
+            EventType::SystemEvent(SystemEventKind::Pause) => 3,
+            EventType::SystemEvent(SystemEventKind::Resume) => 4,
+            EventType::SystemEvent(SystemEventKind::Shutdown) => 5,
+            EventType::SystemEvent(SystemEventKind::Restart) => 6,
+            EventType::NetworkEvent(value) => *value,
+            EventType::StorageEvent(value) => *value,
+        }
+    }
 }
 
 #[repr(C)]
