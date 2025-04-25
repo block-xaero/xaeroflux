@@ -27,7 +27,7 @@ pub fn mm(f: &str) -> MmapMut {
         match mr {
             Ok(mr) => mr,
             Err(e) => {
-                panic!("Error mapping file: {}", e);
+                panic!("Error mapping file: {e}");
             }
         }
     }

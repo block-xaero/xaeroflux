@@ -10,10 +10,6 @@ use threadpool::ThreadPool;
 
 use super::{CONF, XaeroData, event::Event};
 
-/// Event listener forms the crux of our event plumbing.
-/// Mostly event listener is bound to a thread-pool and is organized in a tree like
-/// hierarchy, an event processed spawns new events which are sent to children.
-/// hierarchy also helps in filtering events.
 pub struct EventListener<T>
 where
     T: XaeroData + Send + Sync + 'static,
