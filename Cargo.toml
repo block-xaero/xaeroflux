@@ -9,7 +9,7 @@ license = "MPL-2.0"
 
 [features]
 diagnostics = []
-default = ["diagnostics"]
+default = []
 
 [lib]
 name = "xaeroflux"  # This should match your library name without the "lib" prefix
@@ -35,7 +35,7 @@ mio = { version = "1.0.3", features = ["os-ext"] }
 sha2 = { version = "0.10.8" }
 libp2p = { version = "0.55.0" }
 anyhow = "1.0.98"
-rocksdb = "0.23.0"
+liblmdb = "0.9.70"
 tempfile = "3.19.1"
 libc = "0.2.172"
 memmap2 = "0.9.5"
