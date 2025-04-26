@@ -12,6 +12,7 @@ pub mod aof;
 pub mod config;
 pub mod event;
 pub mod listeners;
+pub mod date_time;
 
 use figlet_rs::FIGfont;
 use tracing::info;
