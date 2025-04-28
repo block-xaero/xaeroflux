@@ -7,12 +7,25 @@ pub struct Config {
     pub name: String,
     pub version: u64,
     pub description: String,
+    pub aof: AofConfig,
     pub storage: StorageConfig,
     pub merkle: MerkleConfig,
     pub p2p: P2PConfig,
     pub event_buffers: HashMap<String, BufferConfig>,
     pub threads: ThreadConfig,
     pub logging: LoggingConfig,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct AofConfig {
+    pub enabled: bool,
+    pub file_path: PathBuf,
+    pub flush_interval_ms: u64,
+    pub max_size_bytes: usize,
+    pub compression: String,
+    pub retention_policy: String,
+    pub threads: ThreadConfig,
+    pub buffer_size: usize,
 }
 
 #[derive(Deserialize, Debug)]

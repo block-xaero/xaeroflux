@@ -1,7 +1,7 @@
-const MS_PER_DAY: u64 = 86_400_000; // 24 h * 3 600 s * 1 000 ms
-const MS_PER_HOUR: u64 = 3_600_000; // 3 600 s * 1 000 ms
-const MS_PER_MINUTE: u64 = 60_000; // 60 s * 1 000 ms
-const MS_PER_SECOND: u64 = 1_000; // 1 s * 1 000 ms
+pub const MS_PER_DAY: u64 = 86_400_000; // 24 h * 3 600 s * 1 000 ms
+pub const MS_PER_HOUR: u64 = 3_600_000; // 3 600 s * 1 000 ms
+pub const MS_PER_MINUTE: u64 = 60_000; // 60 s * 1 000 ms
+pub const MS_PER_SECOND: u64 = 1_000; // 1 s * 1 000 ms
 
 /// Given any epoch‐ms, return (start_of_utc_day, start_of_next_utc_day).
 /// All in UTC.  If you need local‐midnight instead, just add/subtract your fixed offset.

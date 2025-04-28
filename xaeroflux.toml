@@ -5,6 +5,44 @@ version = 1                                                                    #
 name = "xaeroflux"                                                             # Name of this node
 description = "A distributed event processing node for the XaeroFlux network."
 
+# ————————————————————————————
+# Append-Only File (AOF) settings
+# ————————————————————————————
+
+[aof]
+# enable or disable the AOF layer entirely
+enabled = true
+
+# where to write your append-only log
+file_path = "data/xaeroflux.aof"
+
+# how often (in ms) to flush buffered events to disk
+flush_interval_ms = 1000
+
+# rotate (or refuse writes) once the AOF grows beyond this size
+max_size_bytes = 1073741824 # 1 GiB
+
+# compression codec for on-disk event blobs (none, lz4, zstd, etc.)
+compression = "lz4"
+
+# when you hit max_size_bytes: "rotate", "truncate", or "fail"
+retention_policy = "rotate"
+
+# how big each write buffer is (also your mmap chunk size)
+buffer_size = 16384
+
+
+# ————————————————————————————
+# Per-module threading settings
+# (shared by AOF, Merkle indexer, etc.)
+# ————————————————————————————
+
+[aof.threads]
+# how many worker threads to spawn
+num_worker_threads = 4
+
+# whether to pin those threads to OS cores
+pin_threads = false
 
 # Where on disk to store your RocksDB data, WALs, and Merkle files.
 [storage]

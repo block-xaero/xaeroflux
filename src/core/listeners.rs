@@ -196,18 +196,15 @@ mod tests {
     #[test]
     fn test_event_listener_multiple_events() {
         initialize();
-        let counter = Arc::new(AtomicUsize::new(0));
-        let c = counter.clone();
         let listener = EventListener::<String>::new(
             "test",
             Arc::new(move |event| {
-                c.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 println!("Received event: {:#?}", event)
             }),
             None,
             None,
         );
-
+        let m_c = listener.meta.clone();
         for i in 0..9 {
             listener
                 .inbox
@@ -215,7 +212,7 @@ mod tests {
                 .expect("failed to send event");
         }
         listener.shutdown();
-        assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 9);
+        assert_eq!(m_c.events_processed.load(std::sync::atomic::Ordering::SeqCst), 9);
     }
 
     #[test]
