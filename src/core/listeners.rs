@@ -198,9 +198,7 @@ mod tests {
         initialize();
         let listener = EventListener::<String>::new(
             "test",
-            Arc::new(move |event| {
-                println!("Received event: {:#?}", event)
-            }),
+            Arc::new(move |event| println!("Received event: {:#?}", event)),
             None,
             None,
         );
@@ -212,7 +210,11 @@ mod tests {
                 .expect("failed to send event");
         }
         listener.shutdown();
-        assert_eq!(m_c.events_processed.load(std::sync::atomic::Ordering::SeqCst), 9);
+        assert_eq!(
+            m_c.events_processed
+                .load(std::sync::atomic::Ordering::SeqCst),
+            9
+        );
     }
 
     #[test]

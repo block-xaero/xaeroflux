@@ -22,7 +22,6 @@ pub fn time_hms_from_epoch_ms(ms: u64) -> (u64, u64, u64, u64) {
     (hour, min, sec, msec)
 }
 
-
 pub fn make_scan_key(ts: u64) -> [u8; 16] {
     let mut key = [0u8; 16];
     key[..8].copy_from_slice(&ts.to_be_bytes()); // timestamp prefix
