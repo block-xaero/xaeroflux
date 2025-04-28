@@ -10,9 +10,9 @@ use rkyv::{
 };
 pub mod aof;
 pub mod config;
+pub mod date_time;
 pub mod event;
 pub mod listeners;
-pub mod date_time;
 
 use figlet_rs::FIGfont;
 use tracing::info;
@@ -78,7 +78,7 @@ pub fn show_banner() {
     info!("XaeroFlux initializing...");
     let slant = FIGfont::standard().expect("load slant font");
     let v = env!("CARGO_PKG_VERSION");
-    let x = format!("XAER0FLUX v. {}", v);
+    let x = format!("XAER0FLUX v. {v}");
     let s = x.as_str();
     let figure = slant.convert(s).expect("convert text");
     tracing::info!("\n{}", figure);

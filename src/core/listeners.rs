@@ -66,7 +66,7 @@ where
             crate::indexing::hash::sha_256::<String>(&seed_name.to_string())
                 .to_vec()
                 .iter()
-                .map(|x| format!("{:02x}", x))
+                .map(|x| format!("{x:02x}"))
                 .collect::<String>()
                 .to_lowercase()
                 .replace("-", "_")
