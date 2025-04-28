@@ -431,20 +431,10 @@ mod tests {
             .expect("failed to unravel");
         // opening again should give same handle values
         let a1 = unsafe {
-            open_named_db(
-                env.env,
-                c"xaeroflux-aof"
-                    .as_ptr(),
-            )
-            .expect("failed to unravel")
+            open_named_db(env.env, c"xaeroflux-aof".as_ptr()).expect("failed to unravel")
         };
         let m1 = unsafe {
-            open_named_db(
-                env.env,
-                c"xaeroflux-meta"
-                    .as_ptr(),
-            )
-            .expect("failed to unravel")
+            open_named_db(env.env, c"xaeroflux-meta".as_ptr()).expect("failed to unravel")
         };
         assert_eq!(a1, env.dbis[0]);
         assert_eq!(m1, env.dbis[1]);
