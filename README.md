@@ -1,44 +1,48 @@
 # Xaeroflux
 
-⚠️ **Work in progress – NOT READY FOR PRODUCTION USE** ⚠️
+ ⚠️ **Work in progress - NOT READY FOR PRODUCTION USE** ⚠️
 
 ## Introduction
 
-Xaeroflux is a decentralized, append-only storage and indexing engine for cloudless, peer-to-peer social networks. It runs on iOS, Android, and desktop, using minimal threads and zero-copy I/O for mobile-friendly performance. We are:
+Xaeroflux is a decentralized, append-only storage and indexing engine optimized for cloud-less, peer-to-peer social networks. It runs on iOS, Android, and desktop, using minimal threads and zero-copy I/O for mobile-friendly performance. Key features:
 
-1. Privacy focussed storage engine
-2. Pure Peer to Peer with pluggable networking layer.
-3. De-Centralized social network friendly architecture with Events as
-first class citizens for managing everything.
-4. Merkle Indexed setup for efficient data exchange.
-5. Tuned for Mobile and very tight library (aspire to).
+1. **Privacy-focused** storage engine  
+2. **Pure P2P** architecture with a pluggable networking layer  
+3. **Event-centric** design for managing all interactions  
+4. **Merkle-indexed** data for efficient exchange  
+5. **Mobile-tuned**, lightweight library
 
 ## Basic Architecture
 
-1. *Serialization  and deserialization*:
-  a. Zero Copy `rkyv` library oriented reads
-  b. Zero Copy `bytemuck` based writes when possible.
-  c. Never de-serialize until absolutely necessary.
+### 1. Serialization & Deserialization
 
-2. Storage Layer:
+- **Zero-copy reads** with [rkyv]  
+- **Zero-copy writes** with [bytemuck] when possible  
+- **De-serialize only when absolutely necessary**
 
-  a. LMDB (liblmdb) for append only event store, simple mmap paged file disk io, extremely lightweight and fast.
-  b. Two Tier merkle indexes: Merkle Index with leaves consisting of page root hashes
-  and each page fitting fixed nodes (16 KB page size assuming iOS or Android) as pages serialized on disk.
-  c. Fast reads in either case with archived only reads (rkyv) or bytemuck when possible.
+### 2. Storage Layer
 
-3. Networking Layer:
+- **LMDB** (liblmdb) for append-only event storage  
+  - Simple mmap-paged file I/O  
+  - Extremely lightweight and fast  
+- **Two-tier Merkle indexing**  
+  - Global Merkle tree over page-root hashes  
+  - Fixed-size pages (16 KiB) serialized on disk  
+- **Fast, archived-only reads** via `rkyv` or zero-copy with `bytemuck`
 
-  a. P2P sync with libp2p.
-  b. Merkle Indexing used for efficient diffing and exchanging data between peers.
-  c. Resilient - never say die networks.
-  d. Privacy focussed: QUIC with TLS or IPv6 - if either fail, uses Tor.
-  e. Anonymous mode for Tor based storage and networking.
+### 3. Networking Layer
 
-4.Plumbing:
-  a. Most of plumbing is using crossbeam channels,
-  b. native threads
-  c. MIO + mmap
+- **P2P sync** with libp2p  
+- **Merkle diffing** for minimal data exchange  
+- **Resilient** — “never-say-die” networking  
+- **Privacy-first**: QUIC + TLS, fallback to Tor  
+- **Anonymous mode** over Tor
+
+### 4. Plumbing
+
+- Intra-process comms via **crossbeam** channels  
+- **Native threads** (thread-pool)  
+- Event-driven I/O with **MIO** + **mmap**
 
 ---
 
