@@ -8,11 +8,14 @@ use rkyv::{
     util::AlignedVec,
     validation::{Validator, archive::ArchiveValidator, shared::SharedValidator},
 };
+#[cfg(not(test))]
+use size::init;
 pub mod aof;
 pub mod config;
 pub mod date_time;
 pub mod event;
 pub mod listeners;
+pub mod size;
 
 use figlet_rs::FIGfont;
 use tracing::info;
@@ -26,7 +29,9 @@ pub static CONF: OnceLock<config::Config> = OnceLock::new();
 
 /// Initialize the XaeroFlux core components here.
 pub fn initialize() {
-    init_logging();
+    #[cfg(not(test))]
+    init(); // Initialize the size module
+    init_logging(); // Initialize the logging system
     show_banner();
     load_config();
     info!("XaeroFlux initialized");

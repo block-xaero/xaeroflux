@@ -1,2 +1,2 @@
 pub mod indexing_actor;
-pub mod page_store_actor;
+pub mod segment_writer_actor;
