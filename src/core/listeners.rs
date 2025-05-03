@@ -199,7 +199,7 @@ mod tests {
         let listener = EventListener::<String>::new(
             "test",
             Arc::new(move |event| println!("Received event: {:#?}", event)),
-            None,
+            Some(5),
             None,
         );
         let m_c = listener.meta.clone();
