@@ -6,7 +6,34 @@ use crate::core::event::Event;
 pub const XAERO_MAGIC: [u8; 4] = *b"XAER";
 pub const HEADER_SIZE: usize = 4 + 1 + 7 + 8 + 8 + 8; // = 36
 pub const NODE_SIZE: usize = 32 + 1 + 7; // = 40
+pub const PAGE_SIZE: usize = 16 * 1024; // 16 KiB
+pub const NODES_PER_PAGE: usize = (PAGE_SIZE - HEADER_SIZE) / NODE_SIZE;
 pub const PAGES_PER_SEGMENT: usize = 1_024;
+
+#[repr(C)]
+#[derive(Clone, Copy, Archive, Debug)]
+#[rkyv(derive(Debug))]
+pub struct MmrOnDiskNode {
+    pub hash: [u8; 32],
+    pub is_leaf: u8,
+    _pad: [u8; 7],
+}
+unsafe impl Zeroable for MmrOnDiskNode {}
+unsafe impl Pod for MmrOnDiskNode {}
+
+#[repr(C)]
+#[derive(Clone, Copy, Archive, Debug)]
+#[rkyv(derive(Debug))]
+pub struct MmrOnDiskPage {
+    pub marker: [u8; 4],  // b"XAER"
+    pub version: u64,     // format version
+    pub leaf_start: u64,  // offset in leaf_hashes of this page's first leaf
+    pub total_nodes: u64, // total nodes in entire MMR at this point
+    pub nodes: [MmrOnDiskNode; NODES_PER_PAGE],
+    _pad: [u8; PAGE_SIZE - HEADER_SIZE - NODE_SIZE * NODES_PER_PAGE],
+}
+unsafe impl Zeroable for MmrOnDiskPage {}
+unsafe impl Pod for MmrOnDiskPage {}
 
 /// Header for archived events on disk.
 /// Starts with a magic number, followed by the length of the payload,

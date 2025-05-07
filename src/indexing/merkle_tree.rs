@@ -46,6 +46,7 @@ impl Debug for XaeroMerkleProofSegment {
 #[derive(Clone, Archive, Serialize, Deserialize)]
 #[rkyv(derive(Debug))]
 pub struct XaeroMerkleProof {
+    pub leaf_index: usize,
     pub value: Vec<XaeroMerkleProofSegment>,
 }
 
@@ -227,13 +228,17 @@ impl XaeroMerkleTreeOps for XaeroMerkleTree {
 
     fn generate_proof(&mut self, data: [u8; 32]) -> Option<XaeroMerkleProof> {
         trace!(">>> generate_proof: {:#?}", data);
-        let mut proof = XaeroMerkleProof { value: Vec::new() };
+        let mut proof = XaeroMerkleProof {
+            leaf_index: 0,
+            value: Vec::new(),
+        };
         let found_node = self.nodes[self.leaf_start..]
             .iter()
             .enumerate()
             .find(|(_, node)| node.node_hash == data);
         match found_node {
             Some((i, node)) => {
+                proof.leaf_index = i; // setting proof 
                 trace!("Found node: {:#?} at index: {}", node, self.leaf_start + i);
                 let mut idx = self.leaf_start + i;
                 while idx > 0 {
@@ -385,9 +390,10 @@ mod tests {
         ];
         let xaer3_tree = XaeroMerkleTree::neo(data);
         trace!("XAER3: Tree initialized with leaves: {:#?}", tree.nodes);
-        assert!(
-            !xaer3_tree.verify_proof(proof.expect("Proof provided was invalid"), data_to_prove)
-        );
+        assert!(!xaer3_tree.verify_proof(
+            proof.expect("proof was invalid"),
+            sha_256::<String>(&String::from("XAER3"))
+        ));
     }
 
     #[test]
