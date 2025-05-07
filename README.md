@@ -10,7 +10,7 @@ Xaeroflux is a mobile-friendly, decentralized append-only storage and indexing e
 2. **Two-tier Merkle-indexing**:
    * **Per-page Merkle trees** for efficient bulk page proofs
    * **Merkle Mountain Range (MMR)** for instant per-event proofs and low-latency diffs
-3. **Plug-and-play networking**: transport-agnostic sync protocol over Libp2p/QUIC/WebRTC/Tor
+3. **Plug-and-play networking**: transport-agnostic sync protocol over Iroh (see: [https://github.com/n0-computer/iroh] for more details) Libp2p/QUIC/WebRTC/Tor
 4. **Mobile-optimized I/O**: zero-copy serialization, mmap-backed pages, minimal threads
 5. **Privacy & resilience**: end-to-end encryption, fallback to Tor, never-say-die mesh sync
 
