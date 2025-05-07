@@ -45,7 +45,8 @@ crdts = "7.3.2"
 tracing = { version = "0.1.41", features = ["log"] }
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "time"] }
 sha2 = { version = "0.10.9" }
-libp2p = { version = "0.55.0" }
+iroh = "0.34.1"
+iroh-blobs = "0.34.1"
 anyhow = "1.0.98"
 liblmdb = "0.9.70"
 tempfile = "3.19.1"
