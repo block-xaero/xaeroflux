@@ -98,3 +98,8 @@ pin_threads = true     # bind each thread to its own core
 [logging]
 level = "info"                  # trace | debug | info | warn | error
 file = "/var/log/xaeroflux.log"
+
+[p2p.discovery_config]
+wifi = true
+bluetooth = false
+geolocate = false
