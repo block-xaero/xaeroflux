@@ -111,11 +111,9 @@ fn run_writer_loop(rx: Receiver<Vec<u8>>, config: SegmentConfig) {
             // flush full page
             mm.flush_range(byte_offset, page_size)
                 .expect("flush failed");
-
             // advance to next page
             page_index += 1;
             local_page_idx = page_index % config.pages_per_segment;
-
             // segment-boundary rollover
             if local_page_idx == 0 {
                 seg_id = page_index / config.pages_per_segment;
@@ -137,7 +135,6 @@ fn run_writer_loop(rx: Receiver<Vec<u8>>, config: SegmentConfig) {
             byte_offset = local_page_idx * page_size;
             write_pos = 0;
         }
-
         // copy data into current page
         let start = byte_offset + write_pos;
         let end = start + write_len;
