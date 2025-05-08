@@ -78,7 +78,7 @@ pub fn archive(e: &Event<Vec<u8>>) -> Vec<u8> {
 pub struct XaeroOnDiskMerkleNode {
     pub hash: [u8; 32],
     pub flags: u8,
-    _pad: [u8; 7], // 32+1+7 = 40
+    pub _pad: [u8; 7], // 32+1+7 = 40
 }
 unsafe impl Zeroable for XaeroOnDiskMerkleNode {}
 unsafe impl Pod for XaeroOnDiskMerkleNode {}
@@ -94,7 +94,7 @@ pub struct XaeroOnDiskMerklePage {
     pub leaf_start: u64,                       // 8
     pub total_nodes: u64,                      // 8
     pub nodes: [XaeroOnDiskMerkleNode; 16320], // NODES_PER_PAGE], // 408*40 = 16320
-    _pad2: [u8; 32],                           // Adjusted padding to ensure correct size
+    pub _pad2: [u8; 32],                       // Adjusted padding to ensure correct size
 }
 unsafe impl Zeroable for XaeroOnDiskMerklePage {}
 unsafe impl Pod for XaeroOnDiskMerklePage {}

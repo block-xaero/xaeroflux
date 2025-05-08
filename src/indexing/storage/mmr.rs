@@ -26,9 +26,6 @@ pub struct XaeroMmr {
 }
 
 pub trait XaeroMmrOps {
-    /// Create a brand‐new, empty MMR.
-    fn new() -> Self;
-
     /// Append one new leaf hash.
     ///
     /// say you have a list of leaves [A, B, C, D, E]
@@ -69,8 +66,14 @@ pub trait XaeroMmrOps {
     ) -> bool;
 }
 
-impl XaeroMmrOps for XaeroMmr {
-    fn new() -> Self {
+impl Default for XaeroMmr {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl XaeroMmr {
+    pub fn new() -> Self {
         XaeroMmr {
             root: [0u8; 32],
             peaks: Vec::new(),
@@ -78,7 +81,8 @@ impl XaeroMmrOps for XaeroMmr {
             leaf_hashes: Vec::new(),
         }
     }
-
+}
+impl XaeroMmrOps for XaeroMmr {
     fn append(&mut self, leaf_hash: [u8; 32]) -> Vec<Peak> {
         let mut carry = Peak {
             height: 0,
