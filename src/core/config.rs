@@ -51,6 +51,14 @@ pub struct P2PConfig {
     pub enable_mdns: bool,
     pub crdt_strategy: String,
     pub max_msg_size_bytes: usize,
+    pub discovery_config: DiscoveryConfig,
+}
+/// How to find "friends" on the same network.
+#[derive(Deserialize, Debug)]
+pub struct DiscoveryConfig {
+    pub wifi: bool,
+    pub bluetooth: bool,
+    pub geolocate: bool,
 }
 
 #[derive(Deserialize, Debug)]

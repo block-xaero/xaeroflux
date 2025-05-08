@@ -1,121 +1,122 @@
-use core::event::*;
-use std::sync::Arc;
-
-use logs::diagnostics::Diagnostics;
+use crossbeam::channel::Receiver;
+use indexing::merkle_tree::XaeroMerkleProof;
+use rkyv::{Archive, Deserialize, Serialize};
 
 pub mod core;
-pub mod engine;
 pub mod indexing;
 pub mod logs;
+pub mod networking;
 pub mod sys;
+/// Top-level engine for XFlux
+pub struct XFlux {}
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum XaeroEngineMode {
-    Normal,
-    Debug,
-    Test,
-    PerformanceTesting,
+impl XFlux {
+    /// Construct the engine; doesn't start any loops yet.
+    pub fn new(_cfg: &crate::core::config::Config) -> Self {
+        XFlux {}
+    }
+
+    /// Kick off all background tasks (AOF/LMDB, paging, MMR, P2P).
+    /// Returns a handle you use to publish & subscribe.
+    pub fn start(self) -> XFluxHandle {
+        XFluxHandle {}
+    }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum XaeroEngineState {
-    Running(XaeroEngineMode),
-    Stopped(XaeroEngineMode),
-    Shutdown(XaeroEngineMode),
+/// Once you call `.start()`, this is your API surface:
+#[derive(Clone)]
+pub struct XFluxHandle {
+    // internal channels, etc…
 }
 
-#[derive(Clone, Debug)]
+impl XFluxHandle {
+    /// Publish a raw event into a named topic (channel).
+    /// Under the hood it's append-only, paged, MMR'd, and gossiped.
+    pub fn publish(&self, _topic: &str, _payload: Vec<u8>) -> Result<EventId, XFluxError> {
+        todo!()
+    }
 
-/// Represents the configuration for the XaeroFlux engine
-/// # Fields
-/// * `f_path` - Path to the storage
-/// * `io_threads` - Number of IO threads
-/// * `cpu_threads` - Number of CPU threads
-/// * `max_connections` - Maximum number of connections
-/// * `peer_sync_interval` - Peer sync interval
-/// * `root_zero_id` - Root zero ID which is did:peer + zk_proofs that can aid verify if user is
-///   legit
-pub struct XaeroFluxConfig {
-    pub f_path: String,
-    pub io_threads: usize,
-    pub cpu_threads: usize,
-    pub max_connections: usize,
-    pub peer_sync_interval: usize,
-    pub root_zero_id: [u8; 32],
+    /// Subscribe to a topic. Receives every past & future event (with proofs).
+    pub fn subscribe(&self, _topic: &str) -> Receiver<XFluxEvent> {
+        todo!()
+    }
+
+    /// Discover other peers also interested in this topic.
+    /// Emits `PeerInfo` any time someone appears or disappears.
+    pub fn discover(&self, _topic: &str) -> Receiver<PeerInfo> {
+        todo!()
+    }
+
+    /// (Optional) Shutdown the engine gracefully.
+    pub fn shutdown(self) -> Result<(), String> {
+        todo!()
+    }
 }
 
-/// Represents the result of the XaeroFlux engine
-pub type XaeroResult<T> = std::result::Result<T, anyhow::Error>;
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-/// Represents a key in the database
-/// # Fields
-/// * `timestamp` - Timestamp of the event
-/// * `hash` - Hash of the event
-/// # Example
-/// ```
-/// use xaeroflux::XaeroFluxKey;
-/// let key = XaeroFluxKey {
-///     timestamp: [0; 8],
-///     hash: [0; 32],
-/// };
-/// ```
-/// # Note / TODO: Document better.
-pub struct XaeroFluxKey {
-    pub timestamp: [u8; 8],
-    pub hash: [u8; 32],
+/// Every event you see on `subscribe()`:
+#[repr(C)]
+#[derive(Clone, Archive, Serialize, Deserialize)]
+#[rkyv(derive(Debug))]
+pub struct XFluxEvent {
+    pub id: EventId,             // unique, monotonic or random
+    pub payload: Vec<u8>,        // your opaque app data
+    pub timestamp: u64,          // unix millis when we wrote it
+    pub proof: XaeroMerkleProof, // inclusion proof in our MMR root
 }
 
-/// Represents the XaeroFlux database
-pub struct XaeroFluxDB {
-    pub config: Arc<XaeroFluxConfig>,
-    pub storage_path: String,
-}
-/// XaeroFluxDB is a trait that defines the interface for the database
-pub trait XaeroFluxDBOps {
-    fn new(conf: Arc<XaeroFluxConfig>) -> Self;
-    fn open(&self, storage_path: &str) -> XaeroResult<XaeroFluxDB>;
-    /// Truncates the entire database, THIS IS NOT RECOVERABLE!
-    /// # Arguments
-    /// * `storage_path` - Path to the storage
-    /// # Returns true if the database was truncated successfully
-    /// # Returns false if the database was not truncated successfully
-    /// TODO: NOTE This function would require a zeroId to be implemented.
-    fn truncate(&self /* zeroId: */) -> XaeroResult<()>;
-    /// Closes
-    fn close(&self) -> XaeroResult<()>;
-    /// Get range of events from the database
-    /// # Arguments
-    /// * `t1` - Start time.
-    /// * `t2` - End time.
-    /// # Returns vector of raw events found
-    fn range(&self, t1: u64, t2: u64) -> XaeroResult<Vec<Event<Vec<u8>>>>;
-    /// Append an event to the database
-    /// # Arguments
-    /// * `key` - Key of the event
-    /// * `value` - Raw event to be appended
-    /// # Returns true if the event was appended successfully
-    /// # Returns false if the event was not appended successfully
-    fn append(&self, key: XaeroFluxKey, value: Vec<Event<Vec<u8>>>) -> XaeroResult<()>;
-    /// Verify the proof of the event in the database
-    /// # Arguments
-    /// * `event` - Raw event to be verified
-    /// * `proof` - Proof of the event
-    /// * # Returns true if the proof is valid
-    fn verify_proof(&self, event: Event<Vec<u8>>) -> XaeroResult<()>;
+#[repr(C)]
+#[derive(Clone, Archive, Serialize, Deserialize)]
+#[rkyv(derive(Debug))]
+pub struct PeerInfo {
+    pub peer_id: String, // our opaque handle for them
 }
 
-/// Meta db trait for advanced operations, such as diagnostics and rebuilding the merkle index
-pub trait XaeroFluxMetaDBOps: XaeroFluxDBOps {
-    fn enable_diagnostics(&self, zero_id: &str) -> XaeroResult<()>;
+pub type EventId = String;
+pub type PeerId = String;
+pub type XFluxError = Box<dyn std::error::Error + Send + Sync>;
 
-    fn diagnostics_report(&self, zero_id: &str) -> XaeroResult<Diagnostics>;
+#[cfg(test)]
+mod xflux_smoke_tests {
+    use crossbeam::channel::Receiver;
 
-    /// Rebuild the merkle index using the given timestamps
-    /// # Arguments
-    /// * `ts1` - Start timestamp
-    /// * `ts2` - End timestamp
-    /// # Returns vector of merkle index paths
-    /// # Returns error if the operation fails
-    /// # Returns empty vector if no paths are found
-    fn rebuild_merkle_index(&self, ts1: u64, ts2: u64) -> XaeroResult<Vec<String>>;
+    use super::*;
+    // Make sure you have a Config type in core::config.
+    // If it doesn't impl Default yet, just construct it however you need.
+    use crate::core::{CONF, initialize};
+
+    #[test]
+    fn new_and_start_smoke() {
+        initialize();
+        let cfg = CONF.get().expect("failed to get config");
+        // new() must not panic
+        let xf = XFlux::new(cfg);
+        // start() must not panic and must return a handle
+        let handle: XFluxHandle = xf.start();
+        // we don't call any other methods yet
+    }
+
+    #[test]
+    fn handle_is_cloneable() {
+        initialize();
+        let cfg = CONF.get().expect("failed to get config");
+        let handle1 = XFlux::new(cfg).start();
+        // Clone must work
+        let _handle2 = handle1.clone();
+    }
+
+    // Sanity-check that subscribe & discover return the expected channel type,
+    // but don't actually call .recv() since it's still unimplemented.
+    #[test]
+    fn subscribe_and_discover_signature() {
+        initialize();
+        let cfg = CONF.get().expect("failed to get config");
+        let handle = XFlux::new(cfg).start();
+
+        // just check the returned type, don't recv from it
+        let _rx: Receiver<XFluxEvent> = handle.subscribe("some_topic");
+        let _dx: Receiver<PeerInfo> = handle.discover("some_topic");
+
+        // shutdown signature
+        let _ = handle.shutdown();
+    }
 }
