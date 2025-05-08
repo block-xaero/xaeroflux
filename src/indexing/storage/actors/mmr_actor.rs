@@ -12,7 +12,7 @@ use crate::{
 pub struct MmrIndexingActor {
     _mmr: Arc<Mutex<crate::indexing::storage::mmr::XaeroMmr>>,
     _store: Arc<SegmentWriterActor>,
-    _listener: EventListener<Vec<u8>>,
+    pub listener: EventListener<Vec<u8>>,
 }
 
 impl MmrIndexingActor {
@@ -53,7 +53,7 @@ impl MmrIndexingActor {
         Self {
             _mmr,
             _store,
-            _listener,
+            listener: _listener,
         }
     }
 }
@@ -106,7 +106,7 @@ mod actor_tests {
 
         // Fire one event
         let ev = make_event(b"foo".to_vec());
-        fire_event(&actor._listener, ev);
+        fire_event(&actor.listener, ev);
         // **new**: let the listener thread process it
         std::thread::sleep(std::time::Duration::from_millis(50));
 
@@ -129,7 +129,7 @@ mod actor_tests {
 
         // Fire one event
         let ev = make_event(b"bar".to_vec());
-        fire_event(&actor._listener, ev.clone());
+        fire_event(&actor.listener, ev.clone());
 
         // Read the hash from the store's inbox
         let got = rx
