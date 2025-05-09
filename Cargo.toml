@@ -33,6 +33,7 @@ xaeroflux = { path = "." }  # Adjust the path as necessary
 libc = "0.2.172"
 
 [dependencies]
+crdts = "7.3.2"
 bytemuck = "1.23.0"
 rkyv = "0.8.10"
 rkyv_dyn = "0.7.44"
@@ -41,7 +42,6 @@ figlet-rs = "0.1.5"
 lru = "0.14.0"
 toml = "0.8.22"
 hex = "0.4.3"
-crdts = "7.3.2"
 tracing = { version = "0.1.41", features = ["log"] }
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "time"] }
 sha2 = { version = "0.10.9" }

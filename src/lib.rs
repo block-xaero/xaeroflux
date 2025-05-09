@@ -71,3 +71,63 @@ impl Subject {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{sync::Arc, thread, time::Duration};
+
+    use crossbeam::channel;
+
+    use super::*;
+    use crate::core::{event::Event, initialize, listeners::EventListener};
+
+    #[test]
+    fn test_subject_new_and_observable() {
+        let (subject, observable) = Subject::new();
+        // Subject should have zero observers initially
+        assert_eq!(subject.observers.len(), 0);
+        // Observable::on_next should not panic
+        observable.on_next(b"hello".to_vec());
+    }
+
+    #[test]
+    fn test_subscribe_and_publish() {
+        // Initialize core (in case it sets up logging or other state)
+        initialize();
+
+        let (mut subject, observable) = Subject::new();
+        // Set up a channel to receive events from the EventListener
+        let (listener_tx, listener_rx) = channel::unbounded();
+        // Create a default EventListener that sends events to listener_tx
+        let listener = EventListener::new(
+            "test-listener",
+            Arc::new(move |evt: Event<Vec<u8>>| {
+                let _ = listener_tx.send(evt);
+            }),
+            None,
+            Some(1),
+        );
+        subject.subscribe(listener);
+
+        // Spawn the subject dispatch loop
+        let _handle = thread::spawn(move || {
+            subject.run();
+        });
+
+        // Publish an event
+        let test_data = b"test-message".to_vec();
+        observable.on_next(test_data.clone());
+
+        // Wait for the event to arrive at the listener
+        let received = listener_rx.recv_timeout(Duration::from_secs(1));
+        assert!(received.is_ok(), "Did not receive event in time");
+        let event = received.expect("Failed to receive event");
+        assert_eq!(event.data, test_data);
+
+        // Optionally, drop the observable to end the dispatch loop
+        drop(observable);
+        // Give the dispatch loop a moment to exit
+        thread::sleep(Duration::from_millis(50));
+        // No need to join the thread, as it should exit when rx is closed
+    }
+}
