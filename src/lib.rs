@@ -7,7 +7,9 @@
 //! # Example
 //!
 //! ```
-use core::event::Event;
+use core::event::{ArchivedEvent, ArchivedEventType, Event, EventType};
+
+use rkyv::rancor::Failure;
 
 use crate::core::listeners::EventListener;
 
@@ -18,6 +20,9 @@ pub mod networking;
 pub mod sys;
 
 pub type Observer = EventListener<Vec<u8>>;
+
+/// An `Observable` is a stream of events that can be observed.
+/// It is a sink for events, allowing you to push events into it.
 pub struct Observable {
     pub tx: crossbeam::channel::Sender<Vec<u8>>,
 }
@@ -71,6 +76,20 @@ impl Subject {
         }
     }
 }
+
+impl Drop for Subject {
+    fn drop(&mut self) {
+        tracing::info!("dropping subject");
+        // Move each observer out and shutdown
+        for obs in self.observers.drain(..) {
+            obs.shutdown();
+            tracing::info!("shutting down observer");
+        }
+    }
+}
+// Define Operator as a trait object type alias
+pub type Operator = Box<dyn FnOnce(Subject) -> Subject + Send + 'static>;
+
 
 #[cfg(test)]
 mod tests {
