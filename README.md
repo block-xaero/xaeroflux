@@ -14,6 +14,49 @@ Xaeroflux is a mobile-friendly, decentralized append-only storage and indexing e
 
 ---
 
+```ascii
+┌─────────────────────────────────────────────────────────────────────┐
+│                            Your App                                 │
+│  • Defines/encodes its domain events into raw bytes (Envelope)       │
+│  • Calls     xf.topic("posts").publish(envelope)                    │
+│  • Subscribes xf.topic("posts").stream().listen(|env| { … })        │
+└─────────────────────────────────────────────────────────────────────┘
+              ↓                              ↑
+              │                              │
+              │                              │
+┌─────────────▼──────────────────────────────▼────────────────────────┐
+│                     Xaeroflux Public API                             │
+│  • Topic / Subject / Observable                                     │
+│  • map | filter | merge | filter_proofs | pull_more                   │
+│  •       (all operating on raw Envelope bytes)                      │
+└─────────────────────────────────────────────────────────────────────┘
+              ↓                              ↑
+              │                              │
+┌─────────────▼───────────────────────────────────────────────────────┐
+│                     Xaeroflux System Layer                           │
+│  (all hidden behind .unsafe_run())                                  │
+│                                                                     │
+│   ┌── Local Append‐Only Log (LMDB AOF) ──--┐  ┌-- Segment Writer-┐  │
+│   │                                        │  │                  │  │ 
+│   └────────────────────────────────────────┘  └──────────────────┘  │
+│       ↓                                                       ↓     │
+│   ┌──────────────────┐      ┌────────────────────────────┐    │     │
+│   │  Per‐page Merkle ├─────>│  Merkle Mountain Range     │    │     │
+│   │     Trees        │      │  Live Indexing Actor       │    │     │
+│   └──────────────────┘      └────────────────────────────┘    │     │
+│       ↓                                                       ↓     │
+│   ┌────────────────────────────────────────────────────────────┐    │
+│   │    Built-in P2P Sync Actor (Iroh gossip/blob + MMR diff)   │    │
+│   │  • Continuously exchanges MMR-peaks with peers             │    │
+│   │  • Fetches only missing segment pages + proofs             │    │
+│   └────────────────────────────────────────────────────────────┘    │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+
+---
+
 ## Reactive Core Types
 
 ```rust
