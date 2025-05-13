@@ -4,200 +4,142 @@
 
 ## Introduction
 
-Xaeroflux is a mobile-friendly, decentralized append-only storage and indexing engine powering truly cloud-less, peer-to-peer applications. It provides:
+Xaeroflux is a mobile-optimized, decentralized append-only event store and indexing engine powering truly cloud-less, peer-to-peer applications. It provides:
 
-- **Reactive event streams** using a lightweight `Subject`/`Observable` abstraction  
-- **Zero-copy payloads** via raw `Vec<u8>` and optional `rkyv` archiving  
-- **Append-only log** (AOF) + paged Merkle trees + Merkle Mountain Range (MMR) proofs  
-- **Plug-and-play networking** over Iroh gossip/blob (Libp2p, QUIC, WebRTC, Tor)  
-- **Priority routing**: System, Identity, and per-Topic application streams  
-
----
-
-```ascii
-┌─────────────────────────────────────────────────────────────────────┐
-│                            Your App                                 │
-│  • Defines/encodes its domain events into raw bytes (Envelope)       │
-│  • Calls     xf.topic("posts").publish(envelope)                    │
-│  • Subscribes xf.topic("posts").stream().listen(|env| { … })        │
-└─────────────────────────────────────────────────────────────────────┘
-              ↓                              ↑
-              │                              │
-              │                              │
-┌─────────────▼──────────────────────────────▼────────────────────────┐
-│                     Xaeroflux Public API                             │
-│  • Topic / Subject / Observable                                     │
-│  • map | filter | merge | filter_proofs | pull_more                   │
-│  •       (all operating on raw Envelope bytes)                      │
-└─────────────────────────────────────────────────────────────────────┘
-              ↓                              ↑
-              │                              │
-┌─────────────▼───────────────────────────────────────────────────────┐
-│                     Xaeroflux System Layer                           │
-│  (all hidden behind .unsafe_run())                                  │
-│                                                                     │
-│   ┌── Local Append‐Only Log (LMDB AOF) ──--┐  ┌-- Segment Writer-┐  │
-│   │                                        │  │                  │  │ 
-│   └────────────────────────────────────────┘  └──────────────────┘  │
-│       ↓                                                       ↓     │
-│   ┌──────────────────┐      ┌────────────────────────────┐    │     │
-│   │  Per‐page Merkle ├─────>│  Merkle Mountain Range     │    │     │
-│   │     Trees        │      │  Live Indexing Actor       │    │     │
-│   └──────────────────┘      └────────────────────────────┘    │     │
-│       ↓                                                       ↓     │
-│   ┌────────────────────────────────────────────────────────────┐    │
-│   │    Built-in P2P Sync Actor (Iroh gossip/blob + MMR diff)   │    │
-│   │  • Continuously exchanges MMR-peaks with peers             │    │
-│   │  • Fetches only missing segment pages + proofs             │    │
-│   └────────────────────────────────────────────────────────────┘    │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
+* **Reactive pipelines** via a lightweight `Subject` + chainable `map`/`filter` operators
+* **Zero-copy envelopes** (`XaeroEvent` wrapping your raw `Vec<u8>` payload + optional Merkle proof)
+* **Append-Only Log (AOF)** → fixed-size mmap-backed pages → per-page Merkle trees → Merkle Mountain Range (MMR)
+* **Pluggable sync**: built-in Iroh gossip/blob + MMR-peak diff, Libp2p/QUIC/WebRTC/Tor
+* **Priority streams**: you choose topics; system/identity streams can be fanned out separately
 
 ---
 
-## Reactive Core Types
+## Core Types & API
 
 ```rust
-use core::event::Event;
-use crate::core::listeners::EventListener;
+use std::sync::Arc;
+use crossbeam::channel::unbounded;
+use xaeroflux::{Subject, XaeroEvent, ThreadPerSubjectMaterializer};
 
-pub type Observer   = EventListener<Vec<u8>>;
-pub struct Observable {
-    pub tx: crossbeam::channel::Sender<Vec<u8>>,
-}
-impl Observable {
-    /// Push one raw event (zero-copy).
-    pub fn on_next(&self, evt: Vec<u8>) {
-        let _ = self.tx.send(evt);
-    }
-}
+// 1) Create a new topic/Subject
+let posts = Subject::new("posts".into());
 
-pub struct Subject {
-    pub observers: Vec<Observer>,
-    pub rx:        crossbeam::channel::Receiver<Vec<u8>>,
-}
-impl Subject {
-    /// Create a new Subject (hot multicast source) and its Observable handle.
-    pub fn new() -> (Self, Observable) {
-        let (tx, rx) = crossbeam::channel::unbounded();
-        (Subject { observers: Vec::new(), rx }, Observable { tx })
-    }
+// 2) Optionally chain operators (no threads yet!):
+let pipeline = posts
+    .map(|mut xe| { xe.evt.data.push(b'!'); xe })      // append “!”
+    .filter(|xe| xe.evt.data.len() > 2)               // drop small payloads
+    .filter_merkle_proofs();                          // only keep proofed events
 
-    /// Subscribe an observer to receive every event.
-    pub fn subscribe(&mut self, obs: Observer) {
-        self.observers.push(obs);
-    }
-
-    /// Run the dispatch loop, broadcasting each event to all observers.
-    pub fn run(self) {
-        while let Ok(evt) = self.rx.recv() {
-            for obs in &self.observers {
-                let _ = obs.inbox.send(Event::new(evt.clone(), 1));
-            }
-        }
-    }
-}
-```
-
----
-
-## Quickstart
-
-### Hello, Xaeroflux
-
-```rust
-use std::{sync::Arc, thread, time::Duration};
-use crossbeam::channel;
-use rkyv::{to_bytes, from_bytes};
-use xaeroflux::Subject;
-use xaeroflux::Observable;
-use crate::core::event::Event;
-use crate::core::listeners::EventListener;
-use xaeroflux::EventKind;
-
-// 1) Build the bus
-let (mut subject, bus) = Subject::new();
-
-// 2) Spawn dispatcher
-thread::spawn(move || subject.run());
-
-// 3) Subscribe to all events
-let (tx, rx) = channel::unbounded::<Event<Vec<u8>>>();
-let listener = EventListener::new(
-    "printer",
-    Arc::new(move |e: Event<Vec<u8>>| { tx.send(e).unwrap(); }),
-    None, None,
+// 3) Materialize with a strategy (one thread per Subject here):
+let _sub = pipeline.subscribe_with(
+    ThreadPerSubjectMaterializer::new(),
+    move |xe: XaeroEvent| {
+        println!("final payload = {:?}", xe.evt.data);
+    },
 );
-subject.subscribe(listener);
 
-// 4) Publish events
-let raw = to_bytes::<_,256>(&Event { data: b"Hello".to_vec(), timestamp: now_ms(), kind: EventKind::Application }).unwrap().into_inner();
-bus.on_next(raw.clone());
-bus.on_next(raw);
+// 4) Publish events into the pipeline
+let raw = b"hello".to_vec();
+let evt = XaeroEvent { evt: Event::new(raw.clone(), 0), merkle_proof: Some(vec![0]) };
+posts.sink.tx.send(evt).unwrap();
+```
 
-// 5) Drain
-thread::sleep(Duration::from_millis(50));
-while let Ok(evt) = rx.try_recv() {
-    let e: Event<Vec<u8>> = from_bytes(&evt.data).unwrap();
-    println!("Got {:?}", e.data);
+### `XaeroEvent`
+
+```rust
+pub struct XaeroEvent {
+    pub evt:          Event<Vec<u8>>,   // your raw app data + metadata
+    pub merkle_proof: Option<Vec<u8>>,  // inclusion proof if already indexed
 }
 ```
 
-### Topic-based streams
+### `Subject`
+
+* **`Subject::new(name)`**
+  Creates a new (hot) multicast channel: returns an `Arc<Subject>`.
+* **`subject.map(f)`**, **`.filter(p)`**, **`.filter_merkle_proofs()`**, **`.blackhole()`**
+  Chainable, lazy—only records your operator list.
+* **`subject.sink.tx.send(xe)`**
+  Push a `XaeroEvent` into the pipeline.
+* **`subject.subscribe_with(mat, handler)`**
+  Picks a `Materializer` to run your ops + callback in one thread (or pool).
+
+### `ThreadPerSubjectMaterializer`
+
+A built-in `Materializer` that:
+
+1. Spawns exactly *one* thread
+2. `recv()`s from your `Subject`’s input channel
+3. Applies all operators in order
+4. Calls your final `FnMut(XaeroEvent)` for each event that survives the pipeline
+
+You can write your own `Materializer` (shared pool, async runtime, etc.) by implementing:
 
 ```rust
-// Create “rust” topic
-let (mut rust_subj, rust_bus) = Subject::new();
-thread::spawn(move || rust_subj.run());
-let rust_listener = EventListener::new(
-    "rust_ui",
-    Arc::new(|e: Event<Vec<u8>>| println!("Rust: {:?}", e.data)),
-    None, None,
-);
-rust_subj.subscribe(rust_listener);
-
-let mut buf = vec![0x10];
-buf.extend(b"rust");
-buf.extend(b"Hello r/rust".to_vec());
-rust_bus.on_next(buf);
+pub trait Materializer {
+  fn materialize(
+    &self,
+    subject: Arc<Subject>,
+    handler: Box<dyn FnMut(XaeroEvent) + Send>,
+  ) -> Subscription;
+}
 ```
 
 ---
 
 ## Architecture Overview
 
-### 1. Serialization
+```ascii
+┌─────────────── Your App ────────────────┐
+│ • encode domain events as Vec<u8>       │
+│ • wrap in XaeroEvent, push to Subject   │
+│ • pick pipeline with map/filter/etc.    │
+│ • subscribe_with(materializer, handler) │
+└──────────────────┬──────────────────────┘
+                   │
+┌──────────────────▼────────────────────────┐
+│            Xaeroflux Public API           │
+│  Subject + chainable ops + Materializer  │
+└──────────────────┬────────────────────────┘
+                   │
+┌──────────────────▼────────────────────────┐
+│             System Layer (hidden)        │
+│ • AOF (LMDB) → pages → per-page Merkle   │
+│ • MMR live indexer + .unsafe_run()       │
+│ • Iroh gossip/blob sync actor            │
+└───────────────────────────────────────────┘
+```
 
-- **Zero-copy** with raw `Vec<u8>`; optional `rkyv` for rich types  
-- Deserialize on-demand at the application edge
+---
 
-### 2. Storage Layer
+## Publishing & Scanning
 
-- **AOF**: LMDB-backed append-only log  
-- **Segment Writer**: crossbeam channel → fixed-size pages → `mmap` + flush + rollover  
-- **Per-page Merkle**: O(log P) proofs within pages  
-- **MMR**: instant per-event proofs + minimal diffing
+* **Live**:
 
-### 3. Networking Layer
+  ```rust
+  let sub = Subject::new("feed".into());
+  let _h = sub.subscribe_with(mat, |xe| { ... });
+  sub.sink.tx.send(xe).unwrap();
+  ```
+* **Historical** (once we add `.scan` / `.replay`):
 
-- **Iroh gossip/blob** over Libp2p (QUIC, TCP, WebRTC) + Tor fallback  
-- **Merkle sync**: exchange MMR peaks → fetch missing pages → sync done  
-- **Op-based CRDT** glue optional
-
-### 4. Runtime
-
-- **Crossbeam** channels + per-listener thread-pools  
-- **`mmap`** for efficient IO  
-- **No async/await** (native threads + pools)
+  ```rust
+  for xe in xf.scan("feed", since_ts, until_ts) {
+    println!("history: {:?}", xe.evt.data);
+  }
+  // or push history back into the same Subject via sink
+  xf.replay("feed", since_ts, until_ts, &sub.sink);
+  ```
 
 ---
 
 ## Testing & Quality
 
 ```bash
-cargo test --all
+# Run the Subject + Materializer unit tests
+cargo test -- --nocapture
+
+# Lint & format
 cargo fmt --all
 cargo clippy --all -- -D warnings
 ```
@@ -206,16 +148,16 @@ cargo clippy --all -- -D warnings
 
 ## Contributing
 
-1. Fork & branch  
-2. Add tests & docs  
-3. Open a PR  
-4. Iterate
+1. Fork & branch
+2. Add or update tests & docs
+3. Open a PR
+4. Iterate with feedback
 
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ---
 
 ## License
 
-Mozilla Public License 2.0  
-See [LICENSE](LICENSE).
+Mozilla Public License 2.0
+See [LICENSE](LICENSE) for full text.
