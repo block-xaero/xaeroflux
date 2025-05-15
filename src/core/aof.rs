@@ -552,10 +552,10 @@ mod tests {
         let data2 = &archived_ev2.data;
         let got2: &SegmentMeta = bytemuck::from_bytes(data2);
         assert_eq!(got2.page_index, meta2.page_index);
-           assert_eq!(got2.byte_offset, meta2.byte_offset);
-           assert_eq!(got2.write_pos, meta2.write_pos);
-           assert_eq!(got2.segment_index, meta2.segment_index);
-           assert_eq!(got2.latest_segment_id, meta2.latest_segment_id);
+        assert_eq!(got2.byte_offset, meta2.byte_offset);
+        assert_eq!(got2.write_pos, meta2.write_pos);
+        assert_eq!(got2.segment_index, meta2.segment_index);
+        assert_eq!(got2.latest_segment_id, meta2.latest_segment_id);
     }
 
     #[test]

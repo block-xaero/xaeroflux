@@ -34,8 +34,12 @@ pub enum SystemEventKind {
 
 impl EventType {
     pub fn from_u8(value: u8) -> Self {
+        // MetaEvent codes are wire‐encoded as [META_BASE + inner]
+        if value >= META_BASE {
+            return EventType::MetaEvent(value - META_BASE);
+        }
         match value {
-            0 => EventType::ApplicationEvent(value),
+            0 => EventType::ApplicationEvent(0),
             1 => EventType::SystemEvent(SystemEventKind::Start),
             2 => EventType::SystemEvent(SystemEventKind::Stop),
             3 => EventType::SystemEvent(SystemEventKind::Pause),
@@ -44,23 +48,22 @@ impl EventType {
             6 => EventType::SystemEvent(SystemEventKind::Restart),
             7 => EventType::NetworkEvent(value),
             8 => EventType::StorageEvent(value),
-            9 => EventType::MetaEvent(value),
             _ => panic!("Invalid event type"),
         }
     }
 
     pub fn to_u8(&self) -> u8 {
         match self {
-            EventType::ApplicationEvent(value) => *value,
+            EventType::ApplicationEvent(v) => *v,
             EventType::SystemEvent(SystemEventKind::Start) => 1,
             EventType::SystemEvent(SystemEventKind::Stop) => 2,
             EventType::SystemEvent(SystemEventKind::Pause) => 3,
             EventType::SystemEvent(SystemEventKind::Resume) => 4,
             EventType::SystemEvent(SystemEventKind::Shutdown) => 5,
             EventType::SystemEvent(SystemEventKind::Restart) => 6,
-            EventType::NetworkEvent(value) => *value,
-            EventType::StorageEvent(value) => *value,
-            EventType::MetaEvent(value) => *value + META_BASE,
+            EventType::NetworkEvent(v) => *v,
+            EventType::StorageEvent(v) => *v,
+            EventType::MetaEvent(v) => META_BASE + *v,
         }
     }
 }
