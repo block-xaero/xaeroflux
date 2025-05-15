@@ -56,6 +56,7 @@ pub struct LmdbEnv {
     pub env: *mut MDB_env,
     pub dbis: [MDB_dbi; 2],
 }
+unsafe impl Sync for LmdbEnv {} // raw pointers are Sync
 // Assuming LmdbEnv is already Send:
 unsafe impl Send for LmdbEnv {} // raw pointers are Send
 // No need for Sync, since we guard with a Mutex

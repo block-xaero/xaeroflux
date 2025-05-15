@@ -92,6 +92,7 @@ mod actor_tests {
             page_size: 32,
             pages_per_segment: 1,
             prefix,
+            lmdb_env_path: "/tmp/".to_string(),
         };
         SegmentWriterActor::new_with_config(cfg)
     }
