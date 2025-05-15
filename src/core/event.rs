@@ -3,6 +3,7 @@ use std::fmt::Debug;
 use rkyv::{Archive, Deserialize, Serialize};
 
 use super::{CONF, XaeroData};
+pub const META_BASE: u8 = 128;
 
 #[repr(C)]
 #[derive(Debug, Clone, Archive, Serialize, Deserialize, PartialEq, Eq)]
@@ -10,6 +11,7 @@ use super::{CONF, XaeroData};
 pub enum EventType {
     ApplicationEvent(u8),
     SystemEvent(SystemEventKind),
+    MetaEvent(u8),
     NetworkEvent(u8),
     StorageEvent(u8),
 }
@@ -42,6 +44,7 @@ impl EventType {
             6 => EventType::SystemEvent(SystemEventKind::Restart),
             7 => EventType::NetworkEvent(value),
             8 => EventType::StorageEvent(value),
+            9 => EventType::MetaEvent(value),
             _ => panic!("Invalid event type"),
         }
     }
@@ -57,6 +60,7 @@ impl EventType {
             EventType::SystemEvent(SystemEventKind::Restart) => 6,
             EventType::NetworkEvent(value) => *value,
             EventType::StorageEvent(value) => *value,
+            EventType::MetaEvent(value) => *value + META_BASE,
         }
     }
 }

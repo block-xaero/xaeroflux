@@ -142,16 +142,20 @@ impl Subject {
         let _sys_sub = Arc::new(self.clone().subscribe_with(mat, move |xe: XaeroEvent| {
             // Append-only log
             let evt = xe.evt.clone();
-            aof_c.listener.inbox.send(evt.clone()).unwrap();
+            aof_c
+                .listener
+                .inbox
+                .send(evt.clone())
+                .expect("failed_to_unwrap");
 
             // Segment archiving
             let blob = rkyv::to_bytes::<Failure>(&evt)
                 .expect("failed to archive")
                 .to_vec();
-            seg_c.inbox.send(blob).unwrap();
+            seg_c.inbox.send(blob).expect("failed_to_unwrap");
 
             // MMR indexing
-            mmr_c.listener.inbox.send(evt).unwrap();
+            mmr_c.listener.inbox.send(evt).expect("failed_to_unwrap");
             // P2P sync would go here
         }));
 
@@ -231,6 +235,12 @@ pub trait Materializer: Send + Sync {
 /// Materializer using a shared thread pool per subject.
 pub struct ThreadPoolForSubjectMaterializer {
     pool: Arc<ThreadPool>,
+}
+
+impl Default for ThreadPoolForSubjectMaterializer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ThreadPoolForSubjectMaterializer {
@@ -348,7 +358,7 @@ impl SubscribeWith for Subject {
         M: Materializer,
         F: Fn(XaeroEvent) + Send + Sync + 'static,
     {
-        mat.materialize(self.clone(), Arc::new(move |xe| handler(xe)))
+        mat.materialize(self.clone(), Arc::new(handler))
     }
 }
 
@@ -408,12 +418,9 @@ mod tests {
         let (tx, rx) = channel::unbounded();
 
         // subscribe: every incoming event sends its payload to tx
-        let _sub = subj.subscribe_with(
-            ThreadPerSubjectMaterializer::new(),
-            move |xe: XaeroEvent| {
-                tx.send(xe.evt.data.clone()).expect("failed_to_unwrap");
-            },
-        );
+        let _sub = subj.subscribe_with(ThreadPerSubjectMaterializer, move |xe: XaeroEvent| {
+            tx.send(xe.evt.data.clone()).expect("failed_to_unwrap");
+        });
 
         // publish one event
         let payload = b"hello".to_vec();
@@ -435,7 +442,7 @@ mod tests {
         });
 
         let (tx, rx) = channel::unbounded();
-        let _sub = subj.subscribe_with(ThreadPerSubjectMaterializer::new(), move |xe| {
+        let _sub = subj.subscribe_with(ThreadPerSubjectMaterializer, move |xe| {
             tx.send(xe.evt.data).expect("failed_to_unwrap");
         });
 
@@ -457,7 +464,7 @@ mod tests {
         let subj = Subject::new("filter".into()).filter(|xe| xe.evt.data[0] % 2 == 0); // only even first-byte
 
         let (tx, rx) = channel::unbounded();
-        let _sub = subj.subscribe_with(ThreadPerSubjectMaterializer::new(), move |xe| {
+        let _sub = subj.subscribe_with(ThreadPerSubjectMaterializer, move |xe| {
             tx.send(xe.evt.data[0]).expect("failed_to_unwrap");
         });
 
@@ -488,7 +495,7 @@ mod tests {
         let subj = Subject::new("proof".into()).filter_merkle_proofs();
 
         let (tx, rx) = channel::unbounded();
-        let _sub = subj.subscribe_with(ThreadPerSubjectMaterializer::new(), move |xe| {
+        let _sub = subj.subscribe_with(ThreadPerSubjectMaterializer, move |xe| {
             tx.send(xe.merkle_proof.is_some())
                 .expect("failed_to_unwrap");
         });
@@ -518,7 +525,7 @@ mod tests {
         let subj = Subject::new("nothing".into()).blackhole();
 
         let (tx, rx) = channel::unbounded();
-        let _sub = subj.subscribe_with(ThreadPerSubjectMaterializer::new(), move |_xe| {
+        let _sub = subj.subscribe_with(ThreadPerSubjectMaterializer, move |_xe| {
             tx.send(()).expect("failed_to_unwrap");
         });
 
