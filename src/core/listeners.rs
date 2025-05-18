@@ -203,7 +203,7 @@ mod tests {
             "test",
             Arc::new(move |event| println!("Received event: {:#?}", event)),
             Some(5),
-            None,
+            Some(3),
         );
         let m_c = listener.meta.clone();
         for i in 0..9 {
