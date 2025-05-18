@@ -20,7 +20,7 @@ jobs:
           profile: minimal
           toolchain: nightly
           override: true
-          components: rustfmt
+          components: rustfmt, clippy
       - name: Check formatting
         run: cargo fmt --all -- --check
         env:
