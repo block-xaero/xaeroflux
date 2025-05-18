@@ -8,7 +8,7 @@ use std::{
 use crossbeam::channel::Sender;
 use threadpool::ThreadPool;
 
-use super::{CONF, XaeroData, event::Event};
+use super::{DISPATCHER_POOL, XaeroData, event::Event, init_global_dispatcher_pool};
 
 pub struct EventListener<T>
 where
@@ -82,7 +82,7 @@ where
         name: &str,
         handler: Arc<dyn Fn(Event<T>) + Send + Sync + 'static>,
         event_buffer_size: Option<usize>,
-        pool_size_override: Option<usize>,
+        _pool_size_override: Option<usize>,
     ) -> Self {
         let (tx, rx) = match event_buffer_size {
             Some(size) => {
@@ -96,20 +96,20 @@ where
         };
 
         let id: [u8; 32] = crate::indexing::hash::sha_256::<String>(&name.to_string());
-        let pool_size = match pool_size_override {
-            Some(size) => {
-                tracing::info!("Thread pool size: {}", size);
-                size
-            }
-            None => {
-                tracing::info!("Thread pool size: default");
-                CONF.get()
-                    .expect("failed to load config")
-                    .threads
-                    .num_worker_threads
-            }
-        };
-        let tp = ThreadPool::new(pool_size);
+        // let pool_size = match pool_size_override {
+        //     Some(size) => {
+        //         tracing::info!("Thread pool size: {}", size);
+        //         size
+        //     }
+        //     None => {
+        //         tracing::info!("Thread pool size: default");
+        //         let config = CONF.get_or_init(|| Config::default());
+        //         config.threads.num_worker_threads.max(1)
+        //     }
+        // };
+        // FIXME: This IGNORES the pool size override
+        // INTENTIONAL - REFACTOR ON M3.
+        init_global_dispatcher_pool();
         let events_processed = Arc::new(AtomicUsize::new(0));
         let events_dropped = Arc::new(AtomicUsize::new(0));
         let meta = Arc::new(EventListenerMeta {
@@ -117,6 +117,9 @@ where
             events_dropped,
         });
         let f_meta_c = meta.clone();
+        let tp = DISPATCHER_POOL
+            .get()
+            .expect("dispatcher pool not initialized");
         let moveable = tp.clone();
         let dispatcher = std::thread::Builder::new()
             .name(format!("xaeroflux-event-listener-{}", hex::encode(id)))
@@ -148,7 +151,7 @@ where
             id,
             address: None,
             inbox: tx,
-            pool: tp,
+            pool: tp.clone(),
             dispatcher: Some(dispatcher),
             meta: f_meta_c,
         }

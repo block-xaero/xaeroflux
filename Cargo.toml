@@ -33,6 +33,7 @@ xaeroflux = { path = "." }  # Adjust the path as necessary
 libc = "0.2.172"
 
 [dependencies]
+mio = "1.0.3"
 crdts = "7.3.2"
 bytemuck = "1.23.0"
 rkyv = "0.8.10"
@@ -45,11 +46,11 @@ hex = "0.4.3"
 tracing = { version = "0.1.41", features = ["log"] }
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "time"] }
 sha2 = { version = "0.10.9" }
-iroh = "0.34.1"
-iroh-blobs = "0.34.1"
+iroh = "0.35.0"
+iroh-blobs = "0.35.0"
 anyhow = "1.0.98"
 liblmdb = "0.9.70"
-tempfile = "3.19.1"
+tempfile = "3.20.0"
 libc = "0.2.172"
 memmap2 = "0.9.5"
 crossbeam = "0.8.4"

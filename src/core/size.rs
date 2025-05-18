@@ -11,17 +11,15 @@ pub static SEGMENT_SIZE: OnceLock<usize> = OnceLock::new();
 /// The page size is expected to be 16KB.
 /// If `PAGE_SIZE` is already initialized, it will panic with an error message.
 pub fn init_page_size() {
-    PAGE_SIZE
-        .set(sys::get_page_size()) // 16KB
-        .expect("PAGE_SIZE already initialized");
+    PAGE_SIZE.get_or_init(sys::get_page_size);
 }
 
 pub fn init_segment_size() {
-    SEGMENT_SIZE
-        .set(PAGE_SIZE.get().expect("failed_to_get_page_size") * PAGES_PER_SEGMENT)
-        .expect("SEGMENT_SIZE already initialized");
+    // ensure PAGE_SIZE is set, then initialize SEGMENT_SIZE exactly once
+    let page = *PAGE_SIZE.get_or_init(sys::get_page_size);
+    SEGMENT_SIZE.get_or_init(|| page * PAGES_PER_SEGMENT);
 }
-#[cfg(not(test))]
+//#[cfg(not(test))]
 pub fn init() {
     init_page_size();
     init_segment_size();

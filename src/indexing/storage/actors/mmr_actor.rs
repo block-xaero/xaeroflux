@@ -2,7 +2,11 @@ use std::sync::{Arc, Mutex};
 
 use super::segment_writer_actor::SegmentWriterActor;
 use crate::{
-    core::{event::Event, listeners::EventListener},
+    core::{
+        aof::{self, LmdbEnv, push_event},
+        event::Event,
+        listeners::EventListener,
+    },
     indexing::{
         hash::sha_256,
         storage::{format::archive, mmr::XaeroMmrOps},
@@ -10,8 +14,9 @@ use crate::{
 };
 
 pub struct MmrIndexingActor {
-    _mmr: Arc<Mutex<crate::indexing::storage::mmr::XaeroMmr>>,
-    _store: Arc<SegmentWriterActor>,
+    pub(crate) _lmdb: Arc<Mutex<aof::LmdbEnv>>,
+    pub(crate) _mmr: Arc<Mutex<crate::indexing::storage::mmr::XaeroMmr>>,
+    pub(crate) _store: Arc<SegmentWriterActor>,
     pub listener: EventListener<Vec<u8>>,
 }
 
@@ -27,6 +32,11 @@ impl MmrIndexingActor {
                 ..Default::default()
             })
         }));
+        // FIXME: path fix!
+        let meta_db = Arc::new(Mutex::new(
+            LmdbEnv::new("xaeroflux").expect("failed to create LmdbEnv"),
+        ));
+        let mdb_c = meta_db.clone();
         let _store_clone = _store.clone();
         let mmr_clone = _mmr.clone();
         let _listener = listener.unwrap_or_else(|| {
@@ -34,6 +44,8 @@ impl MmrIndexingActor {
                 "mmr_indexing_actor",
                 Arc::new(move |e: Event<Vec<u8>>| {
                     let framed = archive(&e);
+                    // TODO: THIS SHOULD BE NON BLOCKING
+                    push_event(&mdb_c, &e).expect("failed to push event");
                     let leaf_hash = sha_256(&framed);
                     {
                         mmr_clone
@@ -54,7 +66,20 @@ impl MmrIndexingActor {
             _mmr,
             _store,
             listener: _listener,
+            _lmdb: meta_db,
         }
+    }
+
+    pub fn mmr(&self) -> Arc<Mutex<crate::indexing::storage::mmr::XaeroMmr>> {
+        Arc::clone(&self._mmr)
+    }
+
+    pub fn store(&self) -> Arc<SegmentWriterActor> {
+        Arc::clone(&self._store)
+    }
+
+    pub fn lmdb(&self) -> Arc<Mutex<aof::LmdbEnv>> {
+        Arc::clone(&self._lmdb)
     }
 }
 
@@ -92,6 +117,7 @@ mod actor_tests {
             page_size: 32,
             pages_per_segment: 1,
             prefix,
+            lmdb_env_path: "xaeroflux".to_string(),
         };
         SegmentWriterActor::new_with_config(cfg)
     }
@@ -99,6 +125,9 @@ mod actor_tests {
     #[test]
     fn actor_appends_to_in_memory_mmr() {
         initialize();
+        let path = "xaeroflux";
+        std::fs::create_dir_all(path).expect("couldn't create LMDB dir");
+
         // store config uses small pages; we only care about MMR here
         let dir = tempdir().expect("failed to create tempdir");
         let store = make_test_store(dir.path().join("mmr").display().to_string());

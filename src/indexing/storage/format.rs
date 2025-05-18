@@ -1,9 +1,12 @@
+use std::mem;
+
 use bytemuck::{Pod, Zeroable};
 use rkyv::{Archive, rancor::Failure};
 
-use crate::core::event::Event;
+use crate::core::event::{ArchivedEvent, Event};
 
 pub const XAERO_MAGIC: [u8; 4] = *b"XAER";
+pub const EVENT_HEADER_SIZE: usize = mem::size_of::<XaeroOnDiskEventHeader>(); // 12
 pub const HEADER_SIZE: usize = 4 + 1 + 7 + 8 + 8 + 8; // = 36
 pub const NODE_SIZE: usize = 32 + 1 + 7; // = 40
 pub const PAGE_SIZE: usize = 16 * 1024; // 16 KiB
@@ -49,29 +52,71 @@ pub struct XaeroOnDiskEventHeader {
     pub marker: [u8; 4], // "XAER"
     pub len: u32,        // payload length
     pub event_type: u8,  // 1 byte
-    pub _pad1: [u8; 3],  // align `version`
+    pub _pad1: [u8; 7],  // align `version`
 }
 
 unsafe impl Pod for XaeroOnDiskEventHeader {}
 unsafe impl Zeroable for XaeroOnDiskEventHeader {}
-const _: () = assert!(std::mem::size_of::<XaeroOnDiskEventHeader>() == 12);
+const _: () = assert!(std::mem::size_of::<XaeroOnDiskEventHeader>() == 16);
 
 /// Archives an event to be shoved to pages on disk.
 /// serializes the event to rkyv bytes and prepends a `XaeroOnDiskEventHeader`  to it.
 pub fn archive(e: &Event<Vec<u8>>) -> Vec<u8> {
     let archived_b = rkyv::to_bytes::<Failure>(e).expect("failed_to_archive_event");
-    let mut bytes = Vec::with_capacity(HEADER_SIZE + archived_b.len());
+    let mut bytes = Vec::with_capacity(EVENT_HEADER_SIZE + archived_b.len());
     let header = XaeroOnDiskEventHeader {
         marker: XAERO_MAGIC,
         len: archived_b.len() as u32,
         event_type: e.event_type.to_u8(),
-        _pad1: [0; 3],
+        _pad1: [0; 7],
     };
     bytes.extend_from_slice(bytemuck::bytes_of(&header));
     bytes.extend_from_slice(archived_b.as_slice());
-    bytes.to_vec()
+    bytes
 }
+/// Unarchives an event from a byte slice.
+pub fn unarchive<'a>(bytes: &'a [u8]) -> (&'a XaeroOnDiskEventHeader, &'a ArchivedEvent<Vec<u8>>) {
+    let header: &'a XaeroOnDiskEventHeader = bytemuck::from_bytes(&bytes[0..EVENT_HEADER_SIZE]);
+    // removing header
+    if header.marker != XAERO_MAGIC {
+        panic!("invalid magic number"); // FIXME: corrupt data needs to be handled!
+    }
 
+    let start = EVENT_HEADER_SIZE;
+    let end = start + header.len as usize;
+
+    if bytes.len() < end {
+        panic!(
+            "buffer too small: need {} bytes but got {}",
+            end,
+            bytes.len()
+        );
+    }
+    let payload = &bytes[start..end];
+    match rkyv::api::high::access::<ArchivedEvent<Vec<u8>>, Failure>(payload) {
+        Ok(archived) => {
+            tracing::debug!(
+                "unarchived successfully: header.len={} payload.len={}",
+                header.len,
+                payload.len()
+            );
+            (header, archived)
+        }
+        Err(e) => {
+            // dump diagnostics
+            tracing::error!("=== rkyv access Failure: {:?} ===", e);
+            tracing::error!(
+                "header: {:?}, EVENT_HEADER_SIZE={}, payload.len={}",
+                header,
+                EVENT_HEADER_SIZE,
+                payload.len()
+            );
+            let snippet = &payload[..payload.len().min(64)];
+            tracing::error!("payload[0..min(64)]: {}", hex::encode(snippet));
+            panic!("failed to unarchive event: {:?}", e);
+        }
+    }
+}
 #[repr(C)]
 #[derive(Clone, Copy, Archive, Debug)]
 #[rkyv(derive(Debug))]

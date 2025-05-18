@@ -8,12 +8,15 @@ use std::{
 use liblmdb::{
     MDB_CREATE, MDB_RDONLY, MDB_RESERVE, MDB_cursor_op_MDB_NEXT, MDB_dbi, MDB_env, MDB_txn,
     MDB_val, mdb_cursor_get, mdb_cursor_open, mdb_dbi_close, mdb_dbi_open, mdb_env_create,
-    mdb_env_open, mdb_env_set_mapsize, mdb_env_set_maxdbs, mdb_put, mdb_txn_abort, mdb_txn_begin,
-    mdb_txn_commit,
+    mdb_env_open, mdb_env_set_mapsize, mdb_env_set_maxdbs, mdb_get, mdb_put, mdb_txn_abort,
+    mdb_txn_begin, mdb_txn_commit,
 };
 use rkyv::{rancor::Failure, util::AlignedVec};
 
-use crate::{core::event::Event, indexing::hash::sha_256};
+use crate::{
+    core::event::{Event, EventType},
+    indexing::hash::sha_256,
+};
 
 pub struct AOFActor {
     pub env: Arc<Mutex<LmdbEnv>>,
@@ -31,7 +34,7 @@ impl AOFActor {
         initialize();
         let c = CONF.get().expect("failed to unravel");
         let env = Arc::new(Mutex::new(
-            LmdbEnv::new("/tmp/xaeroflux-aof").expect("failed to unravel"),
+            LmdbEnv::new("xaeroflux-aof").expect("failed to unravel"),
         ));
         let env_c = Arc::clone(&env);
         let h = Arc::new(move |e| {
@@ -53,11 +56,13 @@ pub struct LmdbEnv {
     pub env: *mut MDB_env,
     pub dbis: [MDB_dbi; 2],
 }
+unsafe impl Sync for LmdbEnv {} // raw pointers are Sync
 // Assuming LmdbEnv is already Send:
 unsafe impl Send for LmdbEnv {} // raw pointers are Send
 // No need for Sync, since we guard with a Mutex
 impl LmdbEnv {
     pub fn new(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        std::fs::create_dir_all(path)?;
         // 1) create & configure env
         let mut env = ptr::null_mut();
         unsafe {
@@ -250,6 +255,7 @@ pub unsafe fn scan_day(
         Ok(results)
     }
 }
+
 /// pushes an event to the LMDB database.
 /// The event is serialized using the `rkyv` crate.
 /// The event is stored in the first database (aof).
@@ -270,12 +276,26 @@ pub fn push_event(
         if sc_tx_begin != 0 {
             return Err(Box::new(std::io::Error::from_raw_os_error(sc_tx_begin)));
         }
-        let dbi = env.dbis[0];
+        let dbi = match event.event_type {
+            EventType::MetaEvent(_) => env.dbis[1],
+            _ => env.dbis[0],
+        };
         let key = generate_key(event)?;
         let key_bytes: &[u8] = bytemuck::bytes_of(&key);
-        let mdb_key = &mut MDB_val {
-            mv_size: key_bytes.len(),
-            mv_data: key_bytes.as_ptr() as *mut libc::c_void,
+        let meta_key = match event.event_type {
+            EventType::MetaEvent(1) => Some("segment_meta".as_bytes()),
+            EventType::MetaEvent(2) => Some("mmr_meta".as_bytes()),
+            _ => None,
+        };
+        let mdb_key = match meta_key {
+            Some(mk) => &mut MDB_val {
+                mv_size: mk.len(),
+                mv_data: mk.as_ptr() as *mut libc::c_void,
+            },
+            None => &mut MDB_val {
+                mv_size: key_bytes.len(),
+                mv_data: key_bytes.as_ptr() as *mut libc::c_void,
+            },
         };
         let value = generate_value(event)?;
         let mut data_val = MDB_val {
@@ -294,6 +314,51 @@ pub fn push_event(
         }
     }
     Ok(())
+}
+
+/// Shortcut to get the meta value from the LMDB database.
+/// This is a zero-copy operation.
+/// The meta value is stored in the second database (meta).
+/// Meta key is "segment_meta" or "mmr_meta".
+/// The meta value is a `rkyv` `rkyv::to_bytes` archived/ serialized `MMRMeta` struct or
+/// `SegmentMeta` struct.
+/// # Safety
+/// SAFE: This function is unsafe because it directly interacts with the LMDB C API.
+/// It assumes that the environment is already created and opened.
+/// It also assumes that the database is already opened.
+pub unsafe fn get_meta_val(env: &Arc<Mutex<LmdbEnv>>, key: &[u8]) -> AlignedVec {
+    let guard = env.lock().expect("failed_to_unwrap");
+    let lmdb = &*guard;
+    // begin read txn
+    let mut txn: *mut MDB_txn = ptr::null_mut();
+    let rc_begin = unsafe { mdb_txn_begin(lmdb.env, ptr::null_mut(), MDB_RDONLY, &mut txn) };
+    if rc_begin != 0 {
+        panic!("failed to begin read txn: {}", rc_begin);
+    }
+    // prepare key
+    let mut key_val = MDB_val {
+        mv_size: key.len(),
+        mv_data: key.as_ptr() as *mut _,
+    };
+    let mut data_val = MDB_val {
+        mv_size: 0,
+        mv_data: ptr::null_mut(),
+    };
+    // get
+    let rc = unsafe { mdb_get(txn, lmdb.dbis[1], &mut key_val, &mut data_val) };
+    if rc != 0 {
+        // txn abort
+        unsafe { mdb_txn_abort(txn) };
+        panic!("failed to get meta value: {}", rc);
+    }
+    // copy into aligned vec
+    let slice =
+        unsafe { std::slice::from_raw_parts(data_val.mv_data as *const u8, data_val.mv_size) };
+    let mut av = AlignedVec::new();
+    av.extend_from_slice(slice);
+    // abort txn
+    unsafe { mdb_txn_abort(txn) };
+    av
 }
 
 /// Generate a key for the event.
@@ -326,6 +391,7 @@ mod tests {
         date_time::{MS_PER_DAY, day_bounds_from_epoch_ms},
         event::{ArchivedEvent, EventType},
         initialize,
+        meta::{MMRMeta, SegmentMeta},
     };
 
     #[repr(C)]
@@ -438,5 +504,96 @@ mod tests {
         };
         assert_eq!(a1, env.dbis[0]);
         assert_eq!(m1, env.dbis[1]);
+    }
+
+    #[test]
+    fn test_segment_meta_overwrite() {
+        initialize();
+        let dir = tempdir().expect("failed_to_unwrap");
+        let arc_env = Arc::new(Mutex::new(
+            LmdbEnv::new(dir.path().to_str().expect("failed_to_unwrap")).expect("failed_to_unwrap"),
+        ));
+        // two different metas
+        let meta1 = SegmentMeta {
+            page_index: 1,
+            segment_index: 2,
+            write_pos: 128,
+            byte_offset: 256,
+            latest_segment_id: 3,
+        };
+        let meta2 = SegmentMeta {
+            page_index: 5,
+            segment_index: 6,
+            write_pos: 512,
+            byte_offset: 1024,
+            latest_segment_id: 7,
+        };
+        // wrap into Event<Vec<u8>>
+        let bytes1 = bytemuck::bytes_of(&meta1).to_vec();
+        let ev1 = Event::new(bytes1.clone(), EventType::MetaEvent(1).to_u8());
+        push_event(&arc_env, &ev1).expect("failed_to_unwrap");
+        // read back
+        let raw1 = unsafe { get_meta_val(&arc_env, b"segment_meta") };
+        let archived_ev1 = rkyv::api::high::access::<ArchivedEvent<Vec<u8>>, Failure>(&raw1)
+            .expect("failed_to_unwrap");
+        let data1 = &archived_ev1.data;
+        let got1: &SegmentMeta = bytemuck::from_bytes(data1);
+        assert_eq!(got1.page_index, meta1.page_index);
+        assert_eq!(got1.byte_offset, meta1.byte_offset);
+        assert_eq!(got1.write_pos, meta1.write_pos);
+        assert_eq!(got1.segment_index, meta1.segment_index);
+        assert_eq!(got1.latest_segment_id, meta1.latest_segment_id);
+
+        // now overwrite
+        let bytes2 = bytemuck::bytes_of(&meta2).to_vec();
+        let ev2 = Event::new(bytes2.clone(), EventType::MetaEvent(1).to_u8());
+        push_event(&arc_env, &ev2).expect("failed_to_unwrap");
+        let raw2 = unsafe { get_meta_val(&arc_env, b"segment_meta") };
+        let archived_ev2 = rkyv::api::high::access::<ArchivedEvent<Vec<u8>>, Failure>(&raw2)
+            .expect("failed_to_unwrap");
+        let data2 = &archived_ev2.data;
+        let got2: &SegmentMeta = bytemuck::from_bytes(data2);
+        assert_eq!(got2.page_index, meta2.page_index);
+        assert_eq!(got2.byte_offset, meta2.byte_offset);
+        assert_eq!(got2.write_pos, meta2.write_pos);
+        assert_eq!(got2.segment_index, meta2.segment_index);
+        assert_eq!(got2.latest_segment_id, meta2.latest_segment_id);
+    }
+
+    #[test]
+    fn test_mmr_meta_store_and_retrieve() {
+        initialize();
+        let dir = tempdir().expect("failed_to_unwrap");
+        let arc_env = Arc::new(Mutex::new(
+            LmdbEnv::new(dir.path().to_str().expect("failed_to_unwrap")).expect("failed_to_unwrap"),
+        ));
+        let seg_meta = SegmentMeta {
+            page_index: 8,
+            segment_index: 9,
+            write_pos: 2048,
+            byte_offset: 4096,
+            latest_segment_id: 10,
+        };
+        let mmr_meta = MMRMeta {
+            root_hash: sha_256::<String>(&"deadbeef".to_string()),
+            peaks_count: 4,
+            leaf_count: 16,
+            segment_meta: seg_meta,
+        };
+        let meta_bytes = rkyv::to_bytes::<Failure>(&mmr_meta)
+            .expect("failed_to_unwrap")
+            .to_vec();
+        let ev = Event::new(meta_bytes.clone(), EventType::MetaEvent(2).to_u8());
+        push_event(&arc_env, &ev).expect("failed_to_unwrap");
+        let raw = unsafe { get_meta_val(&arc_env, b"mmr_meta") };
+        let archived_ev = rkyv::api::high::access::<ArchivedEvent<Vec<u8>>, Failure>(&raw)
+            .expect("failed_to_unwrap");
+        let data = &archived_ev.data;
+        let got_meta: MMRMeta =
+            rkyv::from_bytes::<MMRMeta, Failure>(data).expect("failed_to_unwrap");
+        assert_eq!(got_meta.root_hash, mmr_meta.root_hash);
+        assert_eq!(got_meta.peaks_count, mmr_meta.peaks_count);
+        assert_eq!(got_meta.leaf_count, mmr_meta.leaf_count);
+        assert_eq!(got_meta.segment_meta.page_index, seg_meta.page_index);
     }
 }
