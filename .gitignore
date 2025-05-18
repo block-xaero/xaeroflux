@@ -1,4 +1,6 @@
 *seg
+*mdb
+xaeroflux-aof/*
 xaeroflux/*
 # Rust build artifacts
 /target/
