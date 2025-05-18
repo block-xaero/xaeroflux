@@ -4,72 +4,110 @@ pub mod logs;
 pub mod networking;
 pub mod sys;
 
-use core::event::Event;
+use core::{DISPATCHER_POOL, aof::AOFActor, event::Event};
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread::JoinHandle,
 };
 
-use crossbeam::channel::{Receiver, Select, Sender, unbounded};
+use crossbeam::channel::{Receiver, Sender, unbounded};
+use indexing::storage::{
+    actors::{mmr_actor::MmrIndexingActor, segment_writer_actor::SegmentWriterActor},
+    format::archive,
+};
+use threadpool::ThreadPool;
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Returns a unique, thread-safe `u64` ID.
 fn next_id() -> u64 {
     NEXT_ID.fetch_add(1, Ordering::SeqCst)
 }
 
+/// Envelope wrapping an application or system `Event` payload
+/// along with an optional Merkle inclusion proof.
 #[derive(Clone)]
-/// Your envelope
 pub struct XaeroEvent {
+    /// Core event data (e.g., domain event encoded as bytes).
     pub evt: Event<Vec<u8>>,
+    /// Optional Merkle proof bytes (e.g., from MMR).
     pub merkle_proof: Option<Vec<u8>>,
 }
 
-/// Just holds the Rx side
+/// Receiver side of a `Subject` channel for `XaeroEvent`s.
 pub struct Source {
+    /// Unique identifier for this source.
     pub id: u64,
+    /// Underlying Crossbeam receiver.
     pub rx: Receiver<XaeroEvent>,
 }
+
 impl Source {
+    /// Constructs a new `Source` from the given receiver.
     pub fn new(rx: Receiver<XaeroEvent>) -> Self {
         Self { id: next_id(), rx }
     }
 }
 
-/// Just holds the Tx side
+/// Sender side of a `Subject` channel for `XaeroEvent`s.
 pub struct Sink {
+    /// Unique identifier for this sink.
     pub id: u64,
+    /// Underlying Crossbeam sender.
     pub tx: Sender<XaeroEvent>,
 }
+
 impl Sink {
+    /// Constructs a new `Sink` from the given sender.
     pub fn new(tx: Sender<XaeroEvent>) -> Self {
         Self { id: next_id(), tx }
     }
 }
 
-/// Each operator must be a reusable Fn (not FnOnce)
+/// Defines per-event pipeline operations.
 #[derive(Clone)]
 pub enum Operator {
+    /// Transform the event into another event.
     Map(Arc<dyn Fn(XaeroEvent) -> XaeroEvent + Send + Sync>),
+    /// Keep only events matching the predicate.
     Filter(Arc<dyn Fn(&XaeroEvent) -> bool + Send + Sync>),
+    /// Drop events without a Merkle proof.
     FilterMerkleProofs,
+    /// Terminal op: drop all events.
     Blackhole,
 }
 
+/// A hot multicast channel with a configurable operator pipeline.
 #[derive(Clone)]
-/// Your 'topic' + pipeline description
 pub struct Subject {
+    /// Logical topic name.
     pub name: String,
+    /// Unique subject ID.
     pub id: u64,
+    /// Receiver endpoint (shared).
     pub source: Arc<Source>,
+    /// Sender endpoint (shared).
     pub sink: Arc<Sink>,
+    /// Ordered list of operators to apply per event.
     ops: Vec<Operator>,
+    // /// Flag to indicate if `unsafe_run` has been called.
+    /// 2 fold: 1. ensure unsafe run is called atleast once 2. do not double call.
+    pub unsafe_run_called: Arc<AtomicBool>,
 }
 
 impl Subject {
-    /// Create a brand‐new subject with its own channel
+    /// Creates a new `Subject` with its own unbounded channel.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - human-readable identifier for the subject.
+    ///
+    /// # Returns
+    ///
+    /// An `Arc<Subject>` you can share and configure.
     pub fn new(name: String) -> Arc<Self> {
         let (tx, rx) = unbounded();
         Arc::new(Subject {
@@ -78,21 +116,79 @@ impl Subject {
             source: Arc::new(Source::new(rx)),
             sink: Arc::new(Sink::new(tx)),
             ops: Vec::new(),
+            unsafe_run_called: Arc::new(AtomicBool::new(false)),
         })
+    }
+
+    /// Subscribe with a callback, using the default thread-pool materializer.
+    ///
+    /// Spawns a listener thread and processes incoming events through `ops`.
+    pub fn subscribe<F>(self: &Arc<Self>, handler: F) -> Subscription
+    where
+        F: Fn(XaeroEvent) + Send + Sync + 'static,
+    {
+        self.subscribe_with(ThreadPoolForSubjectMaterializer::new(), handler)
+    }
+
+    /// Connects this `Subject` to system actors: AOF, segment writer, and MMR.
+    ///
+    /// Returns an `XFluxHandle` that keeps everything alive until dropped.
+    pub fn unsafe_run(self: Arc<Self>) -> XFluxHandle {
+        self.unsafe_run_called.store(true, Ordering::SeqCst);
+        // Instantiate system actors
+        let aof = Arc::new(AOFActor::new());
+        let seg = Arc::new(SegmentWriterActor::new());
+        let mmr = Arc::new(MmrIndexingActor::new(None, None));
+        let aof_c = aof.clone();
+        let seg_c = seg.clone();
+        let mmr_c = mmr.clone();
+        // Subscribe system pipeline
+        let _sys_sub = Arc::new(self.clone().subscribe_with(
+            ThreadPerSubjectMaterializer,
+            move |xe: XaeroEvent| {
+                // Append-only log
+                let evt = xe.evt.clone();
+                let blob = archive(&xe.evt);
+                aof_c
+                    .listener
+                    .inbox
+                    .send(evt.clone())
+                    .expect("failed_to_unwrap");
+
+                // Segment archiving
+                seg_c.inbox.send(blob).expect("failed_to_unwrap");
+
+                // MMR indexing
+                mmr_c.listener.inbox.send(evt).expect("failed_to_unwrap");
+                // P2P sync would go here
+            },
+        ));
+
+        XFluxHandle {
+            _sys_sub,
+            aof,
+            seg,
+            mmr,
+        }
     }
 }
 
-/// Chainable operator methods—no threads spun yet!
+/// Chainable subject operators without executing them until subscription.
 pub trait SubjectOps {
+    /// Transform each event.
     fn map<F>(self: &Arc<Self>, f: F) -> Arc<Self>
     where
         F: Fn(XaeroEvent) -> XaeroEvent + Send + Sync + 'static;
 
+    /// Keep only events matching the predicate.
     fn filter<P>(self: &Arc<Self>, p: P) -> Arc<Self>
     where
         P: Fn(&XaeroEvent) -> bool + Send + Sync + 'static;
 
+    /// Drop events lacking a Merkle proof.
     fn filter_merkle_proofs(self: &Arc<Self>) -> Arc<Self>;
+
+    /// Terminal: drop all events.
     fn blackhole(self: &Arc<Self>) -> Arc<Self>;
 }
 
@@ -128,54 +224,102 @@ impl SubjectOps for Subject {
     }
 }
 
-/// A handle you can drop/join later if you like
+/// Keeps a spawned thread alive for a subscription.
 pub struct Subscription(pub JoinHandle<()>);
 
-/// Pluggable execution model
+/// Strategy for wiring `Subject` + pipeline into threads and invoking handlers.
 pub trait Materializer: Send + Sync {
+    /// Materialize the pipeline, passing each processed event into `handler`.
     fn materialize(
         &self,
         subject: Arc<Subject>,
-        handler: Box<dyn FnMut(XaeroEvent) + Send>,
+        handler: Arc<dyn Fn(XaeroEvent) + Send + Sync + 'static>,
     ) -> Subscription;
 }
 
-/// Materializer that runs *one* thread per Subject
-pub struct ThreadPerSubjectMaterializer;
+/// Materializer using a shared thread pool per subject.
+pub struct ThreadPoolForSubjectMaterializer {
+    pool: Arc<ThreadPool>,
+}
 
-impl Default for ThreadPerSubjectMaterializer {
+impl Default for ThreadPoolForSubjectMaterializer {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ThreadPerSubjectMaterializer {
+impl ThreadPoolForSubjectMaterializer {
+    /// Builds from global configuration.
     pub fn new() -> Self {
-        ThreadPerSubjectMaterializer
+        Self {
+            pool: Arc::new(DISPATCHER_POOL.get().expect("failed to load pool").clone()),
+        }
     }
 }
+
+impl Materializer for ThreadPoolForSubjectMaterializer {
+    fn materialize(
+        &self,
+        subject: Arc<Subject>,
+        handler: Arc<dyn Fn(XaeroEvent) + Send + Sync + 'static>,
+    ) -> Subscription {
+        let rx = subject.source.rx.clone();
+        let ops = subject.ops.clone();
+        let pool = self.pool.clone();
+
+        let jh = std::thread::spawn(move || {
+            for evt in rx.iter() {
+                let h = handler.clone();
+                let pipeline = ops.clone();
+                let mut local_evt = evt.clone();
+                pool.execute(move || {
+                    let mut keep = true;
+                    for op in &pipeline {
+                        match op {
+                            Operator::Map(f) => local_evt = f(local_evt),
+                            Operator::Filter(p) if !p(&local_evt) => {
+                                keep = false;
+                                break;
+                            }
+                            Operator::FilterMerkleProofs if local_evt.merkle_proof.is_none() => {
+                                keep = false;
+                                break;
+                            }
+                            Operator::Blackhole => {
+                                keep = false;
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                    if keep {
+                        h(local_evt)
+                    }
+                });
+            }
+        });
+        Subscription(jh)
+    }
+}
+
+/// Default thread-per-subject materializer (no pooling).
+pub struct ThreadPerSubjectMaterializer;
 
 impl Materializer for ThreadPerSubjectMaterializer {
     fn materialize(
         &self,
         subject: Arc<Subject>,
-        mut handler: Box<dyn FnMut(XaeroEvent) + Send>,
+        handler: Arc<dyn Fn(XaeroEvent) + Send + Sync + 'static>,
     ) -> Subscription {
-        // only need rx and ops, not tx!
         let rx = subject.source.rx.clone();
         let ops = subject.ops.clone();
 
         let jh = std::thread::spawn(move || {
-            let mut sel = Select::new();
-            sel.recv(&rx);
-
-            while let Ok(mut evt) = sel.select().recv(&rx) {
+            for mut evt in rx.iter() {
                 let mut keep = true;
                 for op in &ops {
                     match op {
-                        Operator::Map(f) => {
-                            evt = f(evt);
-                        }
+                        Operator::Map(f) => evt = f(evt),
                         Operator::Filter(p) if !p(&evt) => {
                             keep = false;
                             break;
@@ -192,31 +336,42 @@ impl Materializer for ThreadPerSubjectMaterializer {
                     }
                 }
                 if keep {
-                    handler(evt);
+                    handler(evt)
                 }
             }
         });
-
         Subscription(jh)
     }
 }
 
-/// Convenience method on Subject to pick your materializer
+/// Convenience API for choosing a materializer during subscription.
 pub trait SubscribeWith {
     fn subscribe_with<M, F>(self: &Arc<Self>, mat: M, handler: F) -> Subscription
     where
         M: Materializer,
-        F: FnMut(XaeroEvent) + Send + 'static;
+        F: Fn(XaeroEvent) + Send + Sync + 'static;
 }
 
 impl SubscribeWith for Subject {
     fn subscribe_with<M, F>(self: &Arc<Self>, mat: M, handler: F) -> Subscription
     where
         M: Materializer,
-        F: FnMut(XaeroEvent) + Send + 'static,
+        F: Fn(XaeroEvent) + Send + Sync + 'static,
     {
-        mat.materialize(self.clone(), Box::new(handler))
+        mat.materialize(self.clone(), Arc::new(handler))
     }
+}
+
+/// Holds your system actors and subscription to keep them alive.
+pub struct XFluxHandle {
+    /// Composite subscription for core events.
+    pub _sys_sub: Arc<Subscription>,
+    /// Append-only log actor.
+    pub aof: Arc<AOFActor>,
+    /// Segment writer actor.
+    pub seg: Arc<SegmentWriterActor>,
+    /// MMR indexing actor.
+    pub mmr: Arc<MmrIndexingActor>,
 }
 
 #[cfg(test)]
@@ -241,17 +396,31 @@ mod tests {
     }
 
     #[test]
+    fn test_source_sink() {
+        initialize();
+        let sub = Subject::new("posts".into());
+        let payload = b"hello".to_vec();
+        let evt = make_evt(&payload, true);
+        tracing::debug!("sending event: {:?}", hex::encode(&evt.evt.data));
+        sub.sink.tx.send(evt).expect("failed_to_unwrap");
+        let got = sub
+            .source
+            .rx
+            .recv_timeout(Duration::from_millis(100))
+            .expect("did not receive event");
+        tracing::debug!("got event: {:?}", hex::encode(&got.evt.data));
+        assert_eq!(got.evt.data, payload);
+    }
+
+    #[test]
     fn publish_and_subscribe_roundtrip() {
         let subj = Subject::new("topic".into());
         let (tx, rx) = channel::unbounded();
 
         // subscribe: every incoming event sends its payload to tx
-        let _sub = subj.subscribe_with(
-            ThreadPerSubjectMaterializer::new(),
-            move |xe: XaeroEvent| {
-                tx.send(xe.evt.data.clone()).expect("failed_to_unwrap");
-            },
-        );
+        let _sub = subj.subscribe_with(ThreadPerSubjectMaterializer, move |xe: XaeroEvent| {
+            tx.send(xe.evt.data.clone()).expect("failed_to_unwrap");
+        });
 
         // publish one event
         let payload = b"hello".to_vec();
@@ -273,7 +442,7 @@ mod tests {
         });
 
         let (tx, rx) = channel::unbounded();
-        let _sub = subj.subscribe_with(ThreadPerSubjectMaterializer::new(), move |xe| {
+        let _sub = subj.subscribe_with(ThreadPerSubjectMaterializer, move |xe| {
             tx.send(xe.evt.data).expect("failed_to_unwrap");
         });
 
@@ -295,7 +464,7 @@ mod tests {
         let subj = Subject::new("filter".into()).filter(|xe| xe.evt.data[0] % 2 == 0); // only even first-byte
 
         let (tx, rx) = channel::unbounded();
-        let _sub = subj.subscribe_with(ThreadPerSubjectMaterializer::new(), move |xe| {
+        let _sub = subj.subscribe_with(ThreadPerSubjectMaterializer, move |xe| {
             tx.send(xe.evt.data[0]).expect("failed_to_unwrap");
         });
 
@@ -326,7 +495,7 @@ mod tests {
         let subj = Subject::new("proof".into()).filter_merkle_proofs();
 
         let (tx, rx) = channel::unbounded();
-        let _sub = subj.subscribe_with(ThreadPerSubjectMaterializer::new(), move |xe| {
+        let _sub = subj.subscribe_with(ThreadPerSubjectMaterializer, move |xe| {
             tx.send(xe.merkle_proof.is_some())
                 .expect("failed_to_unwrap");
         });
@@ -356,7 +525,7 @@ mod tests {
         let subj = Subject::new("nothing".into()).blackhole();
 
         let (tx, rx) = channel::unbounded();
-        let _sub = subj.subscribe_with(ThreadPerSubjectMaterializer::new(), move |_xe| {
+        let _sub = subj.subscribe_with(ThreadPerSubjectMaterializer, move |_xe| {
             tx.send(()).expect("failed_to_unwrap");
         });
 

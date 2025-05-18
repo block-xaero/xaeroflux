@@ -2,7 +2,7 @@ use std::{collections::HashMap, path::PathBuf};
 
 use serde::Deserialize;
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Default)]
 pub struct Config {
     pub name: String,
     pub version: u64,
@@ -16,7 +16,7 @@ pub struct Config {
     pub logging: LoggingConfig,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Default)]
 pub struct AofConfig {
     pub enabled: bool,
     pub file_path: PathBuf,
@@ -28,7 +28,7 @@ pub struct AofConfig {
     pub buffer_size: usize,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Default)]
 pub struct StorageConfig {
     pub data_dir: PathBuf,
     pub wal_dir: PathBuf,
@@ -37,14 +37,14 @@ pub struct StorageConfig {
     pub max_open_files: u32,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Default)]
 pub struct MerkleConfig {
     pub page_size: usize,
     pub flush_interval_ms: u64,
     pub max_nodes_per_page: usize,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Default)]
 pub struct P2PConfig {
     pub listen_address: String,
     pub bootstrap_nodes: Vec<String>,
@@ -54,27 +54,29 @@ pub struct P2PConfig {
     pub discovery_config: DiscoveryConfig,
 }
 /// How to find "friends" on the same network.
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Default)]
 pub struct DiscoveryConfig {
     pub wifi: bool,
     pub bluetooth: bool,
     pub geolocate: bool,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Default)]
 pub struct BufferConfig {
     pub capacity: usize,
     pub batch_size: usize,
     pub timeout_ms: u64,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Default)]
 pub struct ThreadConfig {
     pub num_worker_threads: usize,
+    pub num_io_threads: usize,
+    pub max_queue_size: usize,
     pub pin_threads: bool,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Default)]
 pub struct LoggingConfig {
     pub level: String,
     pub file: PathBuf,

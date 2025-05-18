@@ -16,6 +16,38 @@ Xaeroflux is a mobile-optimized, decentralized append-only event store and index
 
 ## Core Types & API
 
+```mermaid
+flowchart TB
+  %% Peer phones pushing events into the subject sink
+  subgraph Peers["Peer Phones"]
+    direction LR
+    PhoneA(("Peer Phone A"))
+    PhoneB(("Peer Phone B"))
+  end
+
+  %% Main pipeline
+  subgraph Pipeline["XaeroFlux Event Stream"]
+    direction TB
+    SubjectSink[/"Subject Sink"/]
+    %% Actors subscribing in parallel
+    SubjectSink --> AOFActor["AOF Actor"]
+    SubjectSink --> MMRActor["MMR Actor"]
+    SubjectSink --> SegWriter["Segment Writer"]
+  end
+
+  %% Outputs
+  AOFActor -->|writes events| LMDB[(LMDB Storage)]
+  MMRActor -->|builds Merkle index| MerkleIdx[(Merkle Index)]
+  SegWriter -->|writes pages| SegmentFiles[(Segment Files)]
+
+  %% MMR → SegmentWriter handoff
+  MMRActor -- leaf hashes --> SegWriter
+
+  %% Peer inputs
+  PhoneA -->|p2p sync| SubjectSink
+  PhoneB -->|p2p sync| SubjectSink
+```
+
 ```rust
 use std::sync::Arc;
 use crossbeam::channel::unbounded;

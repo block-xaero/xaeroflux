@@ -1,10 +1,20 @@
-use std::{fs::OpenOptions, sync::Arc, thread};
+use std::{
+    fs::OpenOptions,
+    sync::{Arc, Mutex},
+    thread,
+};
 
 use crossbeam::channel::{self, Receiver, Sender};
 use memmap2::MmapMut;
 
 use crate::{
-    core::{event::Event, listeners::EventListener, size::PAGE_SIZE},
+    core::{
+        aof::{LmdbEnv, push_event},
+        event::{Event, EventType},
+        listeners::EventListener,
+        meta::SegmentMeta,
+        size::PAGE_SIZE,
+    },
     indexing::storage::format::archive,
 };
 
@@ -14,6 +24,7 @@ pub struct SegmentConfig {
     pub page_size: usize,
     pub pages_per_segment: usize,
     pub prefix: String,
+    pub lmdb_env_path: String,
 }
 
 impl Default for SegmentConfig {
@@ -24,6 +35,7 @@ impl Default for SegmentConfig {
             page_size,
             pages_per_segment,
             prefix: "xaeroflux".into(),
+            lmdb_env_path: "xaeroflux-aof".into(),
         }
     }
 }
@@ -32,8 +44,9 @@ impl Default for SegmentConfig {
 pub struct SegmentWriterActor {
     /// Send archived event blobs to this inbox
     pub inbox: Sender<Vec<u8>>,
-    _listener: EventListener<Vec<u8>>,
-    _handle: thread::JoinHandle<()>,
+    pub _listener: EventListener<Vec<u8>>,
+    pub meta_db: Arc<Mutex<LmdbEnv>>,
+    pub _handle: thread::JoinHandle<()>,
 }
 
 impl Default for SegmentWriterActor {
@@ -50,6 +63,10 @@ impl SegmentWriterActor {
 
     /// Create with custom config (for testability)
     pub fn new_with_config(config: SegmentConfig) -> Self {
+        std::fs::create_dir_all(&config.lmdb_env_path).expect("failed to create directory");
+        let meta_db = Arc::new(Mutex::new(
+            LmdbEnv::new(&config.lmdb_env_path).expect("failed to create LmdbEnv"),
+        ));
         let (tx, rx) = channel::unbounded::<Vec<u8>>();
         let txc = tx.clone();
         let listener = EventListener::new(
@@ -64,20 +81,25 @@ impl SegmentWriterActor {
 
         // spawn writer-loop with owned config and receiver
         let cfg = config.clone();
-        let handle = thread::spawn(move || {
-            run_writer_loop(rx, cfg);
-        });
+        let meta_db_c = meta_db.clone();
+        let handle: thread::JoinHandle<()> = thread::Builder::new()
+            .name("xaeroflux-segment-writer".into())
+            .spawn(move || {
+                run_writer_loop(&meta_db_c, rx, cfg);
+            })
+            .expect("failed to spawn thread");
 
         SegmentWriterActor {
             inbox: tx,
             _listener: listener,
             _handle: handle,
+            meta_db,
         }
     }
 }
 
 /// Core writer loop separated for testability
-fn run_writer_loop(rx: Receiver<Vec<u8>>, config: SegmentConfig) {
+fn run_writer_loop(meta_db: &Arc<Mutex<LmdbEnv>>, rx: Receiver<Vec<u8>>, config: SegmentConfig) {
     let page_size = config.page_size;
     let segment_bytes = (config.pages_per_segment * page_size) as u64;
 
@@ -126,6 +148,22 @@ fn run_writer_loop(rx: Receiver<Vec<u8>>, config: SegmentConfig) {
                     .open(&filename)
                     .expect("segment_file_not_found");
                 f_new.set_len(segment_bytes).expect("failed to set length");
+                let seg_meta = SegmentMeta {
+                    page_index,
+                    segment_index: seg_id,
+                    write_pos,
+                    byte_offset,
+                    latest_segment_id: seg_id,
+                };
+                let data_b_segment_meta = bytemuck::bytes_of(&seg_meta);
+                push_event(
+                    meta_db,
+                    &Event::new(
+                        data_b_segment_meta.to_vec(),
+                        EventType::MetaEvent(1).to_u8(),
+                    ),
+                )
+                .expect("failed to push segment meta event");
                 let new_mm = unsafe { MmapMut::map_mut(&f_new).expect("mmap_failed") };
                 let old_mm = std::mem::replace(&mut mm, new_mm);
                 drop(old_mm);
@@ -138,7 +176,7 @@ fn run_writer_loop(rx: Receiver<Vec<u8>>, config: SegmentConfig) {
         // copy data into current page
         let start = byte_offset + write_pos;
         let end = start + write_len;
-        mm[start..end].copy_from_slice(&data);
+        mm[start..end].copy_from_slice(data.as_slice());
         write_pos += write_len;
     }
 
@@ -151,12 +189,51 @@ fn run_writer_loop(rx: Receiver<Vec<u8>>, config: SegmentConfig) {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs::OpenOptions, io::Read};
+    use std::{fs::OpenOptions, io::Read, sync::Mutex};
 
     use crossbeam::channel;
+    use rkyv::rancor::Failure;
     use tempfile::tempdir;
 
     use super::*;
+    use crate::{
+        core::{
+            aof::{LmdbEnv, get_meta_val, push_event},
+            event::{ArchivedEvent, EventType},
+            initialize,
+            meta::SegmentMeta,
+        },
+        indexing::storage::format::{self},
+    };
+
+    #[test]
+    fn test_segment_meta_initial() {
+        initialize();
+        let dir = tempdir().expect("failed to unpack tempdir");
+        let arc_env = Arc::new(Mutex::new(
+            LmdbEnv::new(dir.path().to_str().expect("failed_to_unwrap")).expect("failed_to_unwrap"),
+        ));
+        // fire a dummy segment_meta event
+        let seg_meta = SegmentMeta {
+            page_index: 0,
+            segment_index: 0,
+            write_pos: 0,
+            byte_offset: 0,
+            latest_segment_id: 0,
+        };
+        let bytes = bytemuck::bytes_of(&seg_meta).to_vec();
+        let ev = Event::new(bytes.clone(), EventType::MetaEvent(1).to_u8());
+        push_event(&arc_env, &ev).expect("failed_to_unwrap");
+        let raw = unsafe { get_meta_val(&arc_env, b"segment_meta") };
+        let archived_ev = rkyv::api::high::access::<ArchivedEvent<Vec<u8>>, Failure>(&raw)
+            .expect("failed_to_unwrap");
+        let got: &SegmentMeta = bytemuck::from_bytes(&archived_ev.data);
+        assert_eq!(got.page_index, 0);
+        assert_eq!(got.segment_index, 0);
+        assert_eq!(got.write_pos, 0);
+        assert_eq!(got.byte_offset, 0);
+        assert_eq!(got.latest_segment_id, 0);
+    }
 
     /// Pure page/segment math
     #[test]
@@ -201,70 +278,130 @@ mod tests {
         assert_eq!(&buf[4..8], &[1, 2, 3, 4]);
     }
 
-    /// test run_writer_loop page boundary behavior
+    /// Test that page‐boundary flush & rollover work when you frame with HEADER+payload
     #[test]
     fn test_run_writer_loop_page_boundary() {
-        let dir = tempdir().expect("failed_to_unwrap_value");
+        initialize();
+
+        // … set up tmp, arc_env, etc …
+        initialize();
+
+        // Make a temp dir for LMDB + segment files:
+        let tmp = tempdir().expect("failed_to_unwrap");
+        let arc_env = Arc::new(Mutex::new(
+            LmdbEnv::new(tmp.path().to_str().expect("failed_to_unwrap")).expect("failed_to_unwrap"),
+        ));
+
+        // Buil
+        // Create two events with different payload sizes:
+        let ev1 = Event::new(vec![9; 4], EventType::ApplicationEvent(1).to_u8());
+        let ev2 = Event::new(vec![7; 1], EventType::ApplicationEvent(1).to_u8());
+
+        // Archive both so we know their exact on‐disk frame sizes:
+        let framed1 = archive(&ev1);
+        let framed2 = archive(&ev2);
+
+        // page_size must hold the *entire* first frame
+        let page_size = framed1.len().max(framed2.len());
         let cfg = SegmentConfig {
-            page_size: 4,
-            pages_per_segment: 10,
-            prefix: dir.path().display().to_string(),
+            page_size,
+            pages_per_segment: 2,
+            prefix: "test".into(),
+            lmdb_env_path: tmp.path().to_string_lossy().into(),
         };
+
+        // Send them
         let (tx, rx) = channel::unbounded::<Vec<u8>>();
-        // send exactly 4-byte event
-        tx.send(vec![9; 4]).expect("failed_to_unwrap_value");
-        // send 1-byte event to trigger page flush
-        tx.send(vec![7; 1]).expect("failed_to_unwrap_value");
+        tx.send(framed1.clone()).expect("failed_to_unwrap");
+        tx.send(framed2.clone()).expect("failed_to_unwrap");
         drop(tx);
-        run_writer_loop(rx, cfg.clone());
-        // read the file seg_id 0
-        let fname = format!("{}-0000.seg", cfg.prefix);
-        let mut f = OpenOptions::new()
-            .read(true)
-            .open(&fname)
-            .expect("failed_to_unwrap_value");
-        let mut buf = Vec::new();
-        f.read_to_end(&mut buf).expect("failed_to_unwrap_value");
-        assert_eq!(&buf[0..4], &[9, 9, 9, 9]);
-        assert_eq!(buf[4], 7);
+
+        // Run the writer
+        run_writer_loop(&arc_env, rx, cfg.clone());
+
+        // Read back segment 0
+        let buf0 = std::fs::read(format!("{}-0000.seg", cfg.prefix)).expect("failed_to_unwrap");
+
+        // Page 0: slice out the first `page_size` bytes
+        {
+            let slice = &buf0[0..cfg.page_size];
+            let (_hdr, archived) = format::unarchive(slice);
+            assert_eq!(archived.data.as_slice(), &[9; 4]);
+        }
+
+        // Page 1: slice the *next* `page_size` bytes
+        {
+            let start = cfg.page_size;
+            let slice = &buf0[start..start + cfg.page_size];
+            let (_hdr, archived) = format::unarchive(slice);
+            assert_eq!(archived.data.as_slice(), &[7]);
+        }
     }
 
-    /// test run_writer_loop segment rollover
+    /// Test that after PAGES_PER_SEGMENT pages you roll into segment_0001.seg
     #[test]
     fn test_run_writer_loop_segment_rollover() {
-        let dir = tempdir().expect("failed_to_unwrap_value");
+        initialize();
+
+        // Make a temp dir for LMDB + segment files:
+        let tmp = tempdir().expect("failed_to_unwrap");
+        let arc_env = Arc::new(Mutex::new(
+            LmdbEnv::new(tmp.path().to_str().expect("failed_to_unwrap")).expect("failed_to_unwrap"),
+        ));
+
+        // Build four events up front so we can see how big each framed message is:
+        let payload_len = 2;
+        let evs: Vec<_> = (1u8..=4)
+            .map(|v| Event::new(vec![v; payload_len], EventType::ApplicationEvent(1).to_u8()))
+            .collect();
+        // Archive the *first* one to measure frame size (they'll all be roughly the same):
+        let first_framed = archive(&evs[0]);
+        let second_framed = archive(&evs[1]);
+        let page_size = first_framed.len().max(second_framed.len()); // exact bytes needed
+        let pages_per_segment = 2; // rollover after 2 pages
+
         let cfg = SegmentConfig {
-            page_size: 2,
-            pages_per_segment: 2,
-            prefix: dir.path().display().to_string(),
+            page_size,
+            pages_per_segment,
+            prefix: "test-rollover".into(),
+            lmdb_env_path: tmp.path().to_string_lossy().into(),
         };
-        let (tx, rx) = channel::unbounded::<Vec<u8>>();
-        // will produce 4 events -> roll after 2 pages
-        tx.send(vec![1; 2]).expect("failed_to_unwrap_value");
-        tx.send(vec![2; 2]).expect("failed_to_unwrap_value");
-        tx.send(vec![3; 2]).expect("failed_to_unwrap_value");
-        tx.send(vec![4; 2]).expect("failed_to_unwrap_value");
+
+        // Send all four framed events into the writer:
+        let (tx, rx) = channel::unbounded();
+        for ev in &evs {
+            let f = archive(ev);
+            assert_eq!(f.len(), page_size, "expected uniform frame size");
+            tx.send(f).expect("failed_to_unwrap");
+        }
         drop(tx);
-        run_writer_loop(rx, cfg.clone());
-        // seg 0 should have events 1 & 2 in pages 0 & 1
-        let f0 = format!("{}-0000.seg", cfg.prefix);
-        let mut f = OpenOptions::new()
-            .read(true)
-            .open(&f0)
-            .expect("failed_to_unwrap_value");
-        let mut buf = Vec::new();
-        f.read_to_end(&mut buf).expect("failed_to_unwrap_value");
-        assert_eq!(&buf[0..2], &[1, 1]);
-        assert_eq!(&buf[2..4], &[2, 2]);
-        // seg 1 should have events 3 & 4
-        let f1 = format!("{}-0001.seg", cfg.prefix);
-        let mut f = OpenOptions::new()
-            .read(true)
-            .open(&f1)
-            .expect("failed_to_unwrap_value");
-        let mut buf = Vec::new();
-        f.read_to_end(&mut buf).expect("failed_to_unwrap_value");
-        assert_eq!(&buf[0..2], &[3, 3]);
-        assert_eq!(&buf[2..4], &[4, 4]);
+
+        run_writer_loop(&arc_env, rx, cfg.clone());
+
+        // Helper to read & unarchive one page
+        fn assert_page(cfg: &SegmentConfig, seg: usize, page_idx: usize, expected_byte: u8) {
+            let path = format!("{}-{:04}.seg", cfg.prefix, seg);
+            let buf = std::fs::read(&path).expect("failed_to_unwrap");
+            let start = page_idx * cfg.page_size;
+            let slice = &buf[start..start + cfg.page_size];
+            let (_hdr, archived) = format::unarchive(slice);
+            // raw payload is `vec![expected_byte; payload_len]`
+            let data = archived.data.as_slice();
+            assert!(
+                data.iter().all(|&b| b == expected_byte),
+                "segment {} page {} had {:?}, expected all {}",
+                seg,
+                page_idx,
+                data,
+                expected_byte
+            );
+        }
+
+        // Pages 0&1 → segment_0000; Pages 2&3 → segment_0001
+        assert_page(&cfg, 0, 0, 1);
+        assert_page(&cfg, 0, 1, 2);
+
+        assert_page(&cfg, 1, 0, 3);
+        assert_page(&cfg, 1, 1, 4);
     }
 }

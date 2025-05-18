@@ -5,6 +5,12 @@ version = 1                                                                    #
 name = "xaeroflux"                                                             # Name of this node
 description = "A distributed event processing node for the XaeroFlux network."
 
+[threads]
+num_worker_threads = 4
+pin_threads = true
+num_io_threads = 2
+max_queue_size = 1024
+
 # ————————————————————————————
 # Append-Only File (AOF) settings
 # ————————————————————————————
@@ -40,9 +46,10 @@ buffer_size = 16384
 [aof.threads]
 # how many worker threads to spawn
 num_worker_threads = 4
+pin_threads = true
+num_io_threads = 2
+max_queue_size = 1024
 
-# whether to pin those threads to OS cores
-pin_threads = false
 
 # Where on disk to store your RocksDB data, WALs, and Merkle files.
 [storage]
@@ -89,10 +96,6 @@ capacity = 512
 batch_size = 32
 timeout_ms = 200
 
-# Thread‑pool / event‑loop tuning
-[threads]
-num_worker_threads = 4 # e.g. one per major subsystem
-pin_threads = true     # bind each thread to its own core
 
 # Logging / diagnostics
 [logging]

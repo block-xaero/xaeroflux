@@ -1,3 +1,5 @@
+*seg
+xaeroflux/*
 # Rust build artifacts
 /target/
 **/*.rs.bk

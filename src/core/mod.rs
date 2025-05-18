@@ -1,5 +1,6 @@
-use std::{any::Any, fmt::Debug, sync::OnceLock};
+use std::{any::Any, env, fmt::Debug, sync::OnceLock};
 
+use config::Config;
 use rkyv::{
     Archive,
     bytecheck::CheckBytes,
@@ -8,16 +9,16 @@ use rkyv::{
     util::AlignedVec,
     validation::{Validator, archive::ArchiveValidator, shared::SharedValidator},
 };
-#[cfg(not(test))]
-use size::init;
+
 pub mod aof;
 pub mod config;
 pub mod date_time;
 pub mod event;
 pub mod listeners;
+pub mod meta;
 pub mod size;
-
 use figlet_rs::FIGfont;
+use threadpool::ThreadPool;
 use tracing::info;
 
 use crate::logs::init_logging;
@@ -27,13 +28,43 @@ pub trait XaeroData: Any + Send + Sync + Clone + Debug {}
 impl<T> XaeroData for T where T: Any + Send + Sync + Clone + Debug {}
 pub static CONF: OnceLock<config::Config> = OnceLock::new();
 
+pub static DISPATCHER_POOL: OnceLock<ThreadPool> = OnceLock::new();
+pub static IO_POOL: OnceLock<ThreadPool> = OnceLock::new();
+
+pub fn init_global_dispatcher_pool() {
+    DISPATCHER_POOL.get_or_init(|| {
+        let conf = CONF.get_or_init(Config::default);
+        let no_of_worker_threads = conf.threads.num_worker_threads.max(1);
+
+        ThreadPool::new(no_of_worker_threads)
+    });
+}
+
+pub fn init_global_io_pool() {
+    IO_POOL.get_or_init(|| {
+        let conf = CONF.get_or_init(Config::default);
+        let num_io_threads = conf.threads.num_io_threads.max(1);
+
+        ThreadPool::new(num_io_threads)
+    });
+}
+
 /// Initialize the XaeroFlux core components here.
 pub fn initialize() {
     #[cfg(not(test))]
-    init(); // Initialize the size module
+    crate::core::size::init(); // Initialize the size module
+    crate::core::size::init();
+    let project_root = env!("CARGO_MANIFEST_DIR");
+    let cfg_path = format!("{}/xaeroflux.toml", project_root);
+    unsafe { env::set_var("XAERO_CONFIG", &cfg_path) };
+    let config = load_config();
+    if config.name != "xaeroflux" {
+        panic!("Invalid config file. Expected 'xaeroflux'.");
+    }
+    init_global_dispatcher_pool();
+    init_global_io_pool();
     init_logging(); // Initialize the logging system
     show_banner();
-    load_config();
     info!("XaeroFlux initialized");
 }
 
@@ -113,7 +144,6 @@ mod tests {
     #[test]
     fn test_xaero_data() {
         initialize();
-
         #[derive(Archive, Serialize, Deserialize, Debug, Clone, Default)]
         struct TestData {
             id: u32,
