@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
+    
       # Cache the Cargo registry to speed up dependency fetching.
       - name: Cache Cargo registry
         uses: actions/cache@v3
@@ -51,7 +51,14 @@ jobs:
         with:
           path: target
           key: ${{ runner.os }}-cargo-target-${{ hashFiles('**/Cargo.lock') }}
-
+      # Install nightly + clippy for the build job
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: nightly
+          override: true
+          components: clippy
       - name: Build
         run: cargo build --verbose
 
