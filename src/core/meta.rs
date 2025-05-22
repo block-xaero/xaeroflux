@@ -1,16 +1,16 @@
 use bytemuck::{Pod, Zeroable};
 use rkyv::{Archive, Deserialize, Serialize};
 
-#[repr(C)]
-#[derive(Debug, Clone, Archive, Serialize, Deserialize, Default)]
-#[rkyv(derive(Debug))]
-#[derive(Copy)]
+#[repr(C, packed)]
+#[derive(Debug, Clone, Default, Copy)]
 pub struct SegmentMeta {
     pub page_index: usize,
     pub segment_index: usize,
     pub write_pos: usize,
     pub byte_offset: usize,
     pub latest_segment_id: usize,
+    pub ts_start: u64, // Timestamp of the first event in this segment
+    pub ts_end: u64,   // Timestamp of the last event in this segment
 }
 
 unsafe impl Zeroable for SegmentMeta {}
@@ -35,10 +35,8 @@ pub struct ReaderCursor {
 unsafe impl Zeroable for ReaderCursor {}
 unsafe impl Pod for ReaderCursor {}
 
-#[repr(C)]
-#[derive(Debug, Clone, Archive, Serialize, Deserialize, Default)]
-#[rkyv(derive(Debug))]
-#[derive(Copy)]
+#[repr(C, packed)]
+#[derive(Debug, Clone, Default, Copy)]
 pub struct MMRMeta {
     pub root_hash: [u8; 32], // Replace String with a fixed-size array to make it Copy
     pub peaks_count: usize,

@@ -13,6 +13,7 @@ use std::{
     thread::JoinHandle,
 };
 
+use bytemuck::{Pod, Zeroable};
 use crossbeam::channel::{Receiver, Sender, unbounded};
 use indexing::storage::{
     actors::{mmr_actor::MmrIndexingActor, segment_writer_actor::SegmentWriterActor},
@@ -26,6 +27,15 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 fn next_id() -> u64 {
     NEXT_ID.fetch_add(1, Ordering::SeqCst)
 }
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ScanWindow {
+    pub start: u64,
+    pub end: u64,
+}
+unsafe impl Pod for ScanWindow {}
+unsafe impl Zeroable for ScanWindow {}
 
 /// Envelope wrapping an application or system `Event` payload
 /// along with an optional Merkle inclusion proof.
@@ -70,6 +80,7 @@ impl Sink {
 /// Defines per-event pipeline operations.
 #[derive(Clone)]
 pub enum Operator {
+    Scan(Arc<ScanWindow>),
     /// Transform the event into another event.
     Map(Arc<dyn Fn(XaeroEvent) -> XaeroEvent + Send + Sync>),
     /// Keep only events matching the predicate.
@@ -175,6 +186,10 @@ impl Subject {
 
 /// Chainable subject operators without executing them until subscription.
 pub trait SubjectOps {
+    fn scan<F>(self: &Arc<Self>, scan_window: ScanWindow) -> Arc<Self>
+    where
+        F: Fn(XaeroEvent) -> XaeroEvent + Send + Sync + 'static;
+
     /// Transform each event.
     fn map<F>(self: &Arc<Self>, f: F) -> Arc<Self>
     where
@@ -220,6 +235,15 @@ impl SubjectOps for Subject {
     fn blackhole(self: &Arc<Self>) -> Arc<Self> {
         let mut new = (**self).clone();
         new.ops.push(Operator::Blackhole);
+        Arc::new(new)
+    }
+
+    fn scan<F>(self: &Arc<Self>, scan_window: ScanWindow) -> Arc<Self>
+    where
+        F: Fn(XaeroEvent) -> XaeroEvent + Send + Sync + 'static,
+    {
+        let mut new = (**self).clone();
+        new.ops.push(Operator::Scan(Arc::new(scan_window)));
         Arc::new(new)
     }
 }
@@ -268,6 +292,39 @@ impl Materializer for ThreadPoolForSubjectMaterializer {
         let pool = self.pool.clone();
 
         let jh = std::thread::spawn(move || {
+            // before incoming events are starting to come in
+            // we need to funnel in Subject sink with Scan
+            if ops.iter().any(|op| matches!(&op, Operator::Scan(_))) {
+                let scan_window = ops
+                    .iter()
+                    .find_map(|op| {
+                        if let Operator::Scan(w) = op {
+                            Some(w.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .expect("scan_window_not_found");
+                // fail because something is wrong!
+
+                let sw = &scan_window.start.to_be_bytes();
+                let data = bytemuck::bytes_of(sw);
+                use core::event::EventType;
+                // Ensure Replay is imported or defined
+                use core::event::SystemEventKind;
+
+                subject
+                    .sink
+                    .tx
+                    .send(XaeroEvent {
+                        evt: Event::new(
+                            data.to_vec(),
+                            EventType::SystemEvent(SystemEventKind::Replay).to_u8(),
+                        ),
+                        merkle_proof: None,
+                    })
+                    .expect("failed_to_unwrap");
+            }
             for evt in rx.iter() {
                 let h = handler.clone();
                 let pipeline = ops.clone();

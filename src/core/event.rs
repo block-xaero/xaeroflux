@@ -32,6 +32,7 @@ pub enum SystemEventKind {
     Resume,
     Shutdown,
     Restart,
+    Replay, // Replay is a special event that is used to replay the event log
 }
 
 impl EventType {
@@ -48,8 +49,9 @@ impl EventType {
             4 => EventType::SystemEvent(SystemEventKind::Resume),
             5 => EventType::SystemEvent(SystemEventKind::Shutdown),
             6 => EventType::SystemEvent(SystemEventKind::Restart),
-            7 => EventType::NetworkEvent(value),
-            8 => EventType::StorageEvent(value),
+            7 => EventType::SystemEvent(SystemEventKind::Replay),
+            8 => EventType::NetworkEvent(value),
+            9 => EventType::StorageEvent(value),
             _ => panic!("Invalid event type"),
         }
     }
@@ -63,6 +65,7 @@ impl EventType {
             EventType::SystemEvent(SystemEventKind::Resume) => 4,
             EventType::SystemEvent(SystemEventKind::Shutdown) => 5,
             EventType::SystemEvent(SystemEventKind::Restart) => 6,
+            EventType::SystemEvent(SystemEventKind::Replay) => 7,
             EventType::NetworkEvent(v) => *v,
             EventType::StorageEvent(v) => *v,
             EventType::MetaEvent(v) => META_BASE + *v,

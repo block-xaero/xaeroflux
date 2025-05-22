@@ -112,12 +112,14 @@ mod actor_tests {
     }
 
     fn make_test_store(prefix: String) -> SegmentWriterActor {
+        let tmp = tempdir().expect("failed to create tempdir");
         // small page size so tests finish quickly, 1 page per segment to avoid rollover
         let cfg = SegmentConfig {
             page_size: 32,
             pages_per_segment: 1,
             prefix,
-            lmdb_env_path: "xaeroflux".to_string(),
+            segment_dir: tmp.path().to_string_lossy().into(),
+            lmdb_env_path: tmp.path().to_string_lossy().into(),
         };
         SegmentWriterActor::new_with_config(cfg)
     }
@@ -125,12 +127,8 @@ mod actor_tests {
     #[test]
     fn actor_appends_to_in_memory_mmr() {
         initialize();
-        let path = "xaeroflux";
-        std::fs::create_dir_all(path).expect("couldn't create LMDB dir");
-
         // store config uses small pages; we only care about MMR here
-        let dir = tempdir().expect("failed to create tempdir");
-        let store = make_test_store(dir.path().join("mmr").display().to_string());
+        let store = make_test_store("mmr".to_string());
         let actor = MmrIndexingActor::new(Some(store), None);
 
         // Fire one event

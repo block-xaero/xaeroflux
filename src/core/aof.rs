@@ -5,11 +5,14 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+// use crate::core::event::ArchivedEvent;
+// use rkyv::rancor::Failure;
+// use rkyv::api::high::access;
 use liblmdb::{
     MDB_CREATE, MDB_RDONLY, MDB_RESERVE, MDB_cursor_op_MDB_NEXT, MDB_dbi, MDB_env, MDB_txn,
-    MDB_val, mdb_cursor_get, mdb_cursor_open, mdb_dbi_close, mdb_dbi_open, mdb_env_create,
-    mdb_env_open, mdb_env_set_mapsize, mdb_env_set_maxdbs, mdb_get, mdb_put, mdb_txn_abort,
-    mdb_txn_begin, mdb_txn_commit,
+    MDB_val, mdb_cursor_close, mdb_cursor_get, mdb_cursor_open, mdb_dbi_close, mdb_dbi_open,
+    mdb_env_create, mdb_env_open, mdb_env_set_mapsize, mdb_env_set_maxdbs, mdb_get, mdb_put,
+    mdb_txn_abort, mdb_txn_begin, mdb_txn_commit,
 };
 use rkyv::{rancor::Failure, util::AlignedVec};
 
@@ -17,6 +20,12 @@ use crate::{
     core::event::{Event, EventType},
     indexing::hash::sha_256,
 };
+pub const AOF_DB: i32 = 0;
+pub const META_DB: i32 = 1;
+pub enum DBI {
+    AOF = 0,
+    META = 1,
+}
 
 pub struct AOFActor {
     pub env: Arc<Mutex<LmdbEnv>>,
@@ -150,7 +159,7 @@ impl Drop for LmdbEnv {
 
 use bytemuck::{Pod, Zeroable};
 
-use super::{CONF, initialize, listeners::EventListener};
+use super::{CONF, initialize, listeners::EventListener, meta::SegmentMeta};
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -174,12 +183,15 @@ impl Debug for EventKey {
     }
 }
 
-/// Scan all events whose 8-byte big-endian timestamp prefix is in [start_ms, end_ms).
+/// Scans all archived events in the AOF database whose timestamp prefix
+/// (the first 8 bytes of the key) falls in `[start_ms, end_ms)`.
+///
+/// The keys in AOF DB are 8-byte big-endian `ts` ‖ 1-byte `kind` ‖ 32-byte hash.
 /// ## Safety
 /// This function is unsafe because it directly interacts with the LMDB C API.
 /// It assumes that the environment is already created and opened.
 /// It also assumes that the database is already opened.
-pub unsafe fn scan_day(
+pub unsafe fn scan_range(
     env: &Arc<Mutex<LmdbEnv>>,
     start_ms: u64,
     end_ms: u64,
@@ -251,20 +263,23 @@ pub unsafe fn scan_day(
             }
         }
         // 8) Cleanup
+        mdb_cursor_close(cursor);
         mdb_txn_abort(rtxn); // read-only txn: abort is OK
         Ok(results)
     }
 }
 
-/// pushes an event to the LMDB database.
-/// The event is serialized using the `rkyv` crate.
-/// The event is stored in the first database (aof).
-/// The event key is a combination of the event timestamp, event type, and a hash of the event data.
-/// The event value is the serialized event data.
-/// This is ZERO COPY, aligned vec, so no copying of the data is done.
-/// Event key is a Pod struct, so it is also zero copy.
-/// NOTE: Actual event data is not stored in the database. it is stored in the target file system
-/// chunk by chunk.
+/// Pushes an event into the LMDB AOF or META database.
+///
+/// For `MetaEvent(1)` (segment metadata), the meta is stored under two keys:
+/// 1. A composite 16-byte binary key: `[ts_start (8 bytes BE) ‖ segment_index (8 bytes BE)]`,
+///    allowing cursor range scans to retrieve all segment metas in timestamp order.
+/// 2. A static key `"segment_meta"`, which is overwritten on each push, enabling a fast single-key
+///    lookup via `get_meta_val(b"segment_meta")` for the latest meta.
+///
+/// For `MetaEvent(2)` (MMR metadata), the meta is stored under the static key `"mmr_meta"`.
+///
+/// Application events use a zero-copy `EventKey` (ts + kind + hash) in the AOF DB.
 pub fn push_event(
     arc_env: &Arc<Mutex<LmdbEnv>>,
     event: &Event<Vec<u8>>,
@@ -276,44 +291,221 @@ pub fn push_event(
         if sc_tx_begin != 0 {
             return Err(Box::new(std::io::Error::from_raw_os_error(sc_tx_begin)));
         }
-        let dbi = match event.event_type {
-            EventType::MetaEvent(_) => env.dbis[1],
-            _ => env.dbis[0],
-        };
-        let key = generate_key(event)?;
-        let key_bytes: &[u8] = bytemuck::bytes_of(&key);
-        let meta_key = match event.event_type {
-            EventType::MetaEvent(1) => Some("segment_meta".as_bytes()),
-            EventType::MetaEvent(2) => Some("mmr_meta".as_bytes()),
-            _ => None,
-        };
-        let mdb_key = match meta_key {
-            Some(mk) => &mut MDB_val {
-                mv_size: mk.len(),
-                mv_data: mk.as_ptr() as *mut libc::c_void,
-            },
-            None => &mut MDB_val {
+        // handle segment_meta events specially
+        if let EventType::MetaEvent(1) = event.event_type {
+            // 1) Composite entry: raw SegmentMeta bytes under composite key
+            let sm: &SegmentMeta = bytemuck::from_bytes(&event.data);
+            let mut key_buf = [0u8; 16];
+            key_buf[..8].copy_from_slice(&sm.ts_start.to_be_bytes());
+            key_buf[8..16].copy_from_slice(&(sm.segment_index as u64).to_be_bytes());
+            let mut key_val = MDB_val {
+                mv_size: key_buf.len(),
+                mv_data: key_buf.as_ptr() as *mut libc::c_void,
+            };
+            let raw_bytes = &event.data;
+            let mut data_val = MDB_val {
+                mv_size: raw_bytes.len(),
+                mv_data: std::ptr::null_mut(),
+            };
+            let sc = mdb_put(
+                txn,
+                env.dbis[META_DB as usize],
+                &mut key_val,
+                &mut data_val,
+                MDB_RESERVE,
+            );
+            if sc != 0 {
+                return Err(Box::new(std::io::Error::from_raw_os_error(sc)));
+            }
+            std::ptr::copy_nonoverlapping(
+                raw_bytes.as_ptr(),
+                data_val.mv_data.cast(),
+                raw_bytes.len(),
+            );
+
+            // 2) Static entry: raw SegmentMeta bytes under "segment_meta"
+            let static_key = b"segment_meta";
+            let mut static_key_val = MDB_val {
+                mv_size: static_key.len(),
+                mv_data: static_key.as_ptr() as *mut libc::c_void,
+            };
+            let mut static_val = MDB_val {
+                mv_size: raw_bytes.len(),
+                mv_data: std::ptr::null_mut(),
+            };
+            let sc2 = mdb_put(
+                txn,
+                env.dbis[META_DB as usize],
+                &mut static_key_val,
+                &mut static_val,
+                MDB_RESERVE,
+            );
+            if sc2 != 0 {
+                return Err(Box::new(std::io::Error::from_raw_os_error(sc2)));
+            }
+            std::ptr::copy_nonoverlapping(
+                raw_bytes.as_ptr(),
+                static_val.mv_data.cast(),
+                raw_bytes.len(),
+            );
+        } else if let EventType::MetaEvent(2) = event.event_type {
+            // Static entry: raw MMRMeta bytes under "mmr_meta"
+            let static_key = b"mmr_meta";
+            let mut key_val = MDB_val {
+                mv_size: static_key.len(),
+                mv_data: static_key.as_ptr() as *mut libc::c_void,
+            };
+            let raw_bytes = &event.data;
+            let mut data_val = MDB_val {
+                mv_size: raw_bytes.len(),
+                mv_data: std::ptr::null_mut(),
+            };
+            let sc = mdb_put(
+                txn,
+                env.dbis[META_DB as usize],
+                &mut key_val,
+                &mut data_val,
+                MDB_RESERVE,
+            );
+            if sc != 0 {
+                return Err(Box::new(std::io::Error::from_raw_os_error(sc)));
+            }
+            std::ptr::copy_nonoverlapping(
+                raw_bytes.as_ptr(),
+                data_val.mv_data.cast(),
+                raw_bytes.len(),
+            );
+        } else {
+            // application event: existing path
+            let key = generate_key(event)?;
+            let key_bytes: &[u8] = bytemuck::bytes_of(&key);
+            let mut key_val = MDB_val {
                 mv_size: key_bytes.len(),
                 mv_data: key_bytes.as_ptr() as *mut libc::c_void,
-            },
-        };
-        let value = generate_value(event)?;
-        let mut data_val = MDB_val {
-            mv_size: value.len(),
-            mv_data: std::ptr::null_mut(),
-        };
-        let sc_mdb_put = mdb_put(txn, dbi, mdb_key, &mut data_val, MDB_RESERVE);
-        if sc_mdb_put != 0 {
-            return Err(Box::new(std::io::Error::from_raw_os_error(sc_mdb_put)));
+            };
+            let value = generate_value(event)?;
+            let mut data_val = MDB_val {
+                mv_size: value.len(),
+                mv_data: std::ptr::null_mut(),
+            };
+            let sc = mdb_put(
+                txn,
+                env.dbis[AOF_DB as usize],
+                &mut key_val,
+                &mut data_val,
+                MDB_RESERVE,
+            );
+            if sc != 0 {
+                return Err(Box::new(std::io::Error::from_raw_os_error(sc)));
+            }
+            std::ptr::copy_nonoverlapping(value.as_ptr(), data_val.mv_data.cast(), value.len());
         }
-        std::ptr::copy_nonoverlapping(value.as_ptr(), data_val.mv_data.cast(), value.len());
-        tracing::info!("Pushed event to LMDB: {:?}", key);
+        tracing::info!("Pushed event to LMDB: {:?}", event.event_type);
         let sc_tx_commit = mdb_txn_commit(txn);
         if sc_tx_commit != 0 {
             return Err(Box::new(std::io::Error::from_raw_os_error(sc_tx_commit)));
         }
     }
     Ok(())
+}
+
+/// Reads all `SegmentMeta` entries from the META_DB whose composite key
+/// `[ts_start (8 bytes BE) ‖ segment_index (8 bytes BE)]` is in `[start, end)`.
+///
+/// Returns a `Vec<SegmentMeta>` in ascending `ts_start` order.
+pub fn iterate_segment_meta_by_range(
+    env: &Arc<Mutex<LmdbEnv>>,
+    start: u64,
+    end: Option<u64>,
+) -> Result<Vec<SegmentMeta>, Box<dyn std::error::Error>> {
+    use liblmdb::MDB_cursor_op_MDB_NEXT;
+    let mut results = Vec::<SegmentMeta>::new();
+    let g = env.lock().expect("failed to lock env");
+    let env = g.env;
+    unsafe {
+        // 1) Begin a read txn
+        let mut rtxn: *mut MDB_txn = std::ptr::null_mut();
+        let sc_tx_begin = mdb_txn_begin(env, std::ptr::null_mut(), MDB_RDONLY, &mut rtxn);
+        if sc_tx_begin != 0 {
+            return Err(format!("Failed to begin read txn: {}", sc_tx_begin).into());
+        }
+        // 2) Open a cursor on that DB (should be meta DB, index 1)
+        let mut cursor = std::ptr::null_mut();
+        let sc_cursor_open = mdb_cursor_open(rtxn, g.dbis[1], &mut cursor);
+        if sc_cursor_open != 0 {
+            mdb_txn_abort(rtxn);
+            return Err(format!("Failed to open cursor: {}", sc_cursor_open).into());
+        }
+        // 3) Build the start key MDB_val
+        // key: [ ts_start (8) ‖ segment_index (8) ]
+        let mut start_key = [0u8; 16]; // 8 for start ts, 8 for end and then zero for seg_id
+        start_key[..8].copy_from_slice(&start.to_be_bytes());
+        // The rest is already zeroed by the array initialization
+
+        // the rest of the key (kind + seq) can be left as zero
+        let mut key_val = MDB_val {
+            mv_size: start_key.len(),
+            mv_data: start_key.as_ptr() as *mut _,
+        };
+        // empty MDB_val for the value
+        let mut data_val = MDB_val {
+            mv_size: 0,
+            mv_data: std::ptr::null_mut(),
+        };
+
+        // 4) Position to first key ≥ start_key
+        let rc = mdb_cursor_get(
+            cursor,
+            &mut key_val,
+            &mut data_val,
+            liblmdb::MDB_cursor_op_MDB_SET_RANGE,
+        );
+        if rc != 0 {
+            // MDB_NOTFOUND or error: no items ≥ start_key
+            mdb_txn_abort(rtxn);
+            return Ok(results);
+        }
+
+        loop {
+            // skip static or non-composite keys (we only want 16-byte ts_start‖segment_index keys)
+            if key_val.mv_size != 16 {
+                // advance cursor and continue
+                let rc_skip =
+                    mdb_cursor_get(cursor, &mut key_val, &mut data_val, MDB_cursor_op_MDB_NEXT);
+                if rc_skip != 0 {
+                    break; // no more entries
+                }
+                continue;
+            }
+            // 5) Extract the timestamp prefix from key_val.mv_data
+            let raw_key = std::slice::from_raw_parts(key_val.mv_data as *const u8, key_val.mv_size);
+            let ts = u64::from_be_bytes(raw_key[0..8].try_into().expect("failed to unravel"));
+            if let Some(e) = end {
+                // for start=0, include ts == end; otherwise treat end as exclusive
+                let should_break = if start == 0 { ts > e } else { ts >= e };
+                if should_break {
+                    break;
+                }
+            }
+
+            // 6) Directly parse raw SegmentMeta bytes (packed struct allows unaligned)
+            let data_slice =
+                std::slice::from_raw_parts(data_val.mv_data as *const u8, data_val.mv_size);
+            let sm: &SegmentMeta = bytemuck::from_bytes(data_slice);
+            results.push(*sm);
+
+            // 7) Advance the cursor
+            let rc = mdb_cursor_get(cursor, &mut key_val, &mut data_val, MDB_cursor_op_MDB_NEXT);
+            if rc != 0 {
+                // MDB_NOTFOUND = end of DB, or real error
+                break;
+            }
+        }
+        // 8) Cleanup
+        mdb_cursor_close(cursor);
+        mdb_txn_abort(rtxn); // read-only txn: abort is OK
+    }
+    Ok(results)
 }
 
 /// Shortcut to get the meta value from the LMDB database.
@@ -388,7 +580,7 @@ mod tests {
 
     use super::*;
     use crate::core::{
-        date_time::{MS_PER_DAY, day_bounds_from_epoch_ms},
+        date_time::{MS_PER_DAY, day_bounds_from_epoch_ms, emit_secs},
         event::{ArchivedEvent, EventType},
         initialize,
         meta::{MMRMeta, SegmentMeta},
@@ -468,7 +660,7 @@ mod tests {
         // compute current day bounds
         let (start, end) = day_bounds_from_epoch_ms(e1.ts);
         // scan today: should see at least 2
-        let bufs = unsafe { scan_day(&arc_env, start, end).expect("failed to unravel") };
+        let bufs = unsafe { scan_range(&arc_env, start, end).expect("failed to unravel") };
         assert!(bufs.len() >= 2, "expected >=2 events, got {}", bufs.len());
         // roundtrip them
         let events: Vec<&ArchivedEvent<Vec<u8>>> = bufs
@@ -484,8 +676,9 @@ mod tests {
         // scan next day: should be empty
         let tomorrow_start = end;
         let tomorrow_end = tomorrow_start + MS_PER_DAY;
-        let bufs2 =
-            unsafe { scan_day(&arc_env, tomorrow_start, tomorrow_end).expect("failed to unravel") };
+        let bufs2 = unsafe {
+            scan_range(&arc_env, tomorrow_start, tomorrow_end).expect("failed to unravel")
+        };
         assert_eq!(bufs2.len(), 0, "expected 0 events, got {}", bufs2.len());
     }
 
@@ -520,6 +713,8 @@ mod tests {
             write_pos: 128,
             byte_offset: 256,
             latest_segment_id: 3,
+            ts_start: emit_secs(),
+            ts_end: emit_secs(),
         };
         let meta2 = SegmentMeta {
             page_index: 5,
@@ -527,6 +722,8 @@ mod tests {
             write_pos: 512,
             byte_offset: 1024,
             latest_segment_id: 7,
+            ts_start: emit_secs(),
+            ts_end: emit_secs(),
         };
         // wrap into Event<Vec<u8>>
         let bytes1 = bytemuck::bytes_of(&meta1).to_vec();
@@ -534,30 +731,44 @@ mod tests {
         push_event(&arc_env, &ev1).expect("failed_to_unwrap");
         // read back
         let raw1 = unsafe { get_meta_val(&arc_env, b"segment_meta") };
-        let archived_ev1 = rkyv::api::high::access::<ArchivedEvent<Vec<u8>>, Failure>(&raw1)
-            .expect("failed_to_unwrap");
-        let data1 = &archived_ev1.data;
-        let got1: &SegmentMeta = bytemuck::from_bytes(data1);
-        assert_eq!(got1.page_index, meta1.page_index);
-        assert_eq!(got1.byte_offset, meta1.byte_offset);
-        assert_eq!(got1.write_pos, meta1.write_pos);
-        assert_eq!(got1.segment_index, meta1.segment_index);
-        assert_eq!(got1.latest_segment_id, meta1.latest_segment_id);
+        let got1: &SegmentMeta = bytemuck::from_bytes(&raw1);
+        let g1_pid = got1.page_index;
+        let m1_pid = meta1.page_index;
+        assert_eq!(g1_pid, m1_pid);
+        let g1_boff = got1.byte_offset;
+        let m1_boff = meta1.byte_offset;
+        assert_eq!(g1_boff, m1_boff);
+        let g1_wpos = got1.write_pos;
+        let m1_wpos = meta1.write_pos;
+        assert_eq!(g1_wpos, m1_wpos);
+        let g1_sid = got1.segment_index;
+        let m1_sid = meta1.segment_index;
+        assert_eq!(g1_sid, m1_sid);
+        let g1_lsid = got1.latest_segment_id;
+        let m1_lsid = meta1.latest_segment_id;
+        assert_eq!(g1_lsid, m1_lsid);
 
         // now overwrite
         let bytes2 = bytemuck::bytes_of(&meta2).to_vec();
         let ev2 = Event::new(bytes2.clone(), EventType::MetaEvent(1).to_u8());
         push_event(&arc_env, &ev2).expect("failed_to_unwrap");
         let raw2 = unsafe { get_meta_val(&arc_env, b"segment_meta") };
-        let archived_ev2 = rkyv::api::high::access::<ArchivedEvent<Vec<u8>>, Failure>(&raw2)
-            .expect("failed_to_unwrap");
-        let data2 = &archived_ev2.data;
-        let got2: &SegmentMeta = bytemuck::from_bytes(data2);
-        assert_eq!(got2.page_index, meta2.page_index);
-        assert_eq!(got2.byte_offset, meta2.byte_offset);
-        assert_eq!(got2.write_pos, meta2.write_pos);
-        assert_eq!(got2.segment_index, meta2.segment_index);
-        assert_eq!(got2.latest_segment_id, meta2.latest_segment_id);
+        let got2: &SegmentMeta = bytemuck::from_bytes(&raw2);
+        let g2_pid = got2.page_index;
+        let m2_pid = meta2.page_index;
+        assert_eq!(g2_pid, m2_pid);
+        let g2_boff = got2.byte_offset;
+        let m2_boff = meta2.byte_offset;
+        assert_eq!(g2_boff, m2_boff);
+        let g2_wpos = got2.write_pos;
+        let m2_wpos = meta2.write_pos;
+        assert_eq!(g2_wpos, m2_wpos);
+        let g2_sid = got2.segment_index;
+        let m2_sid = meta2.segment_index;
+        assert_eq!(g2_sid, m2_sid);
+        let g2_lsid = got2.latest_segment_id;
+        let m2_lsid = meta2.latest_segment_id;
+        assert_eq!(g2_lsid, m2_lsid);
     }
 
     #[test]
@@ -573,6 +784,8 @@ mod tests {
             write_pos: 2048,
             byte_offset: 4096,
             latest_segment_id: 10,
+            ts_start: emit_secs(),
+            ts_end: emit_secs(),
         };
         let mmr_meta = MMRMeta {
             root_hash: sha_256::<String>(&"deadbeef".to_string()),
@@ -580,20 +793,116 @@ mod tests {
             leaf_count: 16,
             segment_meta: seg_meta,
         };
-        let meta_bytes = rkyv::to_bytes::<Failure>(&mmr_meta)
-            .expect("failed_to_unwrap")
-            .to_vec();
-        let ev = Event::new(meta_bytes.clone(), EventType::MetaEvent(2).to_u8());
+        let meta_bytes = bytemuck::bytes_of(&mmr_meta);
+        let ev = Event::new(meta_bytes.to_vec(), EventType::MetaEvent(2).to_u8());
         push_event(&arc_env, &ev).expect("failed_to_unwrap");
         let raw = unsafe { get_meta_val(&arc_env, b"mmr_meta") };
-        let archived_ev = rkyv::api::high::access::<ArchivedEvent<Vec<u8>>, Failure>(&raw)
-            .expect("failed_to_unwrap");
-        let data = &archived_ev.data;
-        let got_meta: MMRMeta =
-            rkyv::from_bytes::<MMRMeta, Failure>(data).expect("failed_to_unwrap");
+        let got_meta: &MMRMeta = bytemuck::from_bytes::<MMRMeta>(raw.as_slice());
         assert_eq!(got_meta.root_hash, mmr_meta.root_hash);
-        assert_eq!(got_meta.peaks_count, mmr_meta.peaks_count);
-        assert_eq!(got_meta.leaf_count, mmr_meta.leaf_count);
-        assert_eq!(got_meta.segment_meta.page_index, seg_meta.page_index);
+        let got_peaks_count = got_meta.peaks_count;
+        let mmr_peaks_count = mmr_meta.peaks_count;
+        assert_eq!(got_peaks_count, mmr_peaks_count);
+        let got_leaf_count = got_meta.leaf_count;
+        let mmr_leaf_count = mmr_meta.leaf_count;
+        assert_eq!(got_leaf_count, mmr_leaf_count);
+        let got_page_index = got_meta.segment_meta.page_index;
+        let sm_pid = seg_meta.page_index;
+        assert_eq!(got_page_index, sm_pid);
+    }
+
+    use std::sync::{Arc, Mutex};
+
+    use crate::core::event::Event;
+
+    fn make_meta(ts_start: u64, ts_end: u64, idx: usize) -> SegmentMeta {
+        SegmentMeta {
+            page_index: idx * 10,
+            segment_index: idx,
+            write_pos: idx * 100,
+            byte_offset: idx * 1000,
+            latest_segment_id: idx,
+            ts_start,
+            ts_end,
+        }
+    }
+
+    #[test]
+    fn empty_db_returns_empty() {
+        initialize();
+        let dir = tempdir().unwrap();
+        let env = Arc::new(Mutex::new(
+            LmdbEnv::new(dir.path().to_str().unwrap()).unwrap(),
+        ));
+
+        // no metas inserted yet
+        let all = iterate_segment_meta_by_range(&env, 0, None).unwrap();
+        assert!(all.is_empty());
+    }
+
+    #[test]
+    fn single_meta_roundtrip() {
+        initialize();
+        let dir = tempdir().unwrap();
+        let env = Arc::new(Mutex::new(
+            LmdbEnv::new(dir.path().to_str().unwrap()).unwrap(),
+        ));
+
+        // push one meta at ts = now
+        let ts = emit_secs();
+        let meta = make_meta(ts, ts + 5, 42);
+        let bytes = bytemuck::bytes_of(&meta).to_vec();
+        let ev = Event::new(bytes, EventType::MetaEvent(1).to_u8());
+        push_event(&env, &ev).unwrap();
+
+        // open‐ended scan from 0 should return it
+        let all = iterate_segment_meta_by_range(&env, 0, None).unwrap();
+        assert_eq!(all.len(), 1);
+        let sid = all[0].segment_index;
+        assert_eq!(sid, 42);
+
+        // scan starting _after_ ts should drop it
+        let none = iterate_segment_meta_by_range(&env, ts + 1, None).unwrap();
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn multiple_meta_filter_and_ordering() {
+        initialize();
+        let dir = tempdir().unwrap();
+        let env = Arc::new(Mutex::new(
+            LmdbEnv::new(dir.path().to_str().unwrap()).unwrap(),
+        ));
+
+        // create three metas at t=10,20,30
+        let m0 = make_meta(10, 15, 0);
+        let m1 = make_meta(20, 25, 1);
+        let m2 = make_meta(30, 35, 2);
+
+        for meta in &[m0, m1, m2] {
+            let bytes = bytemuck::bytes_of(meta).to_vec();
+            let ev = Event::new(bytes, EventType::MetaEvent(1).to_u8());
+            push_event(&env, &ev).unwrap();
+        }
+
+        // scan [0..] returns all three, in timestamp order
+        let all = iterate_segment_meta_by_range(&env, 0, None).unwrap();
+        assert_eq!(all.len(), 3);
+        assert_eq!(all.iter().map(|m| m.ts_start).collect::<Vec<_>>(), vec![
+            10, 20, 30
+        ]);
+
+        // scan [15..30] should return m1 only (m0 ends at 15 but we filter on start >15)
+        let mid = iterate_segment_meta_by_range(&env, 15, Some(30)).unwrap();
+        assert_eq!(mid.len(), 1);
+        let mid_idx = mid[0].segment_index;
+        assert_eq!(mid_idx, 1);
+
+        // scan [0..20] should include m0 and m1 (m1 starts exactly at 20)
+        let upto = iterate_segment_meta_by_range(&env, 0, Some(20)).unwrap();
+        assert_eq!(upto.len(), 2);
+        assert_eq!(
+            upto.iter().map(|m| m.segment_index).collect::<Vec<_>>(),
+            vec![0, 1]
+        );
     }
 }
