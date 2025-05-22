@@ -1,5 +1,6 @@
 use std::{
     fs::OpenOptions,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     thread,
 };
@@ -9,7 +10,8 @@ use memmap2::MmapMut;
 
 use crate::{
     core::{
-        aof::{LmdbEnv, push_event},
+        aof::{LmdbEnv, iterate_segment_meta_by_range, push_event},
+        date_time::{day_bounds_from_epoch_ms, emit_secs},
         event::{Event, EventType},
         listeners::EventListener,
         meta::SegmentMeta,
@@ -24,6 +26,7 @@ pub struct SegmentConfig {
     pub page_size: usize,
     pub pages_per_segment: usize,
     pub prefix: String,
+    pub segment_dir: String,
     pub lmdb_env_path: String,
 }
 
@@ -34,8 +37,9 @@ impl Default for SegmentConfig {
         Self {
             page_size,
             pages_per_segment,
-            prefix: "xaeroflux".into(),
-            lmdb_env_path: "xaeroflux-aof".into(),
+            prefix: "xf".into(),
+            lmdb_env_path: "xf-aof".into(),
+            segment_dir: "xf-segments".into(),
         }
     }
 }
@@ -103,17 +107,35 @@ fn run_writer_loop(meta_db: &Arc<Mutex<LmdbEnv>>, rx: Receiver<Vec<u8>>, config:
     let page_size = config.page_size;
     let segment_bytes = (config.pages_per_segment * page_size) as u64;
 
-    // initial state
-    let mut page_index = 0;
-    let mut write_pos = 0;
+    let (start_of_day, end_of_day) = day_bounds_from_epoch_ms(emit_secs());
+    let segment_meta_iter = iterate_segment_meta_by_range(meta_db, start_of_day, Some(end_of_day))
+        .expect("failed to iterate segment meta");
+    let (mut page_index, mut write_pos, ts_start, mut seg_id) = segment_meta_iter
+        .iter()
+        .map(|seg_meta| {
+            (
+                seg_meta.page_index,
+                seg_meta.write_pos,
+                seg_meta.ts_start,
+                seg_meta.segment_index,
+            )
+        })
+        .max_by_key(|(_, _, ts, _)| *ts)
+        .unwrap_or((0, 0, emit_secs(), 0));
 
-    // calculate segment and page offsets
-    let mut seg_id = page_index / config.pages_per_segment;
+    // initial state
+    // let mut page_index = 0;
+    // let mut write_pos = 0;
+
+    // // calculate segment and page offsets
+    // let mut seg_id = page_index / config.pages_per_segment;
     let mut local_page_idx = page_index % config.pages_per_segment;
     let mut byte_offset = local_page_idx * page_size;
 
     // open first segment file
-    let mut filename = format!("{}-{:04}.seg", config.prefix, seg_id);
+    // ensure segment files live under the configured directory
+    let mut filename: PathBuf = Path::new(&config.segment_dir)
+        .join(format!("{}-{}-{:04}.seg", config.prefix, ts_start, seg_id));
     let file = OpenOptions::new()
         .create(true)
         .truncate(true)
@@ -123,7 +145,6 @@ fn run_writer_loop(meta_db: &Arc<Mutex<LmdbEnv>>, rx: Receiver<Vec<u8>>, config:
         .expect("segment_file_not_found");
     file.set_len(segment_bytes).expect("failed to set length");
     let mut mm = unsafe { MmapMut::map_mut(&file).expect("mmap_failed") };
-
     // event processing loop
     while let Ok(data) = rx.recv() {
         let write_len = data.len();
@@ -136,10 +157,15 @@ fn run_writer_loop(meta_db: &Arc<Mutex<LmdbEnv>>, rx: Receiver<Vec<u8>>, config:
             // advance to next page
             page_index += 1;
             local_page_idx = page_index % config.pages_per_segment;
+
             // segment-boundary rollover
             if local_page_idx == 0 {
                 seg_id = page_index / config.pages_per_segment;
-                filename = format!("{}-{:04}.seg", config.prefix, seg_id);
+                let new_ts_start = emit_secs();
+                filename = Path::new(&config.segment_dir).join(format!(
+                    "{}-{}-{:04}.seg",
+                    config.prefix, new_ts_start, seg_id
+                ));
                 let f_new = OpenOptions::new()
                     .create(true)
                     .truncate(true)
@@ -154,6 +180,8 @@ fn run_writer_loop(meta_db: &Arc<Mutex<LmdbEnv>>, rx: Receiver<Vec<u8>>, config:
                     write_pos,
                     byte_offset,
                     latest_segment_id: seg_id,
+                    ts_start: new_ts_start,
+                    ts_end: new_ts_start,
                 };
                 let data_b_segment_meta = bytemuck::bytes_of(&seg_meta);
                 push_event(
@@ -192,14 +220,13 @@ mod tests {
     use std::{fs::OpenOptions, io::Read, sync::Mutex};
 
     use crossbeam::channel;
-    use rkyv::rancor::Failure;
     use tempfile::tempdir;
 
     use super::*;
     use crate::{
         core::{
             aof::{LmdbEnv, get_meta_val, push_event},
-            event::{ArchivedEvent, EventType},
+            event::EventType,
             initialize,
             meta::SegmentMeta,
         },
@@ -220,19 +247,26 @@ mod tests {
             write_pos: 0,
             byte_offset: 0,
             latest_segment_id: 0,
+            ts_start: emit_secs(),
+            ts_end: emit_secs(),
         };
         let bytes = bytemuck::bytes_of(&seg_meta).to_vec();
         let ev = Event::new(bytes.clone(), EventType::MetaEvent(1).to_u8());
         push_event(&arc_env, &ev).expect("failed_to_unwrap");
+        // raw SegmentMeta bytes are stored under the static key
         let raw = unsafe { get_meta_val(&arc_env, b"segment_meta") };
-        let archived_ev = rkyv::api::high::access::<ArchivedEvent<Vec<u8>>, Failure>(&raw)
-            .expect("failed_to_unwrap");
-        let got: &SegmentMeta = bytemuck::from_bytes(&archived_ev.data);
-        assert_eq!(got.page_index, 0);
-        assert_eq!(got.segment_index, 0);
-        assert_eq!(got.write_pos, 0);
-        assert_eq!(got.byte_offset, 0);
-        assert_eq!(got.latest_segment_id, 0);
+        // cast directly to SegmentMeta
+        let got_meta: SegmentMeta = *bytemuck::from_bytes(&raw);
+        let g_p_idx = got_meta.page_index;
+        let g_s_idx = got_meta.segment_index;
+        let g_w_pos = got_meta.write_pos;
+        let g_b_off = got_meta.byte_offset;
+        let g_l_s_id = got_meta.latest_segment_id;
+        assert_eq!(g_p_idx, 0);
+        assert_eq!(g_s_idx, 0);
+        assert_eq!(g_w_pos, 0);
+        assert_eq!(g_b_off, 0);
+        assert_eq!(g_l_s_id, 0);
     }
 
     /// Pure page/segment math
@@ -282,15 +316,11 @@ mod tests {
     #[test]
     fn test_run_writer_loop_page_boundary() {
         initialize();
-
-        // … set up tmp, arc_env, etc …
-        initialize();
-
-        // Make a temp dir for LMDB + segment files:
         let tmp = tempdir().expect("failed_to_unwrap");
-        let arc_env = Arc::new(Mutex::new(
-            LmdbEnv::new(tmp.path().to_str().expect("failed_to_unwrap")).expect("failed_to_unwrap"),
-        ));
+        // switch to temp dir so segment files are isolated
+        std::env::set_current_dir(tmp.path()).expect("failed to set cwd");
+        // capture start timestamp for segment filename
+        let ts_start = emit_secs();
 
         // Buil
         // Create two events with different payload sizes:
@@ -307,8 +337,14 @@ mod tests {
             page_size,
             pages_per_segment: 2,
             prefix: "test".into(),
+            segment_dir: tmp.path().to_string_lossy().into(),
             lmdb_env_path: tmp.path().to_string_lossy().into(),
         };
+
+        // Set up arc_env (now that tmp and cwd are set)
+        let arc_env = Arc::new(Mutex::new(
+            LmdbEnv::new(tmp.path().to_str().expect("failed_to_unwrap")).expect("failed_to_unwrap"),
+        ));
 
         // Send them
         let (tx, rx) = channel::unbounded::<Vec<u8>>();
@@ -320,7 +356,11 @@ mod tests {
         run_writer_loop(&arc_env, rx, cfg.clone());
 
         // Read back segment 0
-        let buf0 = std::fs::read(format!("{}-0000.seg", cfg.prefix)).expect("failed_to_unwrap");
+        let buf0 = std::fs::read(format!(
+            "{}/{}-{}-0000.seg",
+            cfg.segment_dir, cfg.prefix, ts_start
+        ))
+        .expect("failed_to_unwrap");
 
         // Page 0: slice out the first `page_size` bytes
         {
@@ -342,12 +382,10 @@ mod tests {
     #[test]
     fn test_run_writer_loop_segment_rollover() {
         initialize();
-
-        // Make a temp dir for LMDB + segment files:
         let tmp = tempdir().expect("failed_to_unwrap");
-        let arc_env = Arc::new(Mutex::new(
-            LmdbEnv::new(tmp.path().to_str().expect("failed_to_unwrap")).expect("failed_to_unwrap"),
-        ));
+        std::env::set_current_dir(tmp.path()).expect("failed to set cwd");
+        // capture start timestamp for segment filename
+        let ts_start = emit_secs();
 
         // Build four events up front so we can see how big each framed message is:
         let payload_len = 2;
@@ -364,8 +402,13 @@ mod tests {
             page_size,
             pages_per_segment,
             prefix: "test-rollover".into(),
+            segment_dir: tmp.path().to_string_lossy().into(),
             lmdb_env_path: tmp.path().to_string_lossy().into(),
         };
+
+        let arc_env = Arc::new(Mutex::new(
+            LmdbEnv::new(tmp.path().to_str().expect("failed_to_unwrap")).expect("failed_to_unwrap"),
+        ));
 
         // Send all four framed events into the writer:
         let (tx, rx) = channel::unbounded();
@@ -378,30 +421,99 @@ mod tests {
 
         run_writer_loop(&arc_env, rx, cfg.clone());
 
-        // Helper to read & unarchive one page
-        fn assert_page(cfg: &SegmentConfig, seg: usize, page_idx: usize, expected_byte: u8) {
-            let path = format!("{}-{:04}.seg", cfg.prefix, seg);
-            let buf = std::fs::read(&path).expect("failed_to_unwrap");
+        // Closure to read & unarchive one page, closing over ts_start
+        let assert_page = |seg: usize, page_idx: usize, expected_byte: u8| {
+            let path = format!(
+                "{}/{}-{}-{:04}.seg",
+                cfg.segment_dir, cfg.prefix, ts_start, seg
+            );
+            tracing::debug!("######### reading segment file {}", path);
+            let buf = std::fs::read(&path).expect("failed to read segment file");
             let start = page_idx * cfg.page_size;
             let slice = &buf[start..start + cfg.page_size];
             let (_hdr, archived) = format::unarchive(slice);
-            // raw payload is `vec![expected_byte; payload_len]`
-            let data = archived.data.as_slice();
             assert!(
-                data.iter().all(|&b| b == expected_byte),
+                archived.data.as_slice().iter().all(|&b| b == expected_byte),
                 "segment {} page {} had {:?}, expected all {}",
                 seg,
                 page_idx,
-                data,
+                archived.data.as_slice(),
                 expected_byte
             );
-        }
+        };
 
         // Pages 0&1 → segment_0000; Pages 2&3 → segment_0001
-        assert_page(&cfg, 0, 0, 1);
-        assert_page(&cfg, 0, 1, 2);
+        assert_page(0, 0, 1);
+        assert_page(0, 1, 2);
+        assert_page(1, 0, 3);
+        assert_page(1, 1, 4);
+    }
 
-        assert_page(&cfg, 1, 0, 3);
-        assert_page(&cfg, 1, 1, 4);
+    /// Test that the writer resumes on the "hot" segment file named from the latest SegmentMeta
+    #[test]
+    fn test_resume_segment_meta_initialization() {
+        initialize();
+        // Setup a temporary LMDB environment and insert a SegmentMeta
+        let tmp = tempdir().expect("failed to create tempdir");
+        std::env::set_current_dir(tmp.path()).expect("failed to set cwd");
+        let arc_env = Arc::new(Mutex::new(
+            LmdbEnv::new(tmp.path().to_str().expect("failed_to_unwrap"))
+                .expect("failed to create LmdbEnv"),
+        ));
+        let now = emit_secs();
+        let seg_meta = SegmentMeta {
+            page_index: 0,
+            segment_index: 5,
+            write_pos: 0,
+            byte_offset: 0,
+            latest_segment_id: 5,
+            ts_start: now,
+            ts_end: now,
+        };
+        let bytes = bytemuck::bytes_of(&seg_meta).to_vec();
+        let meta_ev = Event::new(bytes, EventType::MetaEvent(1).to_u8());
+        push_event(&arc_env, &meta_ev).expect("failed to push segment_meta event");
+
+        // Prepare a single application event to write
+        let app_ev = Event::new(vec![42; 4], EventType::ApplicationEvent(1).to_u8());
+        let framed = format::archive(&app_ev);
+        let (tx, rx) = channel::unbounded();
+        tx.send(framed.clone())
+            .expect("failed to send framed event");
+        drop(tx);
+
+        // Configure the writer to use a small page so the entire frame fits
+        let cfg = SegmentConfig {
+            page_size: framed.len(),
+            pages_per_segment: 2,
+            prefix: "test-resume".into(),
+            segment_dir: tmp.path().to_string_lossy().into(),
+            lmdb_env_path: tmp.path().to_string_lossy().into(),
+        };
+
+        // Run the writer loop; it should pick up our seg_meta and write to segment 5
+        run_writer_loop(&arc_env, rx, cfg.clone());
+
+        // Verify that the hot segment file is named correctly
+        let sm_sid = seg_meta.segment_index;
+        let filename = format!(
+            "{}/{}-{}-{:04}.seg",
+            cfg.segment_dir, cfg.prefix, now, sm_sid
+        );
+        assert!(
+            std::fs::metadata(&filename).is_ok(),
+            "expected hot segment file {} to exist",
+            filename
+        );
+
+        // Read back and confirm our event payload is written correctly on page 0
+        let buf = std::fs::read(&filename).expect("failed to read segment file");
+        let slice = &buf[0..cfg.page_size];
+        let (_hdr, archived) = format::unarchive(slice);
+        assert_eq!(
+            archived.data.as_slice(),
+            &[42; 4],
+            "payload mismatch in resumed segment file"
+        );
     }
 }
