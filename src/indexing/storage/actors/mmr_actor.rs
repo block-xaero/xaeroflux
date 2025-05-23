@@ -176,6 +176,8 @@ mod actor_tests {
 
     #[test]
     fn actor_appends_to_in_memory_mmr() {
+        let tmp = tempdir().expect("failed to create tempdir");
+        std::env::set_current_dir(tmp.path()).expect("failed to set cwd");
         initialize();
         // store config uses small pages; we only care about MMR here
         let store = make_test_store("mmr".to_string());
@@ -207,6 +209,8 @@ mod actor_tests {
 
     #[test]
     fn actor_persists_exact_leaf_hash_to_store() {
+        let tmp = tempdir().expect("failed to create tempdir");
+        std::env::set_current_dir(tmp.path()).expect("failed to set cwd");
         initialize();
         // capture what gets sent to disk
         let dir = tempdir().expect("failed to create tempdir");
