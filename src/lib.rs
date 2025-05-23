@@ -16,7 +16,11 @@ use std::{
 use bytemuck::{Pod, Zeroable};
 use crossbeam::channel::{Receiver, Sender, unbounded};
 use indexing::storage::{
-    actors::{mmr_actor::MmrIndexingActor, segment_writer_actor::SegmentWriterActor},
+    actors::{
+        mmr_actor::MmrIndexingActor,
+        segment_reader_actor::SegmentReaderActor,
+        segment_writer_actor::{SegmentConfig, SegmentWriterActor},
+    },
     format::archive,
 };
 use threadpool::ThreadPool;
@@ -150,6 +154,10 @@ impl Subject {
         let aof = Arc::new(AOFActor::new());
         let seg = Arc::new(SegmentWriterActor::new());
         let mmr = Arc::new(MmrIndexingActor::new(None, None));
+        let seg_reader_actor = Arc::new(SegmentReaderActor::new(
+            SegmentConfig::default(),
+            self.sink.clone(),
+        ));
         let aof_c = aof.clone();
         let seg_c = seg.clone();
         let mmr_c = mmr.clone();
@@ -157,6 +165,10 @@ impl Subject {
         let _sys_sub = Arc::new(self.clone().subscribe_with(
             ThreadPerSubjectMaterializer,
             move |xe: XaeroEvent| {
+                seg_reader_actor
+                    .inbox
+                    .send(xe.evt.clone())
+                    .expect("failed_to_unwrap");
                 // Append-only log
                 let evt = xe.evt.clone();
                 let blob = archive(&xe.evt);
@@ -171,6 +183,7 @@ impl Subject {
 
                 // MMR indexing
                 mmr_c.listener.inbox.send(evt).expect("failed_to_unwrap");
+
                 // P2P sync would go here
             },
         ));
@@ -312,7 +325,6 @@ impl Materializer for ThreadPoolForSubjectMaterializer {
                 use core::event::EventType;
                 // Ensure Replay is imported or defined
                 use core::event::SystemEventKind;
-
                 subject
                     .sink
                     .tx
@@ -433,12 +445,33 @@ pub struct XFluxHandle {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{
+        fs::OpenOptions,
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
 
+    use bytemuck::bytes_of;
     use crossbeam::channel;
+    use memmap2::MmapMut;
+    use tempfile::tempdir;
 
     use super::*;
-    use crate::core::{event::Event, initialize};
+    use crate::{
+        core::{
+            aof::{LmdbEnv, push_event},
+            date_time::emit_secs,
+            event::{Event, EventType, SystemEventKind},
+            initialize,
+            meta::SegmentMeta,
+        },
+        indexing::storage::{
+            actors::{
+                segment_reader_actor::SegmentReaderActor, segment_writer_actor::SegmentConfig,
+            },
+            format::PAGE_SIZE,
+        },
+    };
 
     /// Helper to make a simple XaeroEvent with optional proof
     fn make_evt(data: &[u8], with_proof: bool) -> XaeroEvent {
@@ -599,5 +632,68 @@ mod tests {
             rx.recv_timeout(Duration::from_millis(100)).is_err(),
             "blackhole should prevent any delivery"
         );
+    }
+
+    #[test]
+    fn test_segment_reader_replay_then_live() {
+        initialize();
+        let tmp = tempdir().expect("failed to create tempdir");
+        // write a segment file
+        let ts = emit_secs();
+        let idx = 0;
+        let seg_path = tmp.path().join(format!("xaeroflux-{}-{}.seg", ts, idx));
+        {
+            let file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .read(true)
+                .open(&seg_path)
+                .expect("open seg file");
+            file.set_len(PAGE_SIZE as u64).expect("set_len");
+            let mut mmap = unsafe { MmapMut::map_mut(&file).expect("mmap") };
+            let e = Event::new(b"hello".to_vec(), EventType::ApplicationEvent(1).to_u8());
+            let frame = archive(&e);
+            mmap[..frame.len()].copy_from_slice(&frame);
+            mmap.flush().expect("flush");
+        }
+        // push meta into LMDB
+        let meta_env = Arc::new(Mutex::new(
+            LmdbEnv::new(tmp.path().to_str().expect("failed_to_unwrap")).expect("create lmdb"),
+        ));
+        let seg_meta = SegmentMeta {
+            page_index: 0,
+            segment_index: idx,
+            ts_start: ts,
+            ts_end: ts,
+            write_pos: 0,
+            byte_offset: 0,
+            latest_segment_id: 0,
+        };
+        let ev = Event::new(
+            bytes_of(&seg_meta).to_vec(),
+            EventType::MetaEvent(1).to_u8(),
+        );
+        push_event(&meta_env, &ev).expect("push_event");
+        // instantiate actor
+        let (tx, rx) = crossbeam::channel::unbounded::<XaeroEvent>();
+        let sink = Arc::new(Sink::new(tx));
+        let config = SegmentConfig {
+            page_size: PAGE_SIZE,
+            pages_per_segment: 1,
+            prefix: "xaeroflux".into(),
+            segment_dir: tmp.path().to_string_lossy().into(),
+            lmdb_env_path: tmp.path().to_string_lossy().into(),
+        };
+        let actor = SegmentReaderActor::new(config, sink.clone());
+        // send replay event
+        let replay_evt = Event::new(
+            Vec::new(),
+            EventType::SystemEvent(SystemEventKind::Replay).to_u8(),
+        );
+        actor._listener.inbox.send(replay_evt).expect("send replay");
+        // receive and assert first (should be "hello")
+        let first = rx.recv_timeout(Duration::from_secs(1)).expect("recv first");
+        assert_eq!(first.evt.data, b"hello".to_vec());
     }
 }

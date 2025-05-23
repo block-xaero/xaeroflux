@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use super::segment_writer_actor::SegmentWriterActor;
+use super::segment_writer_actor::{SegmentConfig, SegmentWriterActor};
 use crate::{
     core::{
         aof::{self, LmdbEnv, push_event},
@@ -70,6 +70,56 @@ impl MmrIndexingActor {
         }
     }
 
+    /// Create an MMR actor with a custom SegmentConfig.
+    pub fn new_with_config(
+        config: SegmentConfig,
+        listener: Option<EventListener<Vec<u8>>>,
+    ) -> Self {
+        // initialize in-memory MMR
+        let _mmr = Arc::new(Mutex::new(crate::indexing::storage::mmr::XaeroMmr::new()));
+        // create segment writer from config
+        let store = Arc::new(SegmentWriterActor::new_with_config(config.clone()));
+        // open LMDB using config path
+        let meta_db = Arc::new(Mutex::new(
+            LmdbEnv::new(&config.lmdb_env_path).expect("failed to create LmdbEnv"),
+        ));
+        let mdb_c = meta_db.clone();
+        let store_clone = store.clone();
+        let mmr_clone = _mmr.clone();
+        // build listener
+        let _listener = listener.unwrap_or_else(|| {
+            EventListener::new(
+                "mmr_indexing_actor",
+                Arc::new(move |e: Event<Vec<u8>>| {
+                    let framed = archive(&e);
+                    // persist event metadata
+                    push_event(&mdb_c, &e).expect("failed to push event");
+                    // append to in-memory MMR
+                    let leaf_hash = sha_256(&framed);
+                    {
+                        mmr_clone
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .append(leaf_hash);
+                    }
+                    // send to segment writer
+                    store_clone
+                        .inbox
+                        .send(leaf_hash.to_vec())
+                        .expect("failed to send event");
+                }),
+                None,
+                Some(1),
+            )
+        });
+        Self {
+            _mmr,
+            _store: store,
+            listener: _listener,
+            _lmdb: meta_db,
+        }
+    }
+
     pub fn mmr(&self) -> Arc<Mutex<crate::indexing::storage::mmr::XaeroMmr>> {
         Arc::clone(&self._mmr)
     }
@@ -134,8 +184,21 @@ mod actor_tests {
         // Fire one event
         let ev = make_event(b"foo".to_vec());
         fire_event(&actor.listener, ev);
-        // **new**: let the listener thread process it
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        // wait until the listener has processed the event (or timeout)
+        use std::time::{Duration, Instant};
+        let start = Instant::now();
+        while actor
+            .listener
+            .meta
+            .events_processed
+            .load(std::sync::atomic::Ordering::SeqCst)
+            < 1
+        {
+            if start.elapsed() > Duration::from_secs(1) {
+                panic!("Timed out waiting for listener to process event");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
 
         // The MMR should contain exactly one leaf
         let mmr = actor._mmr.lock().expect("failed to lock MMR");

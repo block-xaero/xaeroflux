@@ -84,16 +84,7 @@ where
         event_buffer_size: Option<usize>,
         _pool_size_override: Option<usize>,
     ) -> Self {
-        let (tx, rx) = match event_buffer_size {
-            Some(size) => {
-                tracing::info!("Event buffer size: {}", size);
-                crossbeam::channel::bounded(size)
-            }
-            None => {
-                tracing::info!("Event buffer size: default");
-                crossbeam::channel::unbounded()
-            }
-        };
+        let (tx, rx) = crossbeam::channel::unbounded();
 
         let id: [u8; 32] = crate::indexing::hash::sha_256::<String>(&name.to_string());
         // let pool_size = match pool_size_override {

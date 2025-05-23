@@ -32,9 +32,10 @@ impl SegmentReaderActor {
         let segment_dir = config.segment_dir.clone();
 
         let (start_of_day, end_of_day) = day_bounds_from_epoch_ms(emit_secs());
-        let (tx, rx) = crossbeam::channel::unbounded::<Event<Vec<u8>>>();
+        let (tx, rx) = crossbeam::channel::bounded::<Event<Vec<u8>>>(0);
         let txc = tx.clone();
         let mdbc = meta_db.clone();
+        let sink_c = sink.clone();
         let jh = std::thread::spawn(move || {
             // ensure we run with the project root as our working directory,
             // so relative segment file paths resolve correctly in tests
@@ -120,7 +121,7 @@ impl SegmentReaderActor {
                             tracing::info!("Processing segment meta: {:?}", segment_meta);
                         }
                     }
-                    _ => tracing::info!("NOT Processing event, segment reader is a REPLAY actor"),
+                    _ => tracing::info!("not processing event"),
                 }
             }
         });
@@ -274,7 +275,7 @@ mod tests {
 
         let lmdb =
             LmdbEnv::new(tmp.path().to_str().expect("failed_to_unwrap")).expect("failed_to_unwrap");
-        let meta_db = Arc::new(Mutex::new(lmdb));
+        let _meta_db = Arc::new(Mutex::new(lmdb));
 
         let (tx, rx) = unbounded::<XaeroEvent>();
         let sink = Arc::new(Sink::new(tx));
