@@ -829,22 +829,22 @@ mod tests {
     #[test]
     fn empty_db_returns_empty() {
         initialize();
-        let dir = tempdir().unwrap();
+        let dir = tempdir().expect("failed_to_unwrap");
         let env = Arc::new(Mutex::new(
-            LmdbEnv::new(dir.path().to_str().unwrap()).unwrap(),
+            LmdbEnv::new(dir.path().to_str().expect("failed_to_unwrap")).expect("failed_to_unwrap"),
         ));
 
         // no metas inserted yet
-        let all = iterate_segment_meta_by_range(&env, 0, None).unwrap();
+        let all = iterate_segment_meta_by_range(&env, 0, None).expect("failed_to_unwrap");
         assert!(all.is_empty());
     }
 
     #[test]
     fn single_meta_roundtrip() {
         initialize();
-        let dir = tempdir().unwrap();
+        let dir = tempdir().expect("failed_to_unwrap");
         let env = Arc::new(Mutex::new(
-            LmdbEnv::new(dir.path().to_str().unwrap()).unwrap(),
+            LmdbEnv::new(dir.path().to_str().expect("failed_to_unwrap")).expect("failed_to_unwrap"),
         ));
 
         // push one meta at ts = now
@@ -852,25 +852,25 @@ mod tests {
         let meta = make_meta(ts, ts + 5, 42);
         let bytes = bytemuck::bytes_of(&meta).to_vec();
         let ev = Event::new(bytes, EventType::MetaEvent(1).to_u8());
-        push_event(&env, &ev).unwrap();
+        push_event(&env, &ev).expect("failed_to_unwrap");
 
         // open‐ended scan from 0 should return it
-        let all = iterate_segment_meta_by_range(&env, 0, None).unwrap();
+        let all = iterate_segment_meta_by_range(&env, 0, None).expect("failed_to_unwrap");
         assert_eq!(all.len(), 1);
         let sid = all[0].segment_index;
         assert_eq!(sid, 42);
 
         // scan starting _after_ ts should drop it
-        let none = iterate_segment_meta_by_range(&env, ts + 1, None).unwrap();
+        let none = iterate_segment_meta_by_range(&env, ts + 1, None).expect("failed_to_unwrap");
         assert!(none.is_empty());
     }
 
     #[test]
     fn multiple_meta_filter_and_ordering() {
         initialize();
-        let dir = tempdir().unwrap();
+        let dir = tempdir().expect("failed_to_unwrap");
         let env = Arc::new(Mutex::new(
-            LmdbEnv::new(dir.path().to_str().unwrap()).unwrap(),
+            LmdbEnv::new(dir.path().to_str().expect("failed_to_unwrap")).expect("failed_to_unwrap"),
         ));
 
         // create three metas at t=10,20,30
@@ -881,24 +881,24 @@ mod tests {
         for meta in &[m0, m1, m2] {
             let bytes = bytemuck::bytes_of(meta).to_vec();
             let ev = Event::new(bytes, EventType::MetaEvent(1).to_u8());
-            push_event(&env, &ev).unwrap();
+            push_event(&env, &ev).expect("failed_to_unwrap");
         }
 
         // scan [0..] returns all three, in timestamp order
-        let all = iterate_segment_meta_by_range(&env, 0, None).unwrap();
+        let all = iterate_segment_meta_by_range(&env, 0, None).expect("failed_to_unwrap");
         assert_eq!(all.len(), 3);
         assert_eq!(all.iter().map(|m| m.ts_start).collect::<Vec<_>>(), vec![
             10, 20, 30
         ]);
 
         // scan [15..30] should return m1 only (m0 ends at 15 but we filter on start >15)
-        let mid = iterate_segment_meta_by_range(&env, 15, Some(30)).unwrap();
+        let mid = iterate_segment_meta_by_range(&env, 15, Some(30)).expect("failed_to_unwrap");
         assert_eq!(mid.len(), 1);
         let mid_idx = mid[0].segment_index;
         assert_eq!(mid_idx, 1);
 
         // scan [0..20] should include m0 and m1 (m1 starts exactly at 20)
-        let upto = iterate_segment_meta_by_range(&env, 0, Some(20)).unwrap();
+        let upto = iterate_segment_meta_by_range(&env, 0, Some(20)).expect("failed_to_unwrap");
         assert_eq!(upto.len(), 2);
         assert_eq!(
             upto.iter().map(|m| m.segment_index).collect::<Vec<_>>(),
