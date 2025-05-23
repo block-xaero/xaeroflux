@@ -51,6 +51,7 @@ pub struct SegmentWriterActor {
     pub _listener: EventListener<Vec<u8>>,
     pub meta_db: Arc<Mutex<LmdbEnv>>,
     pub _handle: thread::JoinHandle<()>,
+    pub segment_config: SegmentConfig,
 }
 
 impl Default for SegmentWriterActor {
@@ -98,6 +99,7 @@ impl SegmentWriterActor {
             _listener: listener,
             _handle: handle,
             meta_db,
+            segment_config: config.clone(),
         }
     }
 }
