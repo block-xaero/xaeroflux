@@ -140,7 +140,7 @@ mod actor_tests {
     use std::time::Duration;
 
     use crossbeam::channel;
-    use tempfile::tempdir;
+    use tempfile::{tempdir, TempDir};
 
     use super::*;
     use crate::{
@@ -161,7 +161,7 @@ mod actor_tests {
         listener.inbox.send(evt).expect("failed to send event");
     }
 
-    fn make_test_store(prefix: String) -> SegmentWriterActor {
+    fn make_test_store(prefix: String) -> (TempDir, SegmentWriterActor) {
         let tmp = tempdir().expect("failed to create tempdir");
         // small page size so tests finish quickly, 1 page per segment to avoid rollover
         let cfg = SegmentConfig {
@@ -171,7 +171,8 @@ mod actor_tests {
             segment_dir: tmp.path().to_string_lossy().into(),
             lmdb_env_path: tmp.path().to_string_lossy().into(),
         };
-        SegmentWriterActor::new_with_config(cfg)
+        let store = SegmentWriterActor::new_with_config(cfg);
+        (tmp, store)
     }
 
     #[test]
@@ -180,7 +181,7 @@ mod actor_tests {
         std::env::set_current_dir(tmp.path()).expect("failed to set cwd");
         initialize();
         // store config uses small pages; we only care about MMR here
-        let store = make_test_store("mmr".to_string());
+        let (_tmp, store) = make_test_store("mmr".to_string());
         let actor = MmrIndexingActor::new(Some(store), None);
 
         // Fire one event
@@ -216,7 +217,7 @@ mod actor_tests {
         let dir = tempdir().expect("failed to create tempdir");
         let prefix = dir.path().join("mmr").display().to_string();
         let (tx, rx) = channel::bounded::<Vec<u8>>(1);
-        let mut store = make_test_store(prefix.clone());
+        let (_tmp, mut store) = make_test_store(prefix.clone());
         store.inbox = tx.clone();
 
         let actor = MmrIndexingActor::new(Some(store), None);
