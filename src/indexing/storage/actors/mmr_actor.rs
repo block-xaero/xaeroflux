@@ -28,13 +28,14 @@ impl MmrIndexingActor {
         let _mmr = Arc::new(Mutex::new(crate::indexing::storage::mmr::XaeroMmr::new()));
         let _store = Arc::new(store.unwrap_or_else(|| {
             SegmentWriterActor::new_with_config(super::segment_writer_actor::SegmentConfig {
-                prefix: "xaero_mmr_".to_string(),
+                prefix: "mmr".to_string(),
                 ..Default::default()
             })
         }));
-        // FIXME: path fix!
+        // Use the store's lmdb_env_path instead of hardcoded path
+        let path = &_store.segment_config.lmdb_env_path;
         let meta_db = Arc::new(Mutex::new(
-            LmdbEnv::new("xaeroflux").expect("failed to create LmdbEnv"),
+            LmdbEnv::new(path).expect("failed to create LmdbEnv"),
         ));
         let mdb_c = meta_db.clone();
         let _store_clone = _store.clone();
@@ -140,7 +141,7 @@ mod actor_tests {
     use std::time::Duration;
 
     use crossbeam::channel;
-    use tempfile::{tempdir, TempDir};
+    use tempfile::{TempDir, tempdir};
 
     use super::*;
     use crate::{
@@ -177,8 +178,6 @@ mod actor_tests {
 
     #[test]
     fn actor_appends_to_in_memory_mmr() {
-        let tmp = tempdir().expect("failed to create tempdir");
-        std::env::set_current_dir(tmp.path()).expect("failed to set cwd");
         initialize();
         // store config uses small pages; we only care about MMR here
         let (_tmp, store) = make_test_store("mmr".to_string());
