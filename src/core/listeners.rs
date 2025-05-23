@@ -81,7 +81,7 @@ where
     pub fn new(
         name: &str,
         handler: Arc<dyn Fn(Event<T>) + Send + Sync + 'static>,
-        event_buffer_size: Option<usize>,
+        _event_buffer_size: Option<usize>,
         _pool_size_override: Option<usize>,
     ) -> Self {
         let (tx, rx) = crossbeam::channel::unbounded();
@@ -150,16 +150,13 @@ where
 
     pub fn shutdown(self) {
         tracing::info!("shutting down event listener");
-        self.pool.join();
         drop(self.inbox);
-        match self.dispatcher {
-            Some(handle) => {
-                handle.join().expect("failed to join dispatcher thread");
-            }
-            None => {
-                tracing::warn!("dispatcher thread already shut down");
-            }
+        // wait for the dispatcher thread to finish scheduling any remaining events
+        if let Some(handle) = self.dispatcher {
+            handle.join().expect("failed to join dispatcher thread");
         }
+        // now wait for *all* the processing tasks to complete
+        self.pool.join();
     }
 }
 

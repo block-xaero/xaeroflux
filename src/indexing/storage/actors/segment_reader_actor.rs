@@ -35,7 +35,6 @@ impl SegmentReaderActor {
         let (tx, rx) = crossbeam::channel::bounded::<Event<Vec<u8>>>(0);
         let txc = tx.clone();
         let mdbc = meta_db.clone();
-        let sink_c = sink.clone();
         let jh = std::thread::spawn(move || {
             // ensure we run with the project root as our working directory,
             // so relative segment file paths resolve correctly in tests
