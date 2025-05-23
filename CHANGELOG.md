@@ -2,6 +2,18 @@
 
 All notable changes to Xaeroflux will be documented in this file.
 
+[0.1.0-m3] - 2025-05-22
+
+Added:
+
+- Read portion of SDK API -  Replayable subject that scans events from segments
+and relays them through subject booted with Scan operator.
+- Segment Reader plumbing that reads segments for Replay
+- Segment reading logic
+- Configuration for files
+- Cleanup and more test cases.
+
+
 [0.1.0-m2] - 2025-05-18
 
 Added

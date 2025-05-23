@@ -5612,7 +5612,7 @@ dependencies = [
 
 [[package]]
 name = "xaeroflux"
-version = "0.1.0-m2"
+version = "0.1.0-m3"
 dependencies = [
  "anyhow",
  "bytemuck",
