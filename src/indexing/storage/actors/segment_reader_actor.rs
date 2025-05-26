@@ -1,3 +1,11 @@
+//! SegmentReaderActor: Replays persisted segments on-demand.
+//!
+//! This module defines:
+//! - `SegmentReaderActor`: actor that listens for replay triggers,
+//!   reads segment metadata from LMDB, loads segment files from disk,
+//!   deserializes events, and forwards them to a consumer `Sink`.
+//! - End-to-end replay logic for system-level replay events.
+
 use std::{
     path::Path,
     sync::{Arc, Mutex},
@@ -15,6 +23,13 @@ use crate::{
     },
     indexing::storage::{actors::segment_writer_actor::SegmentConfig, io},
 };
+/// Actor for replaying events from historical segments.
+///
+/// Fields:
+/// - `inbox`: channel sender for incoming replay trigger events.
+/// - `_listener`: listens for system replay events and feeds `inbox`.
+/// - `meta_db`: LMDB environment containing segment metadata.
+/// - `jh`: handle to the background thread processing replay requests.
 pub struct SegmentReaderActor {
     pub inbox: crossbeam::channel::Sender<Event<Vec<u8>>>,
     /// Only listens to Replay events and rejects all others.
@@ -24,6 +39,23 @@ pub struct SegmentReaderActor {
 }
 
 impl SegmentReaderActor {
+    /// Create a new `SegmentReaderActor`.
+    ///
+    /// Spawns a thread that:
+    /// 1. Receives `SystemEvent::Replay` events on `inbox`.
+    /// 2. Queries LMDB for segments within today’s bounds.
+    /// 3. For each segment:
+    ///    - Builds the segment file path from `segment_dir`, timestamp, and index.
+    ///    - Memory-maps the file and iterates pages to extract serialized events.
+    ///    - Deserializes each event and wraps it into `XaeroEvent` with optional Merkle proof.
+    ///    - Sends the event to the provided `sink`.
+    ///
+    /// # Arguments
+    /// - `config`: directory and LMDB path settings for segment files and metadata.
+    /// - `sink`: consumer of replayed events.
+    ///
+    /// # Panics
+    /// Panics if LMDB environment initialization fails.
     pub fn new(config: SegmentConfig, sink: Arc<Sink>) -> Arc<Self> {
         // initialize LMDB environment from config
         let meta_db = Arc::new(Mutex::new(
@@ -148,6 +180,13 @@ impl SegmentReaderActor {
     }
 }
 
+/// Unit tests for `SegmentReaderActor`.
+///
+/// Tests:
+/// - `system_event_triggers_replay`: verifies that a `Replay` system event
+///   causes the actor to read a prepared segment file and send the deserialized
+///   "hello" event to the sink.
+/// - `non_system_events_do_not_replay`: ensures that non-system events are ignored.
 #[cfg(test)]
 mod tests {
     use std::{

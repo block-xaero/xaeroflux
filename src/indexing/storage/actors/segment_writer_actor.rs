@@ -1,3 +1,13 @@
+//! Segment Writer Actor for xaeroflux.
+//!
+//! This module provides:
+//! - `SegmentConfig`: configuration parameters for paging and segmentation.
+//! - `SegmentWriterActor`: an actor that listens for archived event blobs
+//!   and writes them into fixed-size pages within segment files.
+//! - `run_writer_loop`: core loop logic for handling page boundaries,
+//!   file rollover, and metadata events.
+//! - Unit tests verifying segment math, flush behavior, and rollover/resume logic.
+
 use std::{
     fs::OpenOptions,
     path::{Path, PathBuf},
@@ -20,7 +30,14 @@ use crate::{
     indexing::storage::format::archive,
 };
 
-/// Configuration for paging and segmentation
+/// Configuration for paged segment storage.
+///
+/// Fields:
+/// - `page_size`: number of bytes per page within a segment.
+/// - `pages_per_segment`: number of pages that make up a single segment file.
+/// - `prefix`: filename prefix for segment files.
+/// - `segment_dir`: directory path where segment files are stored.
+/// - `lmdb_env_path`: directory path for the LMDB environment for metadata.
 #[derive(Clone)]
 pub struct SegmentConfig {
     pub page_size: usize,
@@ -44,7 +61,21 @@ impl Default for SegmentConfig {
     }
 }
 
-/// Actor that writes archived events into paged, segment-backed files
+/// Actor responsible for writing serialized event frames into segment files.
+///
+/// This actor sets up:
+/// - An `EventListener<Vec<u8>>` that archives incoming `Event<Vec<u8>>` values
+///   and sends their byte frames to `inbox`.
+/// - A background thread (`_handle`) running `run_writer_loop` to consume from `inbox`.
+/// - An LMDB environment (`meta_db`) to record segment rollover metadata.
+/// - The active `SegmentConfig` used for page size and directory settings.
+///
+/// Fields:
+/// - `inbox`: channel sender for serialized event frames.
+/// - `_listener`: keeps the event subscription alive.
+/// - `meta_db`: metadata database for segment rollovers.
+/// - `_handle`: handle to the spawned writer thread.
+/// - `segment_config`: configuration parameters for this writer.
 pub struct SegmentWriterActor {
     /// Send archived event blobs to this inbox
     pub inbox: Sender<Vec<u8>>,
@@ -61,12 +92,23 @@ impl Default for SegmentWriterActor {
 }
 
 impl SegmentWriterActor {
-    /// Create with default config (16KiB pages, 1024 pages per segment)
+    /// Create a `SegmentWriterActor` with default settings.
+    ///
+    /// Uses `SegmentConfig::default()` which sets 16KiB pages,
+    /// 1024 pages per segment, and default directories.
     pub fn new() -> Self {
         Self::new_with_config(SegmentConfig::default())
     }
 
-    /// Create with custom config (for testability)
+    /// Create a `SegmentWriterActor` with a custom configuration.
+    ///
+    /// # Arguments
+    /// - `config`: custom paging and directory parameters.
+    ///
+    /// Behavior:
+    /// - Ensures the LMDB directory exists and initializes `LmdbEnv`.
+    /// - Spawns an `EventListener` to serialize and forward events.
+    /// - Starts a background thread running `run_writer_loop` to handle writing.
     pub fn new_with_config(config: SegmentConfig) -> Self {
         std::fs::create_dir_all(&config.lmdb_env_path).expect("failed to create directory");
         let meta_db = Arc::new(Mutex::new(
@@ -104,7 +146,24 @@ impl SegmentWriterActor {
     }
 }
 
-/// Core writer loop separated for testability
+/// Core loop for writing archived event frames into page-aligned segment files.
+///
+/// This function:
+/// 1. Initializes page and segment boundaries based on `config`.
+/// 2. Iterates existing `SegmentMeta` entries to resume at the latest segment/page.
+/// 3. Opens (or creates) the current segment file, memory-maps it.
+/// 4. On each `rx.recv()`:
+///    - If the incoming frame does not fit in the current page, flushes the page,
+///      advances `page_index`, and handles segment rollover (including
+///      emitting a `MetaEvent` into LMDB and remapping a new file).
+///    - Copies the frame bytes into the current page at `byte_offset + write_pos`.
+///    - Updates `write_pos`.
+/// 5. On channel close, performs a final flush of any unwritten bytes.
+///
+/// # Arguments
+/// - `meta_db`: LMDB environment for recording segment metadata.
+/// - `rx`: receiver of serialized event frames (`Vec<u8>`).
+/// - `config`: segment configuration including page size and directories.
 fn run_writer_loop(meta_db: &Arc<Mutex<LmdbEnv>>, rx: Receiver<Vec<u8>>, config: SegmentConfig) {
     let page_size = config.page_size;
     let segment_bytes = (config.pages_per_segment * page_size) as u64;
@@ -217,6 +276,13 @@ fn run_writer_loop(meta_db: &Arc<Mutex<LmdbEnv>>, rx: Receiver<Vec<u8>>, config:
     }
 }
 
+/// Unit tests for the segment writer logic.
+///
+/// Tests include:
+/// - Initial `SegmentMeta` storage and retrieval.
+/// - Page/segment index math correctness.
+/// - `flush_range` persisting data to disk.
+/// - `run_writer_loop` handling page boundaries, rollover, and resume behavior.
 #[cfg(test)]
 mod tests {
     use std::{fs::OpenOptions, io::Read, sync::Mutex};

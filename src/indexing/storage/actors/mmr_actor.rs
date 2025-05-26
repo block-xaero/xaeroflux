@@ -1,3 +1,11 @@
+//! MMR indexing actor for xaeroflux.
+//!
+//! This module defines:
+//! - `MmrIndexingActor`: actor that listens to events, archives them, computes Merkle leaf hashes,
+//!   updates an in-memory Merkle Mountain Range, and forwards leaf hashes to a segment store.
+//! - Constructors for default and custom segment configurations.
+//! - Accessors for the in-memory MMR, segment store, and LMDB environment.
+
 use std::sync::{Arc, Mutex};
 
 use super::segment_writer_actor::{SegmentConfig, SegmentWriterActor};
@@ -13,6 +21,13 @@ use crate::{
     },
 };
 
+/// Actor responsible for indexing events into a Merkle Mountain Range (MMR).
+///
+/// Fields:
+/// - `_lmdb`: LMDB environment for persisting raw events.
+/// - `_mmr`: in-memory MMR instance for accumulating leaf hashes.
+/// - `_store`: segment writer actor to persist leaf hashes in pages.
+/// - `listener`: event listener that drives the indexing pipeline.
 pub struct MmrIndexingActor {
     pub(crate) _lmdb: Arc<Mutex<aof::LmdbEnv>>,
     pub(crate) _mmr: Arc<Mutex<crate::indexing::storage::mmr::XaeroMmr>>,
@@ -21,6 +36,17 @@ pub struct MmrIndexingActor {
 }
 
 impl MmrIndexingActor {
+    /// Create a new `MmrIndexingActor` with optional store and listener.
+    ///
+    /// If `store` is `None`, a default `SegmentWriterActor` with prefix "mmr" is used.
+    /// If `listener` is `None`, an `EventListener` is created that:
+    ///   1. Archives each event into bytes.
+    ///   2. Persists the event into LMDB.
+    ///   3. Computes the SHA-256 leaf hash from the archived bytes.
+    ///   4. Appends the leaf to the in-memory MMR.
+    ///   5. Sends the leaf hash to the segment writer for paging.
+    ///
+    /// Uses a single-threaded event handler by default.
     pub fn new(
         store: Option<SegmentWriterActor>,
         listener: Option<EventListener<Vec<u8>>>,
@@ -71,7 +97,12 @@ impl MmrIndexingActor {
         }
     }
 
-    /// Create an MMR actor with a custom SegmentConfig.
+    /// Create a new `MmrIndexingActor` with a custom `SegmentConfig`.
+    ///
+    /// - `config`: parameters for the segment writer (page size, prefixes, directories).
+    /// - `listener`: optional custom event listener; if `None`, a default is created as in `new`.
+    ///
+    /// This allows configuring storage paths while reusing the same MMR pipeline.
     pub fn new_with_config(
         config: SegmentConfig,
         listener: Option<EventListener<Vec<u8>>>,
@@ -121,21 +152,27 @@ impl MmrIndexingActor {
         }
     }
 
+    /// Return a clone of the shared in-memory MMR instance.
     pub fn mmr(&self) -> Arc<Mutex<crate::indexing::storage::mmr::XaeroMmr>> {
         Arc::clone(&self._mmr)
     }
 
+    /// Return a clone of the segment writer actor used for paging leaf hashes.
     pub fn store(&self) -> Arc<SegmentWriterActor> {
         Arc::clone(&self._store)
     }
 
+    /// Return a clone of the LMDB environment for raw event persistence.
     pub fn lmdb(&self) -> Arc<Mutex<aof::LmdbEnv>> {
         Arc::clone(&self._lmdb)
     }
 }
 
-// at bottom of mmr_indexing_actor.rs
-
+/// Unit tests for `MmrIndexingActor`.
+///
+/// Tests include:
+/// - Appending a single event and verifying the in-memory MMR leaf count.
+/// - Persisting the exact computed leaf hash to the segment writer’s inbox.
 #[cfg(test)]
 mod actor_tests {
     use std::time::Duration;
