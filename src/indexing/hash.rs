@@ -63,6 +63,12 @@ pub fn sha_256_hash(n: Vec<u8>) -> [u8; 32] {
     hash.as_slice().try_into().unwrap_or_default()
 }
 
+pub fn sha_256_hash_b(n: &Vec<u8>) -> [u8; 32] {
+    let mut sha256 = sha2::Sha256::new();
+    sha256.update(n);
+    let hash = sha256.finalize();
+    hash.as_slice().try_into().unwrap_or_default()
+}
 #[cfg(test)]
 mod tests {
 

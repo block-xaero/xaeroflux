@@ -1,13 +1,5 @@
-//! Append-only event log (AOF) actor using LMDB for persistent storage.
-//!
-//! This module provides:
-//! - `AOFActor`: listens for events and writes them durably into LMDB.
-//! - `LmdbEnv`: wrapper around the LMDB environment and databases.
-//! - Functions to push events, scan event ranges, and manage metadata.
-
 use std::{
     ffi::CString,
-    fmt::Debug,
     ptr,
     sync::{Arc, Mutex},
 };
@@ -18,59 +10,22 @@ use std::{
 use liblmdb::{
     MDB_CREATE, MDB_RDONLY, MDB_RESERVE, MDB_cursor_op_MDB_NEXT, MDB_dbi, MDB_env, MDB_txn,
     MDB_val, mdb_cursor_close, mdb_cursor_get, mdb_cursor_open, mdb_dbi_close, mdb_dbi_open,
-    mdb_env_create, mdb_env_open, mdb_env_set_mapsize, mdb_env_set_maxdbs, mdb_get, mdb_put,
-    mdb_txn_abort, mdb_txn_begin, mdb_txn_commit,
+    mdb_env_create, mdb_env_open, mdb_env_set_mapsize, mdb_env_set_maxdbs, mdb_put, mdb_txn_abort,
+    mdb_txn_begin, mdb_txn_commit,
 };
 use rkyv::{rancor::Failure, util::AlignedVec};
 
+use super::format::{EventKey, SegmentMeta};
 use crate::{
     core::event::{Event, EventType},
     indexing::hash::sha_256,
 };
-pub const AOF_DB: i32 = 0;
-pub const META_DB: i32 = 1;
+
+#[repr(usize)]
 pub enum DBI {
-    AOF = 0,
-    META = 1,
-}
-
-/// An append-only file (AOF) actor that persists events into LMDB.
-///
-/// The `AOFActor` encapsulates an LMDB environment and an event listener.
-/// It writes incoming events to disk for durable storage and later retrieval.
-pub struct AOFActor {
-    pub env: Arc<Mutex<LmdbEnv>>,
-    pub listener: EventListener<Vec<u8>>,
-}
-
-impl Default for AOFActor {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl AOFActor {
-    pub fn new() -> Self {
-        initialize();
-        let c = CONF.get().expect("failed to unravel");
-        let env = Arc::new(Mutex::new(
-            LmdbEnv::new("xaeroflux-aof").expect("failed to unravel"),
-        ));
-        let env_c = Arc::clone(&env);
-        let h = Arc::new(move |e| {
-            tracing::info!("Pushing event to LMDB: {:?}", e);
-            push_event(&env_c, &e).expect("failed to unravel");
-        });
-        Self {
-            env,
-            listener: EventListener::new(
-                "xaeroflux-aof",
-                h,
-                Some(CONF.get().expect("failed to load config").aof.buffer_size),
-                Some(c.aof.threads.num_worker_threads),
-            ),
-        }
-    }
+    Aof = 0,
+    Meta = 1,
+    SecondaryIndex = 2,
 }
 /// A wrapper around an LMDB environment with two databases: AOF and META.
 ///
@@ -78,7 +33,7 @@ impl AOFActor {
 /// - META_DB stores segment and MMR metadata for efficient lookup.
 pub struct LmdbEnv {
     pub env: *mut MDB_env,
-    pub dbis: [MDB_dbi; 2],
+    pub dbis: [MDB_dbi; 3],
 }
 unsafe impl Sync for LmdbEnv {} // raw pointers are Sync
 // Assuming LmdbEnv is already Send:
@@ -97,7 +52,7 @@ impl LmdbEnv {
             }
             tracing::info!("Configuring LMDB environment");
             tracing::info!("Setting max DBs to 2");
-            let sc_set_max_dbs = mdb_env_set_maxdbs(env, 2);
+            let sc_set_max_dbs = mdb_env_set_maxdbs(env, 3);
             if sc_set_max_dbs != 0 {
                 return Err(Box::new(std::io::Error::from_raw_os_error(sc_set_max_dbs)));
             }
@@ -115,10 +70,11 @@ impl LmdbEnv {
         // 2) open both DBIs using helper
         let aof_dbi = unsafe { open_named_db(env, c"xaeroflux-aof".as_ptr())? };
         let meta_dbi = unsafe { open_named_db(env, c"xaeroflux-meta".as_ptr())? };
+        let secondary = unsafe { open_named_db(env, c"xaeroflux-secondary".as_ptr())? };
 
         Ok(Self {
             env,
-            dbis: [aof_dbi, meta_dbi],
+            dbis: [aof_dbi, meta_dbi, secondary],
         })
     }
 }
@@ -178,32 +134,6 @@ impl Drop for LmdbEnv {
             // close the env
             liblmdb::mdb_env_close(self.env);
         }
-    }
-}
-
-use bytemuck::{Pod, Zeroable};
-
-use super::{CONF, initialize, listeners::EventListener, meta::SegmentMeta};
-
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct EventKey {
-    ts: u64,        // 8 bytes, big-endian
-    kind: u8,       // 1 byte
-    hash: [u8; 32], // 32 bytes
-}
-unsafe impl Pod for EventKey {}
-unsafe impl Zeroable for EventKey {}
-
-impl Debug for EventKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "EventKey {{ ts: {}, kind: {}, hash: {} }}",
-            self.ts,
-            self.kind,
-            hex::encode(self.hash)
-        )
     }
 }
 
@@ -331,7 +261,7 @@ pub fn push_event(
             };
             let sc = mdb_put(
                 txn,
-                env.dbis[META_DB as usize],
+                env.dbis[DBI::Meta as usize],
                 &mut key_val,
                 &mut data_val,
                 MDB_RESERVE,
@@ -357,7 +287,7 @@ pub fn push_event(
             };
             let sc2 = mdb_put(
                 txn,
-                env.dbis[META_DB as usize],
+                env.dbis[DBI::Meta as usize],
                 &mut static_key_val,
                 &mut static_val,
                 MDB_RESERVE,
@@ -384,7 +314,7 @@ pub fn push_event(
             };
             let sc = mdb_put(
                 txn,
-                env.dbis[META_DB as usize],
+                env.dbis[DBI::Meta as usize],
                 &mut key_val,
                 &mut data_val,
                 MDB_RESERVE,
@@ -412,7 +342,7 @@ pub fn push_event(
             };
             let sc = mdb_put(
                 txn,
-                env.dbis[AOF_DB as usize],
+                env.dbis[DBI::Aof as usize],
                 &mut key_val,
                 &mut data_val,
                 MDB_RESERVE,
@@ -431,146 +361,6 @@ pub fn push_event(
     Ok(())
 }
 
-/// Reads all `SegmentMeta` entries from the META_DB whose composite key
-/// `[ts_start (8 bytes BE) ‖ segment_index (8 bytes BE)]` is in `[start, end)`.
-///
-/// Returns a `Vec<SegmentMeta>` in ascending `ts_start` order.
-pub fn iterate_segment_meta_by_range(
-    env: &Arc<Mutex<LmdbEnv>>,
-    start: u64,
-    end: Option<u64>,
-) -> Result<Vec<SegmentMeta>, Box<dyn std::error::Error>> {
-    use liblmdb::MDB_cursor_op_MDB_NEXT;
-    let mut results = Vec::<SegmentMeta>::new();
-    let g = env.lock().expect("failed to lock env");
-    let env = g.env;
-    unsafe {
-        // 1) Begin a read txn
-        let mut rtxn: *mut MDB_txn = std::ptr::null_mut();
-        let sc_tx_begin = mdb_txn_begin(env, std::ptr::null_mut(), MDB_RDONLY, &mut rtxn);
-        if sc_tx_begin != 0 {
-            return Err(format!("Failed to begin read txn: {}", sc_tx_begin).into());
-        }
-        // 2) Open a cursor on that DB (should be meta DB, index 1)
-        let mut cursor = std::ptr::null_mut();
-        let sc_cursor_open = mdb_cursor_open(rtxn, g.dbis[1], &mut cursor);
-        if sc_cursor_open != 0 {
-            mdb_txn_abort(rtxn);
-            return Err(format!("Failed to open cursor: {}", sc_cursor_open).into());
-        }
-        // 3) Build the start key MDB_val
-        // key: [ ts_start (8) ‖ segment_index (8) ]
-        let mut start_key = [0u8; 16]; // 8 for start ts, 8 for end and then zero for seg_id
-        start_key[..8].copy_from_slice(&start.to_be_bytes());
-        // The rest is already zeroed by the array initialization
-
-        // the rest of the key (kind + seq) can be left as zero
-        let mut key_val = MDB_val {
-            mv_size: start_key.len(),
-            mv_data: start_key.as_ptr() as *mut _,
-        };
-        // empty MDB_val for the value
-        let mut data_val = MDB_val {
-            mv_size: 0,
-            mv_data: std::ptr::null_mut(),
-        };
-
-        // 4) Position to first key ≥ start_key
-        let rc = mdb_cursor_get(
-            cursor,
-            &mut key_val,
-            &mut data_val,
-            liblmdb::MDB_cursor_op_MDB_SET_RANGE,
-        );
-        if rc != 0 {
-            // MDB_NOTFOUND or error: no items ≥ start_key
-            mdb_txn_abort(rtxn);
-            return Ok(results);
-        }
-
-        loop {
-            // skip static or non-composite keys (we only want 16-byte ts_start‖segment_index keys)
-            if key_val.mv_size != 16 {
-                // advance cursor and continue
-                let rc_skip =
-                    mdb_cursor_get(cursor, &mut key_val, &mut data_val, MDB_cursor_op_MDB_NEXT);
-                if rc_skip != 0 {
-                    break; // no more entries
-                }
-                continue;
-            }
-            // 5) Extract the timestamp prefix from key_val.mv_data
-            let raw_key = std::slice::from_raw_parts(key_val.mv_data as *const u8, key_val.mv_size);
-            let ts = u64::from_be_bytes(raw_key[0..8].try_into().expect("failed to unravel"));
-            if let Some(e) = end {
-                // for start=0, include ts == end; otherwise treat end as exclusive
-                let should_break = if start == 0 { ts > e } else { ts >= e };
-                if should_break {
-                    break;
-                }
-            }
-
-            // 6) Directly parse raw SegmentMeta bytes (packed struct allows unaligned)
-            let data_slice =
-                std::slice::from_raw_parts(data_val.mv_data as *const u8, data_val.mv_size);
-            let sm: &SegmentMeta = bytemuck::from_bytes(data_slice);
-            results.push(*sm);
-
-            // 7) Advance the cursor
-            let rc = mdb_cursor_get(cursor, &mut key_val, &mut data_val, MDB_cursor_op_MDB_NEXT);
-            if rc != 0 {
-                // MDB_NOTFOUND = end of DB, or real error
-                break;
-            }
-        }
-        // 8) Cleanup
-        mdb_cursor_close(cursor);
-        mdb_txn_abort(rtxn); // read-only txn: abort is OK
-    }
-    Ok(results)
-}
-
-/// Retrieves a metadata value from META_DB for the given key.
-///
-/// Returns the raw bytes of the stored metadata (e.g., segment or MMR meta).
-///
-/// # Safety
-/// Directly calls the LMDB C API and assumes the environment and database are open.
-pub unsafe fn get_meta_val(env: &Arc<Mutex<LmdbEnv>>, key: &[u8]) -> AlignedVec {
-    let guard = env.lock().expect("failed_to_unwrap");
-    let lmdb = &*guard;
-    // begin read txn
-    let mut txn: *mut MDB_txn = ptr::null_mut();
-    let rc_begin = unsafe { mdb_txn_begin(lmdb.env, ptr::null_mut(), MDB_RDONLY, &mut txn) };
-    if rc_begin != 0 {
-        panic!("failed to begin read txn: {}", rc_begin);
-    }
-    // prepare key
-    let mut key_val = MDB_val {
-        mv_size: key.len(),
-        mv_data: key.as_ptr() as *mut _,
-    };
-    let mut data_val = MDB_val {
-        mv_size: 0,
-        mv_data: ptr::null_mut(),
-    };
-    // get
-    let rc = unsafe { mdb_get(txn, lmdb.dbis[1], &mut key_val, &mut data_val) };
-    if rc != 0 {
-        // txn abort
-        unsafe { mdb_txn_abort(txn) };
-        panic!("failed to get meta value: {}", rc);
-    }
-    // copy into aligned vec
-    let slice =
-        unsafe { std::slice::from_raw_parts(data_val.mv_data as *const u8, data_val.mv_size) };
-    let mut av = AlignedVec::new();
-    av.extend_from_slice(slice);
-    // abort txn
-    unsafe { mdb_txn_abort(txn) };
-    av
-}
-
 /// Generates an `EventKey` consisting of the event timestamp, type, and data hash.
 pub fn generate_key(event: &Event<Vec<u8>>) -> Result<EventKey, Failure> {
     Ok(EventKey {
@@ -585,21 +375,103 @@ pub fn generate_value(event: &Event<Vec<u8>>) -> Result<AlignedVec, Failure> {
     Ok(bytes)
 }
 
-// In your module file, add these tests at the bottom:
+/// Store a mapping from `leaf_hash` to `SegmentMeta` in the SecondaryIndex DB.
+pub fn put_secondary_index(
+    arc_env: &std::sync::Arc<std::sync::Mutex<LmdbEnv>>,
+    leaf_hash: &[u8; 32],
+    meta: &SegmentMeta,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use bytemuck::bytes_of;
+    let data = bytes_of(meta);
+    let guard = arc_env.lock().expect("failed to lock env");
+    let env = guard.env;
+    unsafe {
+        let mut txn: *mut MDB_txn = std::ptr::null_mut();
+        let rc = mdb_txn_begin(env, std::ptr::null_mut(), 0, &mut txn);
+        if rc != 0 {
+            return Err(Box::new(std::io::Error::from_raw_os_error(rc)));
+        }
+        let mut key_val = MDB_val {
+            mv_size: 32,
+            mv_data: leaf_hash.as_ptr() as *mut _,
+        };
+        let mut data_val = MDB_val {
+            mv_size: data.len(),
+            mv_data: std::ptr::null_mut(),
+        };
+        let dbi = guard.dbis[DBI::SecondaryIndex as usize];
+        let sc = mdb_put(txn, dbi, &mut key_val, &mut data_val, MDB_RESERVE);
+        if sc != 0 {
+            return Err(Box::new(std::io::Error::from_raw_os_error(sc)));
+        }
+        std::ptr::copy_nonoverlapping(data.as_ptr(), data_val.mv_data.cast(), data.len());
+        let cc = mdb_txn_commit(txn);
+        if cc != 0 {
+            return Err(Box::new(std::io::Error::from_raw_os_error(cc)));
+        }
+    }
+    Ok(())
+}
+
+/// Retrieve a stored SegmentMeta for the given `leaf_hash`, if it exists.
+pub fn get_secondary_index(
+    arc_env: &std::sync::Arc<std::sync::Mutex<LmdbEnv>>,
+    leaf_hash: &[u8; 32],
+) -> Result<Option<SegmentMeta>, Box<dyn std::error::Error>> {
+    let guard = arc_env.lock().expect("failed to lock env");
+    let env = guard.env;
+    unsafe {
+        let mut txn: *mut MDB_txn = std::ptr::null_mut();
+        let rc = mdb_txn_begin(env, std::ptr::null_mut(), MDB_RDONLY, &mut txn);
+        if rc != 0 {
+            return Err(Box::new(std::io::Error::from_raw_os_error(rc)));
+        }
+        let mut key_val = MDB_val {
+            mv_size: 32,
+            mv_data: leaf_hash.as_ptr() as *mut _,
+        };
+        let mut data_val = MDB_val {
+            mv_size: 0,
+            mv_data: std::ptr::null_mut(),
+        };
+        let dbi = guard.dbis[DBI::SecondaryIndex as usize];
+        let getrc = liblmdb::mdb_get(txn, dbi, &mut key_val, &mut data_val);
+        if getrc != 0 {
+            mdb_txn_abort(txn);
+            if getrc == liblmdb::MDB_NOTFOUND {
+                return Ok(None);
+            } else {
+                return Err(Box::new(std::io::Error::from_raw_os_error(getrc)));
+            }
+        }
+        let slice = std::slice::from_raw_parts(data_val.mv_data as *const u8, data_val.mv_size);
+        let meta: &SegmentMeta = bytemuck::from_bytes(slice);
+        mdb_txn_abort(txn);
+        Ok(Some(*meta))
+    }
+}
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
 
     use bytemuck::bytes_of;
     use rkyv::{Archive, Deserialize, Serialize};
     use tempfile::tempdir;
 
     use super::*;
-    use crate::core::{
-        date_time::{MS_PER_DAY, day_bounds_from_epoch_ms, emit_secs},
-        event::{ArchivedEvent, EventType},
-        initialize,
-        meta::{MMRMeta, SegmentMeta},
+    use crate::{
+        core::{
+            aof::storage::{
+                format::MMRMeta,
+                lmdb::{LmdbEnv, get_secondary_index, put_secondary_index},
+                meta::{get_meta_val, iterate_segment_meta_by_range},
+            },
+            date_time::{MS_PER_DAY, day_bounds_from_epoch_ms, emit_secs},
+            event::{ArchivedEvent, EventType},
+            initialize,
+        },
+        indexing::hash::sha_256,
     };
 
     #[repr(C)]
@@ -609,6 +481,47 @@ mod tests {
         pub zero_id: u64,
         pub title: String,
         pub body: String,
+    }
+
+    #[test]
+    fn test_put_and_get_secondary_index() {
+        initialize();
+        let dir = tempdir().expect("failed_to_unravel");
+        let arc_env = Arc::new(Mutex::new(
+            LmdbEnv::new(dir.path().to_str().expect("failed_to_unravel"))
+                .expect("failed_to_unravel"),
+        ));
+        let data = b"payload".to_vec();
+        let leaf_hash = sha_256(&data);
+        let meta = SegmentMeta {
+            page_index: 1,
+            segment_index: 2,
+            write_pos: 100,
+            byte_offset: 200,
+            latest_segment_id: 3,
+            ts_start: 1000,
+            ts_end: 2000,
+        };
+        put_secondary_index(&arc_env, &leaf_hash, &meta).expect("put_secondary_index");
+        let got = get_secondary_index(&arc_env, &leaf_hash)
+            .expect("get_secondary_index")
+            .expect("meta missing");
+        let m_p_id = meta.page_index;
+        let g_p_id = got.page_index;
+        assert_eq!(m_p_id, g_p_id, "page_index mismatch");
+    }
+
+    #[test]
+    fn test_get_secondary_index_not_found() {
+        initialize();
+        let dir = tempdir().expect("failed_to_unravel");
+        let arc_env = Arc::new(Mutex::new(
+            LmdbEnv::new(dir.path().to_str().expect("failed_to_unravel"))
+                .expect("failed_to_unravel"),
+        ));
+        let leaf_hash = [0u8; 32];
+        let got = get_secondary_index(&arc_env, &leaf_hash).expect("get_secondary_index");
+        assert!(got.is_none());
     }
 
     /// Helper to read an archived Event<Vec<u8>> back into an owned Event
@@ -825,8 +738,6 @@ mod tests {
         let sm_pid = seg_meta.page_index;
         assert_eq!(got_page_index, sm_pid);
     }
-
-    use std::sync::{Arc, Mutex};
 
     use crate::core::event::Event;
 

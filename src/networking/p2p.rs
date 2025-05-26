@@ -1,3 +1,32 @@
+/// Handler type for peak announcements.
+pub type PeaksHandler = dyn Fn(&Peer, Vec<Peak>) + Send + Sync + 'static;
+
+/// Handler type for segment metadata announcements.
+pub type SegmentMetaHandler = dyn Fn(&Peer, SegmentMeta) + Send + Sync + 'static;
+
+/// Handler type for incoming live events.
+pub type EventHandler = dyn Fn(&Peer, XaeroGossipEvent) + Send + Sync + 'static;
+
+/// Handler type for incoming page requests.
+pub type PageRequestHandler = dyn Fn(&Peer, PageRequest) + Send + Sync + 'static;
+
+/// Handler type for incoming page responses.
+pub type PageResponseHandler = dyn Fn(&Peer, PageResponse) + Send + Sync + 'static;
+
+/// Handler type for incoming proof requests.
+pub type ProofRequestHandler = dyn Fn(&Peer, ProofRequest) + Send + Sync + 'static;
+
+/// Handler type for incoming proof responses.
+pub type ProofResponseHandler = dyn Fn(&Peer, ProofResponse) + Send + Sync + 'static;
+
+/// Handler type for sync completion notifications.
+pub type SyncDoneHandler = dyn Fn(&Peer) + Send + Sync + 'static;
+
+/// Handler type for error callbacks.
+pub type ErrorHandler = dyn Fn(XaeroP2PError) + Send + Sync + 'static;
+
+/// Handler type for join/leave topic callbacks.
+pub type TopicHandler = dyn Fn(&str) + Send + Sync + 'static;
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
@@ -11,7 +40,7 @@ pub enum XaeroP2PError {
     DiscoveryError,
 }
 
-use crate::{XaeroEvent, core::meta::SegmentMeta, indexing::storage::mmr::Peak};
+use crate::{XaeroEvent, core::aof::storage::format::SegmentMeta, indexing::storage::mmr::Peak};
 
 /// Unique identifier for a peer or node
 pub type NodeId = [u8; 32];
@@ -97,11 +126,11 @@ pub trait XaeroPlane {
     fn join_topic(&self, topic: &str) -> Result<(), XaeroP2PError>;
     fn leave_topic(&self, topic: &str) -> Result<(), XaeroP2PError>;
     /// Register a callback for asynchronous errors.
-    fn on_error<F>(&self, handler: Arc<dyn Fn(XaeroP2PError) + Send + Sync + 'static>);
+    fn on_error(&self, handler: Arc<ErrorHandler>);
     /// Register a callback to be invoked when a topic is joined.
-    fn on_join_topic<F>(&self, handler: Arc<dyn Fn(&str) + Send + Sync + 'static>);
+    fn on_join_topic(&self, handler: Arc<TopicHandler>);
     /// Register a callback to be invoked when a topic is left.
-    fn on_leave_topic<F>(&self, handler: Arc<dyn Fn(&str) + Send + Sync + 'static>);
+    fn on_leave_topic(&self, handler: Arc<TopicHandler>);
 }
 pub trait XaeroControlPlane {
     /// Announce updated peaks to the control plane.
@@ -110,9 +139,9 @@ pub trait XaeroControlPlane {
     fn publish_segment_meta(&self, seg_meta: SegmentMeta) -> Result<(), XaeroP2PError>;
 
     /// Register a callback to handle incoming peak announcements.
-    fn on_peaks<F>(&self, handler: Arc<dyn Fn(&Peer, Vec<Peak>) + Send + Sync + 'static>);
+    fn on_peaks(&self, handler: Arc<PeaksHandler>);
     /// Register a callback to handle incoming segment metadata announcements.
-    fn on_segment_meta<F>(&self, handler: Arc<dyn Fn(&Peer, SegmentMeta) + Send + Sync + 'static>);
+    fn on_segment_meta(&self, handler: Arc<SegmentMetaHandler>);
 }
 
 pub trait XaeroDataPlane {
@@ -127,26 +156,17 @@ pub trait XaeroDataPlane {
     fn send_proof(&self, peer: &Peer, resp: ProofResponse) -> Result<(), XaeroP2PError>;
 
     /// Register a callback to handle incoming live events.
-    fn on_event<F>(&self, handler: Arc<dyn Fn(&Peer, XaeroGossipEvent) + Send + Sync + 'static>);
+    fn on_event(&self, handler: Arc<EventHandler>);
     /// Register a callback to handle incoming page requests.
-    fn on_page_request<F>(&self, handler: Arc<dyn Fn(&Peer, PageRequest) + Send + Sync + 'static>);
+    fn on_page_request(&self, handler: Arc<PageRequestHandler>);
     /// Register a callback to handle incoming page responses.
-    fn on_page_response<F>(
-        &self,
-        handler: Arc<dyn Fn(&Peer, PageResponse) + Send + Sync + 'static>,
-    );
+    fn on_page_response(&self, handler: Arc<PageResponseHandler>);
     /// Register a callback to handle incoming proof requests.
-    fn on_proof_request<F>(
-        &self,
-        handler: Arc<dyn Fn(&Peer, ProofRequest) + Send + Sync + 'static>,
-    );
+    fn on_proof_request(&self, handler: Arc<ProofRequestHandler>);
     /// Register a callback to handle incoming proof responses.
-    fn on_proof_response<F>(
-        &self,
-        handler: Arc<dyn Fn(&Peer, ProofResponse) + Send + Sync + 'static>,
-    );
+    fn on_proof_response(&self, handler: Arc<ProofResponseHandler>);
     /// Register a callback to handle sync completion notifications.
-    fn on_sync_done<F>(&self, handler: Arc<dyn Fn(&Peer) + Send + Sync + 'static>);
+    fn on_sync_done(&self, handler: Arc<SyncDoneHandler>);
 }
 
 /// XaeroTopic represents a topic in the Xaero P2P network.

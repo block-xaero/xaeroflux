@@ -1,9 +1,7 @@
-use std::sync::Arc;
-
 use bytemuck::{Pod, Zeroable};
 use crossbeam::channel::{Receiver, Sender, unbounded};
 
-use crate::core::{DISPATCHER_POOL, meta::SegmentMeta};
+use crate::core::aof::storage::format::SegmentMeta;
 
 /// The data carried by each system event.
 /// All fields are fixed-size so this enum is Pod-friendly.
@@ -12,6 +10,7 @@ use crate::core::{DISPATCHER_POOL, meta::SegmentMeta};
 pub enum SystemPayload {
     /// Indicates an event payload was written to a segment page.
     PayloadWritten {
+        leaf_hash: [u8; 32],
         meta: SegmentMeta,
     },
     SegmentRolledOver {
@@ -29,7 +28,6 @@ pub enum SystemPayload {
         error_code: u16,
     },
     MmrAppended {
-        leaf_index: u64,
         leaf_hash: [u8; 32],
     },
     MmrAppendFailed {
@@ -53,6 +51,12 @@ pub struct ControlBus {
     pub(crate) rx: Receiver<SystemPayload>,
 }
 
+impl Default for ControlBus {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ControlBus {
     /// Create a new ControlBus with an unbounded channel.
     pub fn new() -> Self {
@@ -69,23 +73,4 @@ impl ControlBus {
     pub fn subscribe(&self) -> Receiver<SystemPayload> {
         self.rx.clone()
     }
-
-    /// Register a handler that will be called for every system payload.
-    pub fn register_handler<H: ControlHandler + Send + Sync + 'static>(&self, handler: Arc<H>) {
-        let rx = self.rx.clone();
-        DISPATCHER_POOL
-            .get()
-            .expect("DISPATCH POOL not initialized")
-            .execute(move || {
-                while let Ok(payload) = rx.recv() {
-                    handler.handle(payload);
-                }
-            });
-    }
-}
-
-/// Trait that actors implement to handle incoming system payloads.
-pub trait ControlHandler {
-    /// Called for each system payload received on the control bus.
-    fn handle(&self, payload: SystemPayload);
 }
