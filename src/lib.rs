@@ -3,7 +3,7 @@ pub mod indexing;
 pub mod logs;
 pub mod networking;
 pub mod sys;
-
+pub mod system;
 use core::{DISPATCHER_POOL, aof::AOFActor, event::Event};
 use std::{
     sync::{
@@ -23,6 +23,7 @@ use indexing::storage::{
     },
     format::archive,
 };
+use system::{CONTROL_BUS, init_control_bus};
 use threadpool::ThreadPool;
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
@@ -149,6 +150,10 @@ impl Subject {
     ///
     /// Returns an `XFluxHandle` that keeps everything alive until dropped.
     pub fn unsafe_run(self: Arc<Self>) -> XFluxHandle {
+        tracing::debug!("unsafe_run called for Subject: {}", self.name);
+        tracing::debug!("initializing control bus");
+        init_control_bus();
+        tracing::debug!("control bus initialized");
         self.unsafe_run_called.store(true, Ordering::SeqCst);
         // Instantiate system actors
         let aof = Arc::new(AOFActor::new());

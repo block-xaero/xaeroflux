@@ -19,6 +19,7 @@ use crate::{
         hash::sha_256,
         storage::{format::archive, mmr::XaeroMmrOps},
     },
+    system::CONTROL_BUS,
 };
 
 /// Actor responsible for indexing events into a Merkle Mountain Range (MMR).
@@ -38,7 +39,7 @@ pub struct MmrIndexingActor {
 impl MmrIndexingActor {
     /// Create a new `MmrIndexingActor` with optional store and listener.
     ///
-    /// If `store` is `None`, a default `SegmentWriterActor` with prefix "mmr" is used.
+    /// If `store` is `None`, a default `SegmentWriterActor` with prefix "xaeroflux-mmr" is used.
     /// If `listener` is `None`, an `EventListener` is created that:
     ///   1. Archives each event into bytes.
     ///   2. Persists the event into LMDB.
@@ -54,7 +55,7 @@ impl MmrIndexingActor {
         let _mmr = Arc::new(Mutex::new(crate::indexing::storage::mmr::XaeroMmr::new()));
         let _store = Arc::new(store.unwrap_or_else(|| {
             SegmentWriterActor::new_with_config(super::segment_writer_actor::SegmentConfig {
-                prefix: "mmr".to_string(),
+                prefix: "xaeroflux-mmr".to_string(),
                 ..Default::default()
             })
         }));

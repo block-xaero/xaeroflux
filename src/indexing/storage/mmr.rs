@@ -1,8 +1,11 @@
 use rkyv::Archive;
 
-use crate::indexing::{
-    hash::sha_256_concat_hash,
-    merkle_tree::{XaeroMerkleProof, XaeroMerkleTree, XaeroMerkleTreeOps},
+use crate::{
+    indexing::{
+        hash::sha_256_concat_hash,
+        merkle_tree::{XaeroMerkleProof, XaeroMerkleTree, XaeroMerkleTreeOps},
+    },
+    system::{CONTROL_BUS, control_bus::SystemPayload},
 };
 
 /// Peak represents a peak in the Merkle Mountain Range (MMR).
@@ -64,6 +67,9 @@ pub trait XaeroMmrOps {
         proof: &XaeroMerkleProof,
         expected_root: [u8; 32],
     ) -> bool;
+
+    /// Convenience: gets the leaf hash by its index.
+    fn get_leaf_hash_by_index(&self, index: usize) -> Option<&[u8; 32]>;
 }
 
 impl Default for XaeroMmr {
@@ -119,6 +125,22 @@ impl XaeroMmrOps for XaeroMmr {
         // bag peaks and recalculate root
         let t = XaeroMerkleTree::neo(self.peaks.iter().map(|p| p.root).collect());
         self.root = t.root();
+        let res = self.leaf_hashes.iter().enumerate().map(|(i, h)| {
+            tracing::debug!("leaf_hashes[{}]: {:?}", i, h);
+            CONTROL_BUS
+                .get()
+                .expect("CONTROL_BUS must be initialized")
+                .sender()
+                .send(SystemPayload::MmrAppended {
+                    leaf_index: i as u64,
+                    leaf_hash: *h,
+                })
+        });
+        res.for_each(|r| {
+            if let Err(e) = r {
+                tracing::error!("Failed to send MmrAppended event: {:?}", e);
+            }
+        });
         changed
     }
 
@@ -202,6 +224,10 @@ impl XaeroMmrOps for XaeroMmr {
             }
         }
         running == expected_root
+    }
+
+    fn get_leaf_hash_by_index(&self, index: usize) -> Option<&[u8; 32]> {
+        self.leaf_hashes.get(index)
     }
 }
 

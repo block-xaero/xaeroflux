@@ -43,7 +43,7 @@ pub trait XaeroData: Any + Send + Sync + Clone + Debug {}
 impl<T> XaeroData for T where T: Any + Send + Sync + Clone + Debug {}
 
 /// Global, singleton configuration instance.
-/// 
+///
 /// Initialized by `load_config` and reused thereafter.
 pub static CONF: OnceLock<config::Config> = OnceLock::new();
 
@@ -84,7 +84,7 @@ pub fn init_global_io_pool() {
 /// - Loads and validates configuration (`xaeroflux.toml`).
 /// - Initializes dispatcher and I/O thread pools.
 /// - Sets up logging and displays startup banner.
-/// 
+///
 /// # Panics
 /// Will panic if the configuration name is not "xaeroflux".
 pub fn initialize() {
