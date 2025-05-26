@@ -33,7 +33,7 @@ pub struct SegmentMeta {
 unsafe impl Zeroable for SegmentMeta {}
 unsafe impl Pod for SegmentMeta {}
 
-/// Cursor tracking a subscriber’s read position in the segment log.
+/// Cursor tracking a subscriber's read position in the segment log.
 ///
 /// Fields:
 /// - `subscriber_name`: fixed-size identifier of the subscriber.

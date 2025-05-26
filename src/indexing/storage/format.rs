@@ -162,7 +162,7 @@ pub fn unarchive<'a>(bytes: &'a [u8]) -> (&'a XaeroOnDiskEventHeader, &'a Archiv
 /// For each leaf (event) we store exactly where its bytes live on disk
 /// and what its timestamp was.
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct LeafLocation {
     /// Which payload segment file ('.seg') holds the event
     pub segment_index: u32, // 4 bytes

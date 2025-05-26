@@ -2,10 +2,10 @@
 //!
 //! This module provides:
 //! - `SegmentConfig`: configuration parameters for paging and segmentation.
-//! - `SegmentWriterActor`: an actor that listens for archived event blobs
-//!   and writes them into fixed-size pages within segment files.
-//! - `run_writer_loop`: core loop logic for handling page boundaries,
-//!   file rollover, and metadata events.
+//! - `SegmentWriterActor`: an actor that listens for archived event blobs and writes them into
+//!   fixed-size pages within segment files.
+//! - `run_writer_loop`: core loop logic for handling page boundaries, file rollover, and metadata
+//!   events.
 //! - Unit tests verifying segment math, flush behavior, and rollover/resume logic.
 
 use std::{
@@ -28,6 +28,7 @@ use crate::{
         size::PAGE_SIZE,
     },
     indexing::storage::format::archive,
+    system::{CONTROL_BUS, control_bus::SystemPayload},
 };
 
 /// Configuration for paged segment storage.
@@ -64,8 +65,8 @@ impl Default for SegmentConfig {
 /// Actor responsible for writing serialized event frames into segment files.
 ///
 /// This actor sets up:
-/// - An `EventListener<Vec<u8>>` that archives incoming `Event<Vec<u8>>` values
-///   and sends their byte frames to `inbox`.
+/// - An `EventListener<Vec<u8>>` that archives incoming `Event<Vec<u8>>` values and sends their
+///   byte frames to `inbox`.
 /// - A background thread (`_handle`) running `run_writer_loop` to consume from `inbox`.
 /// - An LMDB environment (`meta_db`) to record segment rollover metadata.
 /// - The active `SegmentConfig` used for page size and directory settings.
@@ -153,9 +154,9 @@ impl SegmentWriterActor {
 /// 2. Iterates existing `SegmentMeta` entries to resume at the latest segment/page.
 /// 3. Opens (or creates) the current segment file, memory-maps it.
 /// 4. On each `rx.recv()`:
-///    - If the incoming frame does not fit in the current page, flushes the page,
-///      advances `page_index`, and handles segment rollover (including
-///      emitting a `MetaEvent` into LMDB and remapping a new file).
+///    - If the incoming frame does not fit in the current page, flushes the page, advances
+///      `page_index`, and handles segment rollover (including emitting a `MetaEvent` into LMDB and
+///      remapping a new file).
 ///    - Copies the frame bytes into the current page at `byte_offset + write_pos`.
 ///    - Updates `write_pos`.
 /// 5. On channel close, performs a final flush of any unwritten bytes.
@@ -267,8 +268,37 @@ fn run_writer_loop(meta_db: &Arc<Mutex<LmdbEnv>>, rx: Receiver<Vec<u8>>, config:
         let end = start + write_len;
         mm[start..end].copy_from_slice(data.as_slice());
         write_pos += write_len;
+        tracing::debug!(
+            "Wrote {} bytes to segment {} page {} at offset {}",
+            write_len,
+            seg_id,
+            local_page_idx,
+            start
+        );
+        tracing::debug!("sending message to control bus");
+        let payload_written_msg_sent_ack = CONTROL_BUS
+            .get()
+            .expect("control_bus_not_initialized")
+            .sender()
+            .send(SystemPayload::PayloadWritten {
+                meta: SegmentMeta {
+                    page_index,
+                    segment_index: seg_id,
+                    write_pos,
+                    byte_offset,
+                    latest_segment_id: seg_id,
+                    ts_start,
+                    ts_end: emit_secs(),
+                },
+            });
+        match payload_written_msg_sent_ack {
+            Ok(_) => tracing::debug!("Payload written message sent successfully"),
+            Err(e) => {
+                // FIXME: SHOULD WE PANIC HERE??
+                tracing::error!("Failed to send PayloadWritten message: {}", e)
+            }
+        }
     }
-
     // final flush if any data
     if write_pos > 0 {
         mm.flush_range(byte_offset, page_size)
