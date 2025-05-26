@@ -1,3 +1,10 @@
+//! IO utilities for reading and iterating archived events from segment files.
+//!
+//! This module provides:
+//! - `read_segment_file`: memory-map a segment file for read-only access.
+//! - `PageEventIterator`: iterate over `ArchivedEvent` frames within a single page.
+//! - `iter_all_events`: helper to iterate across all pages in a segment.
+
 use std::fs::OpenOptions;
 
 use bytemuck::from_bytes;
@@ -10,21 +17,31 @@ use crate::{
     },
 };
 
-/// Reads a segment file from disk and returns a read-only memory map.
+/// Memory-map a segment file at the given path for read-only access.
+///
+/// Opens the file in read-only mode and returns a `Mmap` for zero-copy access
+/// to its contents. Returns an `Err` if the file cannot be opened or mapped.
 pub fn read_segment_file(path: &str) -> std::io::Result<Mmap> {
     let file = OpenOptions::new().read(true).open(path)?;
     // Safety: we never write through this map
     unsafe { Mmap::map(&file) }
 }
 
-/// Iterator over archived events in a single fixed-size page.
+/// Iterator over archived events contained within a single fixed-size page.
+///
+/// `PageEventIterator` parses event headers and yields deserialized
+/// `ArchivedEvent<Vec<u8>>` until padding or end-of-page is reached.
 pub struct PageEventIterator<'a> {
     page: &'a [u8],
     offset: usize,
 }
 
 impl<'a> PageEventIterator<'a> {
-    /// Create a new iterator for one page.
+    /// Create a new iterator for a single page buffer.
+    ///
+    /// # Arguments
+    ///
+    /// * `page` - byte slice representing one fixed-size page from a segment.
     pub fn new(page: &'a [u8]) -> Self {
         Self { page, offset: 0 }
     }
@@ -33,6 +50,11 @@ impl<'a> PageEventIterator<'a> {
 impl<'a> Iterator for PageEventIterator<'a> {
     type Item = &'a ArchivedEvent<Vec<u8>>;
 
+    /// Advance to the next archived event in the page.
+    ///
+    /// Reads the event header, validates magic bytes, checks frame boundaries,
+    /// and returns the deserialized `ArchivedEvent` if valid. Returns `None`
+    /// when no more events are found.
     fn next(&mut self) -> Option<Self::Item> {
         // 1) Need room for header?
         if self.offset + EVENT_HEADER_SIZE > self.page.len() {
@@ -59,7 +81,10 @@ impl<'a> Iterator for PageEventIterator<'a> {
     }
 }
 
-/// Iterate all ArchivedEvent frames across every page in the segment.
+/// Iterate all archived events across every page in the mapped segment.
+///
+/// Splits the mapped memory into fixed-size pages and applies
+/// `PageEventIterator` to each, flattening into a single event stream.
 pub fn iter_all_events(mmap: &Mmap) -> impl Iterator<Item = &'_ ArchivedEvent<Vec<u8>>> + '_ {
     mmap.chunks_exact(PAGE_SIZE)
         .flat_map(PageEventIterator::new)

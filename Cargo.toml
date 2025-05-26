@@ -33,6 +33,15 @@ xaeroflux = { path = "." }  # Adjust the path as necessary
 libc = "0.2.172"
 
 [dependencies]
+iroh = {version = "0.35.0", "default-features" = true, features = ["discovery-local-network"] }
+multihash = "0.19.3" 
+iroh-gossip = { version = "0.35.0", default-features = false, features = ["net"] }
+iroh-blobs = "0.35.0"
+cid = "0.11.1"
+async-trait = "0.1.88"
+tokio = { version = "1.45.0", default-features = false, features = ["rt", "macros", "net", "sync"] }
+tokio-stream = "0.1.17"
+futures = "0.3.31"
 crdts = "7.3.2"
 bytemuck = "1.23.0"
 rkyv = "0.8.10"
@@ -44,8 +53,6 @@ hex = "0.4.3"
 tracing = { version = "0.1.41", features = ["log"] }
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "time"] }
 sha2 = { version = "0.10.9" }
-iroh = "0.35.0"
-iroh-blobs = "0.35.0"
 anyhow = "1.0.98"
 liblmdb = "0.9.70"
 tempfile = "3.20.0"
@@ -54,3 +61,11 @@ memmap2 = "0.9.5"
 crossbeam = "0.8.4"
 serde = { version = "1.0.219", features = ["derive"] }
 rustfix = "0.9.0"
+
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+overflow-checks = false

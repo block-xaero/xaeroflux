@@ -1,3 +1,11 @@
+//! Core initialization and utilities for xaeroflux.
+//!
+//! This module provides:
+//! - Global configuration loading and access (`load_config`, `CONF`).
+//! - Initialization of global thread pools for dispatch and I/O.
+//! - Serialization and deserialization helpers for rkyv.
+//! - Application startup (`initialize`) with logging and banner.
+
 use std::{any::Any, env, fmt::Debug, sync::OnceLock};
 
 use config::Config;
@@ -23,14 +31,32 @@ use tracing::info;
 
 use crate::logs::init_logging;
 
+/// Marker trait for types that can be stored as xaeroflux events.
+///
+/// Requirements:
+/// - `Any` for downcasting support.
+/// - `Send + Sync` for safe cross-thread use.
+/// - `Clone` for duplicating payloads.
+/// - `Debug` for logging and diagnostics.
 pub trait XaeroData: Any + Send + Sync + Clone + Debug {}
 
 impl<T> XaeroData for T where T: Any + Send + Sync + Clone + Debug {}
+
+/// Global, singleton configuration instance.
+/// 
+/// Initialized by `load_config` and reused thereafter.
 pub static CONF: OnceLock<config::Config> = OnceLock::new();
 
+/// Global thread pool for dispatching work to worker threads.
 pub static DISPATCHER_POOL: OnceLock<ThreadPool> = OnceLock::new();
+
+/// Global thread pool for performing I/O-bound tasks.
 pub static IO_POOL: OnceLock<ThreadPool> = OnceLock::new();
 
+/// Initializes the global dispatcher thread pool.
+///
+/// Uses the `threads.num_worker_threads` setting from configuration,
+/// defaulting to at least one thread, and stores it in `DISPATCHER_POOL`.
 pub fn init_global_dispatcher_pool() {
     DISPATCHER_POOL.get_or_init(|| {
         let conf = CONF.get_or_init(Config::default);
@@ -40,6 +66,10 @@ pub fn init_global_dispatcher_pool() {
     });
 }
 
+/// Initializes the global I/O thread pool.
+///
+/// Uses the `threads.num_io_threads` setting from configuration,
+/// defaulting to at least one thread, and stores it in `IO_POOL`.
 pub fn init_global_io_pool() {
     IO_POOL.get_or_init(|| {
         let conf = CONF.get_or_init(Config::default);
@@ -49,7 +79,14 @@ pub fn init_global_io_pool() {
     });
 }
 
-/// Initialize the XaeroFlux core components here.
+/// Perform global initialization of xaeroflux core.
+///
+/// - Loads and validates configuration (`xaeroflux.toml`).
+/// - Initializes dispatcher and I/O thread pools.
+/// - Sets up logging and displays startup banner.
+/// 
+/// # Panics
+/// Will panic if the configuration name is not "xaeroflux".
 pub fn initialize() {
     #[cfg(not(test))]
     crate::core::size::init(); // Initialize the size module
@@ -68,7 +105,12 @@ pub fn initialize() {
     info!("XaeroFlux initialized");
 }
 
-/// Serializes the given data to bytes.
+/// Serialize a data payload into a zero-copy `AlignedVec`.
+///
+/// Uses the `rkyv` framework with the `rancor` sharing strategy.
+///
+/// # Errors
+/// Returns `Failure` if serialization fails.
 pub fn serialize<T>(data: &T) -> Result<AlignedVec, Failure>
 where
     T: XaeroData
@@ -86,7 +128,12 @@ where
     rkyv::to_bytes::<Failure>(data)
 }
 
-/// Deserializes bytes to the given type.
+/// Deserialize bytes back into a data type.
+///
+/// Uses `rkyv` zero-copy deserialization with validation.
+///
+/// # Errors
+/// Returns `Failure` if validation or deserialization fails.
 pub fn deserialize<T>(data: &[u8]) -> Result<T, Failure>
 where
     T: XaeroData + rkyv::Archive,
@@ -97,10 +144,13 @@ where
 {
     rkyv::from_bytes::<T, Failure>(data)
 }
-/// Load the configuration file and parse it.
-/// The configuration file is expected to be in TOML format.
-/// The default path is `xaeroflux.toml`.
-/// You can override this by setting the `XAERO_CONFIG` environment variable.
+/// Load or retrieve the global configuration.
+///
+/// Reads the `XAERO_CONFIG` environment variable or defaults to
+/// `xaeroflux.toml` in the project root, parses it via `toml`.
+///
+/// # Panics
+/// Will panic if the file cannot be read or parsed.
 pub fn load_config() -> &'static config::Config {
     CONF.get_or_init(|| {
         let path = std::env::var("XAERO_CONFIG").unwrap_or_else(|_| "xaeroflux.toml".into());
@@ -109,7 +159,9 @@ pub fn load_config() -> &'static config::Config {
     })
 }
 
-/// Shows the XaeroFlux banner using the FIGlet font.
+/// Display the ASCII art banner for xaeroflux startup.
+///
+/// Uses FIGfont to render "XAER0FLUX v.{version}" and logs it.
 pub fn show_banner() {
     info!("XaeroFlux initializing...");
     let slant = FIGfont::standard().expect("load slant font");

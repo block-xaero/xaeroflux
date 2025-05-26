@@ -1,3 +1,12 @@
+//! Event listener actor for xaeroflux.
+//!
+//! This module provides:
+//! - `EventListener<T>`: an actor that receives events via a channel,
+//!   dispatches them to worker threads, and tracks metrics.
+//! - `EventListenerMeta`: statistics on processed and dropped events.
+//! - `VersioningScheme` and `AddressingScheme` traits for generating
+//!   unique listener versions and addresses.
+
 use std::{
     fmt::Debug,
     panic::{self, AssertUnwindSafe},
@@ -10,6 +19,19 @@ use threadpool::ThreadPool;
 
 use super::{DISPATCHER_POOL, XaeroData, event::Event, init_global_dispatcher_pool};
 
+/// An asynchronous event listener actor.
+///
+/// Listens for `Event<T>` on an unbounded crossbeam channel, spawns a
+/// dedicated dispatcher thread to pull events, and uses a shared
+/// thread pool (`ThreadPool`) to execute user-provided handlers.
+///
+/// Fields:
+/// - `id`: unique listener ID (SHA-256 hash of the name).
+/// - `address`: optional hierarchical address in the event graph.
+/// - `inbox`: sender side of the event channel.
+/// - `pool`: shared thread pool for handler execution.
+/// - `dispatcher`: handle to the thread receiving from `inbox`.
+/// - `meta`: shared metrics (processed / dropped counts).
 pub struct EventListener<T>
 where
     T: XaeroData + Send + Sync + 'static,
@@ -22,11 +44,18 @@ where
     pub meta: Arc<EventListenerMeta>,
 }
 
+/// Metadata for an EventListener, tracking event processing metrics.
+///
+/// - `events_processed`: number of events successfully handled.
+/// - `events_dropped`: number of events that panicked or failed.
 #[derive(Debug, Clone)]
 pub struct EventListenerMeta {
     pub events_processed: Arc<AtomicUsize>,
     pub events_dropped: Arc<AtomicUsize>,
 }
+/// Trait for listeners to emit a version string based on seed name/group.
+///
+/// Implementors produce a unique version using a timestamp.
 pub trait VersioningScheme {
     fn emit_version(&self, seed_name: &str, seed_group: &str) -> String;
 }
@@ -46,6 +75,9 @@ where
         )
     }
 }
+/// Trait for listeners to emit a unique hierarchical address.
+///
+/// The address incorporates group/name, version, and a hashed identifier.
 pub trait AddressingScheme {
     fn emit_address(&self, seed_name: &str, seed_group: &str) -> String;
 }
@@ -78,6 +110,17 @@ impl<T> EventListener<T>
 where
     T: XaeroData + Send + Sync + 'static,
 {
+    /// Constructs a new `EventListener`.
+    ///
+    /// # Arguments
+    /// - `name`: human-readable name for the listener (used to generate `id`).
+    /// - `handler`: `Arc<Fn(Event<T>)>` closure to process each event.
+    /// - `_event_buffer_size`: optional capacity hint (currently unused).
+    /// - `_pool_size_override`: optional override for thread pool size.
+    ///
+    /// Initializes the global dispatcher pool, spawns a dispatcher thread
+    /// that receives events and schedules them on the pool, catching panics
+    /// to increment `events_dropped`.
     pub fn new(
         name: &str,
         handler: Arc<dyn Fn(Event<T>) + Send + Sync + 'static>,
@@ -148,6 +191,10 @@ where
         }
     }
 
+    /// Gracefully shuts down the listener.
+    ///
+    /// Drops the inbox to stop receiving new events, joins the dispatcher
+    /// thread, and waits for all pending handler tasks to complete.
     pub fn shutdown(self) {
         tracing::info!("shutting down event listener");
         drop(self.inbox);
@@ -160,6 +207,8 @@ where
     }
 }
 
+/// Unit tests for the `EventListener` actor,
+/// verifying event dispatch, metrics, and shutdown behavior.
 #[cfg(test)]
 mod tests {
     use super::*;

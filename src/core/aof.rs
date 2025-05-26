@@ -1,3 +1,10 @@
+//! Append-only event log (AOF) actor using LMDB for persistent storage.
+//!
+//! This module provides:
+//! - `AOFActor`: listens for events and writes them durably into LMDB.
+//! - `LmdbEnv`: wrapper around the LMDB environment and databases.
+//! - Functions to push events, scan event ranges, and manage metadata.
+
 use std::{
     ffi::CString,
     fmt::Debug,
@@ -27,6 +34,10 @@ pub enum DBI {
     META = 1,
 }
 
+/// An append-only file (AOF) actor that persists events into LMDB.
+///
+/// The `AOFActor` encapsulates an LMDB environment and an event listener.
+/// It writes incoming events to disk for durable storage and later retrieval.
 pub struct AOFActor {
     pub env: Arc<Mutex<LmdbEnv>>,
     pub listener: EventListener<Vec<u8>>,
@@ -61,6 +72,10 @@ impl AOFActor {
         }
     }
 }
+/// A wrapper around an LMDB environment with two databases: AOF and META.
+///
+/// - AOF_DB stores application events keyed by timestamp, event type, and hash.
+/// - META_DB stores segment and MMR metadata for efficient lookup.
 pub struct LmdbEnv {
     pub env: *mut MDB_env,
     pub dbis: [MDB_dbi; 2],
@@ -116,6 +131,15 @@ impl LmdbEnv {
 /// It returns the database handle (MDB_dbi) on success.
 /// If an error occurs, it returns a boxed error.
 /// The caller is responsible for managing the lifetime of the database handle.
+/// Opens or creates a named database in the LMDB environment.
+///
+/// Begins a write transaction, opens (or creates) the given database name,
+/// commits the transaction, and returns the `MDB_dbi` handle.
+///
+/// # Safety
+/// This function calls directly into the LMDB C API and assumes the
+/// environment is valid. The caller must ensure the `env` pointer is correct
+/// and `name_ptr` is a valid C string.
 unsafe fn open_named_db(
     env: *mut MDB_env,
     name_ptr: *const i8,
@@ -183,14 +207,14 @@ impl Debug for EventKey {
     }
 }
 
-/// Scans all archived events in the AOF database whose timestamp prefix
-/// (the first 8 bytes of the key) falls in `[start_ms, end_ms)`.
+/// Scans archived events in the AOF database for a given timestamp range.
 ///
-/// The keys in AOF DB are 8-byte big-endian `ts` ‖ 1-byte `kind` ‖ 32-byte hash.
-/// ## Safety
-/// This function is unsafe because it directly interacts with the LMDB C API.
-/// It assumes that the environment is already created and opened.
-/// It also assumes that the database is already opened.
+/// Returns a `Vec<AlignedVec>` where each element is the serialized event data
+/// for events whose keys have timestamps in `[start_ms, end_ms)`.
+///
+/// # Safety
+/// This function interacts directly with the LMDB C API and assumes the
+/// environment and database are open and valid.
 pub unsafe fn scan_range(
     env: &Arc<Mutex<LmdbEnv>>,
     start_ms: u64,
@@ -269,17 +293,15 @@ pub unsafe fn scan_range(
     }
 }
 
-/// Pushes an event into the LMDB AOF or META database.
+/// Persists an event into the LMDB AOF or META database.
 ///
-/// For `MetaEvent(1)` (segment metadata), the meta is stored under two keys:
-/// 1. A composite 16-byte binary key: `[ts_start (8 bytes BE) ‖ segment_index (8 bytes BE)]`,
-///    allowing cursor range scans to retrieve all segment metas in timestamp order.
-/// 2. A static key `"segment_meta"`, which is overwritten on each push, enabling a fast single-key
-///    lookup via `get_meta_val(b"segment_meta")` for the latest meta.
+/// Behavior varies by event type:
+/// - `MetaEvent(1)`: stores segment metadata under composite and static keys.
+/// - `MetaEvent(2)`: stores MMR metadata under a static key.
+/// - Application events: stored in the AOF database with a composite key.
 ///
-/// For `MetaEvent(2)` (MMR metadata), the meta is stored under the static key `"mmr_meta"`.
-///
-/// Application events use a zero-copy `EventKey` (ts + kind + hash) in the AOF DB.
+/// # Errors
+/// Returns an error if any LMDB operation fails.
 pub fn push_event(
     arc_env: &Arc<Mutex<LmdbEnv>>,
     event: &Event<Vec<u8>>,
@@ -508,16 +530,12 @@ pub fn iterate_segment_meta_by_range(
     Ok(results)
 }
 
-/// Shortcut to get the meta value from the LMDB database.
-/// This is a zero-copy operation.
-/// The meta value is stored in the second database (meta).
-/// Meta key is "segment_meta" or "mmr_meta".
-/// The meta value is a `rkyv` `rkyv::to_bytes` archived/ serialized `MMRMeta` struct or
-/// `SegmentMeta` struct.
+/// Retrieves a metadata value from META_DB for the given key.
+///
+/// Returns the raw bytes of the stored metadata (e.g., segment or MMR meta).
+///
 /// # Safety
-/// SAFE: This function is unsafe because it directly interacts with the LMDB C API.
-/// It assumes that the environment is already created and opened.
-/// It also assumes that the database is already opened.
+/// Directly calls the LMDB C API and assumes the environment and database are open.
 pub unsafe fn get_meta_val(env: &Arc<Mutex<LmdbEnv>>, key: &[u8]) -> AlignedVec {
     let guard = env.lock().expect("failed_to_unwrap");
     let lmdb = &*guard;
@@ -553,8 +571,7 @@ pub unsafe fn get_meta_val(env: &Arc<Mutex<LmdbEnv>>, key: &[u8]) -> AlignedVec 
     av
 }
 
-/// Generate a key for the event.
-/// The key is a combination of the event timestamp, event type, and a hash of the event data.
+/// Generates an `EventKey` consisting of the event timestamp, type, and data hash.
 pub fn generate_key(event: &Event<Vec<u8>>) -> Result<EventKey, Failure> {
     Ok(EventKey {
         ts: event.ts.to_be(),
@@ -562,8 +579,7 @@ pub fn generate_key(event: &Event<Vec<u8>>) -> Result<EventKey, Failure> {
         hash: sha_256(&event.data),
     })
 }
-/// Store event carrying raw bytes.
-/// The event is serialized using the `rkyv` crate.
+/// Serializes an event into a zero-copy `AlignedVec` using `rkyv`.
 pub fn generate_value(event: &Event<Vec<u8>>) -> Result<AlignedVec, Failure> {
     let bytes = rkyv::to_bytes::<Failure>(event)?;
     Ok(bytes)

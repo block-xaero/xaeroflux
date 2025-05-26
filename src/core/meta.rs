@@ -1,6 +1,23 @@
+//! Core metadata types for xaeroflux.
+//!
+//! This module defines:
+//! - `SegmentMeta`: metadata about a single log segment and its pages.
+//! - `ReaderCursor`: tracks a consumer’s position within the segment log.
+//! - `MMRMeta`: Merkle Mountain Range index metadata per segment.
+
 use bytemuck::{Pod, Zeroable};
 use rkyv::{Archive, Deserialize, Serialize};
 
+/// Metadata for a persisted segment page in the append-only log.
+///
+/// Fields:
+/// - `page_index`: zero-based index of the page within its segment.
+/// - `segment_index`: index of the segment in the overall log.
+/// - `write_pos`: number of pages written before this one rolled over.
+/// - `byte_offset`: starting byte within the underlying file.
+/// - `latest_segment_id`: ID of the most recently completed segment at write time.
+/// - `ts_start`: timestamp (ms since epoch) of the first event in this segment.
+/// - `ts_end`: timestamp (ms since epoch) of the last event in this segment.
 #[repr(C, packed)]
 #[derive(Debug, Clone, Default, Copy)]
 pub struct SegmentMeta {
@@ -16,8 +33,16 @@ pub struct SegmentMeta {
 unsafe impl Zeroable for SegmentMeta {}
 unsafe impl Pod for SegmentMeta {}
 
-/// A little cursor for each consumer so they know  
-/// "which segment → which page → byte‐offset within that page"
+/// Cursor tracking a subscriber’s read position in the segment log.
+///
+/// Fields:
+/// - `subscriber_name`: fixed-size identifier of the subscriber.
+/// - `subscriber_id`: numeric ID of the subscriber instance.
+/// - `page_index`: current page index within the segment to read next.
+/// - `segment_index`: current segment index to read next.
+/// - `read_pos`: number of pages already consumed in this segment.
+/// - `byte_offset`: byte offset within the current page.
+/// - `latest_segment_id`: most recent segment ID observed by this reader.
 #[repr(C)]
 #[derive(Debug, Clone, Archive, Serialize, Deserialize, Default)]
 #[rkyv(derive(Debug))]
@@ -35,6 +60,13 @@ pub struct ReaderCursor {
 unsafe impl Zeroable for ReaderCursor {}
 unsafe impl Pod for ReaderCursor {}
 
+/// Metadata for the Merkle Mountain Range (MMR) index on a segment.
+///
+/// Fields:
+/// - `root_hash`: 32-byte hash of the MMR root for integrity proofs.
+/// - `peaks_count`: number of peaks (sub-roots) in the MMR structure.
+/// - `leaf_count`: total number of leaves (events) in the MMR.
+/// - `segment_meta`: nested `SegmentMeta` for the segment containing this MMR.
 #[repr(C, packed)]
 #[derive(Debug, Clone, Default, Copy)]
 pub struct MMRMeta {

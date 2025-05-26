@@ -13,7 +13,6 @@ and relays them through subject booted with Scan operator.
 - Configuration for files
 - Cleanup and more test cases.
 
-
 [0.1.0-m2] - 2025-05-18
 
 Added

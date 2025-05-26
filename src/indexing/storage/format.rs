@@ -1,3 +1,11 @@
+//! on-disk serialization format for xaeroflux segments.
+//!
+//! Defines:
+//! - Magic constants and sizing parameters for paging and segments.
+//! - On-disk representations for MMR nodes and pages.
+//! - On-disk event header and archival/unarchival functions.
+//! - On-disk Merkle node and page structures for proof storage.
+
 use std::mem;
 
 use bytemuck::{Pod, Zeroable};
@@ -5,14 +13,26 @@ use rkyv::{Archive, rancor::Failure};
 
 use crate::core::event::{ArchivedEvent, Event};
 
+/// Magic prefix used at the start of all on-disk pages and events.
 pub const XAERO_MAGIC: [u8; 4] = *b"XAER";
+/// Size in bytes of the `XaeroOnDiskEventHeader` (always 16).
 pub const EVENT_HEADER_SIZE: usize = mem::size_of::<XaeroOnDiskEventHeader>(); // 12
+/// Total header size (magic, type, padding, and three u64 fields) in bytes.
 pub const HEADER_SIZE: usize = 4 + 1 + 7 + 8 + 8 + 8; // = 36
+/// Size in bytes of a single on-disk MMR node entry.
 pub const NODE_SIZE: usize = 32 + 1 + 7; // = 40
+/// Size of each on-disk page (16 KiB).
 pub const PAGE_SIZE: usize = 16 * 1024; // 16 KiB
+/// Number of MMR nodes that fit in one page after accounting for headers.
 pub const NODES_PER_PAGE: usize = (PAGE_SIZE - HEADER_SIZE) / NODE_SIZE;
+/// Number of pages per segment file.
 pub const PAGES_PER_SEGMENT: usize = 1_024;
 
+/// On-disk representation of a single Merkle Mountain Range node.
+///
+/// - `hash`: 32-byte node hash.
+/// - `is_leaf`: 1 if this node is a leaf, 0 otherwise.
+/// - `_pad`: padding to align to `NODE_SIZE`.
 #[repr(C)]
 #[derive(Clone, Copy, Archive, Debug)]
 #[rkyv(derive(Debug))]
@@ -24,6 +44,15 @@ pub struct MmrOnDiskNode {
 unsafe impl Zeroable for MmrOnDiskNode {}
 unsafe impl Pod for MmrOnDiskNode {}
 
+/// On-disk layout of an MMR page.
+///
+/// Pages contain:
+/// - `marker`: magic bytes to identify XAER format.
+/// - `version`: format version.
+/// - `leaf_start`: index of the first leaf hash in this page.
+/// - `total_nodes`: total MMR nodes up to this point.
+/// - `nodes`: fixed array of `MmrOnDiskNode` entries.
+/// - `_pad`: padding to fill the rest of the 16 KiB page.
 #[repr(C)]
 #[derive(Clone, Copy, Archive, Debug)]
 #[rkyv(derive(Debug))]
@@ -38,13 +67,13 @@ pub struct MmrOnDiskPage {
 unsafe impl Zeroable for MmrOnDiskPage {}
 unsafe impl Pod for MmrOnDiskPage {}
 
-/// Header for archived events on disk.
-/// Starts with a magic number, followed by the length of the payload,
-/// the event type, and some padding to align the version field.
-/// Magic number is "XAER" (4 bytes).
-/// Length is 4 bytes (u32).
-/// Event type is 1 byte (u8).
-/// Padding is 3 bytes (u8).
+/// Header for an archived event stored on disk.
+///
+/// Structure:
+/// - `marker`: 4-byte magic "XAER".
+/// - `len`: length of the archived payload in bytes.
+/// - `event_type`: type discriminator for the event.
+/// - `_pad1`: padding to align the following version field.
 #[repr(C)]
 #[derive(Clone, Copy, Archive, Debug)]
 #[rkyv(derive(Debug))]
@@ -59,8 +88,13 @@ unsafe impl Pod for XaeroOnDiskEventHeader {}
 unsafe impl Zeroable for XaeroOnDiskEventHeader {}
 const _: () = assert!(std::mem::size_of::<XaeroOnDiskEventHeader>() == 16);
 
-/// Archives an event to be shoved to pages on disk.
-/// serializes the event to rkyv bytes and prepends a `XaeroOnDiskEventHeader`  to it.
+/// Serialize an event to a byte vector ready for paging.
+///
+/// This prepends a 16-byte `XaeroOnDiskEventHeader` to the
+/// Rkyv-serialized event payload.
+///
+/// # Panics
+/// Panics if the Rkyv serialization fails.
 pub fn archive(e: &Event<Vec<u8>>) -> Vec<u8> {
     let archived_b = rkyv::to_bytes::<Failure>(e).expect("failed_to_archive_event");
     let mut bytes = Vec::with_capacity(EVENT_HEADER_SIZE + archived_b.len());
@@ -74,7 +108,14 @@ pub fn archive(e: &Event<Vec<u8>>) -> Vec<u8> {
     bytes.extend_from_slice(archived_b.as_slice());
     bytes
 }
-/// Unarchives an event from a byte slice.
+/// Parse a memory slice into an event header and archived event.
+///
+/// Validates the magic prefix and payload length,
+/// then returns references to the header and the Rkyv-backed payload.
+///
+/// # Panics
+/// Panics if the magic prefix is invalid or the buffer is too small,
+/// or if Rkyv access fails.
 pub fn unarchive<'a>(bytes: &'a [u8]) -> (&'a XaeroOnDiskEventHeader, &'a ArchivedEvent<Vec<u8>>) {
     let header: &'a XaeroOnDiskEventHeader = bytemuck::from_bytes(&bytes[0..EVENT_HEADER_SIZE]);
     // removing header
@@ -117,6 +158,37 @@ pub fn unarchive<'a>(bytes: &'a [u8]) -> (&'a XaeroOnDiskEventHeader, &'a Archiv
         }
     }
 }
+
+/// For each leaf (event) we store exactly where its bytes live on disk
+/// and what its timestamp was.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct LeafLocation {
+    /// Which payload segment file ('.seg') holds the event
+    pub segment_index: u32, // 4 bytes
+
+    /// Which 16 KiB page within that segment
+    pub page_index: u32, // 4 bytes
+
+    /// Byte offset *within* that page where the frame starts
+    pub byte_offset: u32, // 4 bytes
+
+    /// Number of bytes in the archived frame (so we know how far to read)
+    pub length: u32, // 4 bytes
+
+    /// The event's timestamp in milliseconds since Unix epoch
+    pub ts: u64, // 8 bytes
+}
+
+// Total size = 4 + 4 + 4 + 4 + 8 = 24 bytes
+unsafe impl Zeroable for LeafLocation {}
+unsafe impl Pod for LeafLocation {}
+
+/// On-disk representation of a Merkle proof node.
+///
+/// - `hash`: 32-byte proof hash.
+/// - `flags`: node flags encoding position or type.
+/// - `_pad`: padding for `NODE_SIZE` alignment.
 #[repr(C)]
 #[derive(Clone, Copy, Archive, Debug)]
 #[rkyv(derive(Debug))]
@@ -128,6 +200,17 @@ pub struct XaeroOnDiskMerkleNode {
 unsafe impl Zeroable for XaeroOnDiskMerkleNode {}
 unsafe impl Pod for XaeroOnDiskMerkleNode {}
 
+/// On-disk layout of a Merkle proof page.
+///
+/// Pages include:
+/// - `marker`: magic bytes "XAER".
+/// - `event_type`: type byte for proof section.
+/// - `_pad1`: padding for alignment.
+/// - `version`: format version.
+/// - `leaf_start`: starting leaf index in this page.
+/// - `total_nodes`: total proof nodes to date.
+/// - `nodes`: fixed array of proof nodes.
+/// - `_pad2`: padding to fill to `PAGE_SIZE`.
 #[repr(C)]
 #[derive(Clone, Copy, Archive, Debug)]
 #[rkyv(derive(Debug))]
