@@ -4,13 +4,14 @@ pub mod logs;
 pub mod networking;
 pub mod sys;
 pub mod system;
-use core::{DISPATCHER_POOL, aof::AOFActor, event::Event};
+use core::{DISPATCHER_POOL, aof::actor::AOFActor, event::Event};
 use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread::JoinHandle,
+    time::Duration,
 };
 
 use bytemuck::{Pod, Zeroable};
@@ -18,12 +19,13 @@ use crossbeam::channel::{Receiver, Sender, unbounded};
 use indexing::storage::{
     actors::{
         mmr_actor::MmrIndexingActor,
+        secondary_index_actor::SecondaryIndexActor,
         segment_reader_actor::SegmentReaderActor,
         segment_writer_actor::{SegmentConfig, SegmentWriterActor},
     },
     format::archive,
 };
-use system::{CONTROL_BUS, init_control_bus};
+use system::control_bus::ControlBus;
 use threadpool::ThreadPool;
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
@@ -152,14 +154,20 @@ impl Subject {
     pub fn unsafe_run(self: Arc<Self>) -> XFluxHandle {
         tracing::debug!("unsafe_run called for Subject: {}", self.name);
         tracing::debug!("initializing control bus");
-        init_control_bus();
+        let cb = Arc::new(ControlBus::new());
         tracing::debug!("control bus initialized");
         self.unsafe_run_called.store(true, Ordering::SeqCst);
         // Instantiate system actors
-        let aof = Arc::new(AOFActor::new());
-        let seg = Arc::new(SegmentWriterActor::new());
-        let mmr = Arc::new(MmrIndexingActor::new(None, None));
+        let aof = Arc::new(AOFActor::new(cb.clone()));
+        let seg = Arc::new(SegmentWriterActor::new(cb.clone()));
+        let mmr = Arc::new(MmrIndexingActor::new(cb.clone(), None, None));
+        // Create the secondary-index actor
+        // Reuse the same LMDB environment used by AOFActor:
+        let secondary_lmdb_env = aof.env.clone();
+        let secondary_indexer =
+            SecondaryIndexActor::new(cb.clone(), secondary_lmdb_env, Duration::from_secs(60));
         let seg_reader_actor = Arc::new(SegmentReaderActor::new(
+            cb.clone(),
             SegmentConfig::default(),
             self.sink.clone(),
         ));
@@ -168,7 +176,7 @@ impl Subject {
         let mmr_c = mmr.clone();
         // Subscribe system pipeline
         let _sys_sub = Arc::new(self.clone().subscribe_with(
-            ThreadPerSubjectMaterializer,
+            ThreadPoolForSubjectMaterializer::new(),
             move |xe: XaeroEvent| {
                 seg_reader_actor
                     .inbox
@@ -192,12 +200,12 @@ impl Subject {
                 // P2P sync would go here
             },
         ));
-
         XFluxHandle {
             _sys_sub,
             aof,
             seg,
             mmr,
+            secondary_indexer,
         }
     }
 }
@@ -376,48 +384,6 @@ impl Materializer for ThreadPoolForSubjectMaterializer {
     }
 }
 
-/// Default thread-per-subject materializer (no pooling).
-pub struct ThreadPerSubjectMaterializer;
-
-impl Materializer for ThreadPerSubjectMaterializer {
-    fn materialize(
-        &self,
-        subject: Arc<Subject>,
-        handler: Arc<dyn Fn(XaeroEvent) + Send + Sync + 'static>,
-    ) -> Subscription {
-        let rx = subject.source.rx.clone();
-        let ops = subject.ops.clone();
-
-        let jh = std::thread::spawn(move || {
-            for mut evt in rx.iter() {
-                let mut keep = true;
-                for op in &ops {
-                    match op {
-                        Operator::Map(f) => evt = f(evt),
-                        Operator::Filter(p) if !p(&evt) => {
-                            keep = false;
-                            break;
-                        }
-                        Operator::FilterMerkleProofs if evt.merkle_proof.is_none() => {
-                            keep = false;
-                            break;
-                        }
-                        Operator::Blackhole => {
-                            keep = false;
-                            break;
-                        }
-                        _ => {}
-                    }
-                }
-                if keep {
-                    handler(evt)
-                }
-            }
-        });
-        Subscription(jh)
-    }
-}
-
 /// Convenience API for choosing a materializer during subscription.
 pub trait SubscribeWith {
     fn subscribe_with<M, F>(self: &Arc<Self>, mat: M, handler: F) -> Subscription
@@ -446,6 +412,8 @@ pub struct XFluxHandle {
     pub seg: Arc<SegmentWriterActor>,
     /// MMR indexing actor.
     pub mmr: Arc<MmrIndexingActor>,
+    /// Secondary indexer actor.
+    pub secondary_indexer: Arc<SecondaryIndexActor>,
 }
 
 #[cfg(test)]
@@ -464,11 +432,13 @@ mod tests {
     use super::*;
     use crate::{
         core::{
-            aof::{LmdbEnv, push_event},
+            aof::storage::{
+                format::SegmentMeta,
+                lmdb::{LmdbEnv, push_event},
+            },
             date_time::emit_secs,
             event::{Event, EventType, SystemEventKind},
             initialize,
-            meta::SegmentMeta,
         },
         indexing::storage::{
             actors::{
@@ -513,9 +483,12 @@ mod tests {
         let (tx, rx) = channel::unbounded();
 
         // subscribe: every incoming event sends its payload to tx
-        let _sub = subj.subscribe_with(ThreadPerSubjectMaterializer, move |xe: XaeroEvent| {
-            tx.send(xe.evt.data.clone()).expect("failed_to_unwrap");
-        });
+        let _sub = subj.subscribe_with(
+            ThreadPoolForSubjectMaterializer::new(),
+            move |xe: XaeroEvent| {
+                tx.send(xe.evt.data.clone()).expect("failed_to_unwrap");
+            },
+        );
 
         // publish one event
         let payload = b"hello".to_vec();
@@ -537,7 +510,7 @@ mod tests {
         });
 
         let (tx, rx) = channel::unbounded();
-        let _sub = subj.subscribe_with(ThreadPerSubjectMaterializer, move |xe| {
+        let _sub = subj.subscribe_with(ThreadPoolForSubjectMaterializer::new(), move |xe| {
             tx.send(xe.evt.data).expect("failed_to_unwrap");
         });
 
@@ -559,7 +532,7 @@ mod tests {
         let subj = Subject::new("filter".into()).filter(|xe| xe.evt.data[0] % 2 == 0); // only even first-byte
 
         let (tx, rx) = channel::unbounded();
-        let _sub = subj.subscribe_with(ThreadPerSubjectMaterializer, move |xe| {
+        let _sub = subj.subscribe_with(ThreadPoolForSubjectMaterializer::new(), move |xe| {
             tx.send(xe.evt.data[0]).expect("failed_to_unwrap");
         });
 
@@ -590,7 +563,7 @@ mod tests {
         let subj = Subject::new("proof".into()).filter_merkle_proofs();
 
         let (tx, rx) = channel::unbounded();
-        let _sub = subj.subscribe_with(ThreadPerSubjectMaterializer, move |xe| {
+        let _sub = subj.subscribe_with(ThreadPoolForSubjectMaterializer::new(), move |xe| {
             tx.send(xe.merkle_proof.is_some())
                 .expect("failed_to_unwrap");
         });
@@ -620,7 +593,7 @@ mod tests {
         let subj = Subject::new("nothing".into()).blackhole();
 
         let (tx, rx) = channel::unbounded();
-        let _sub = subj.subscribe_with(ThreadPerSubjectMaterializer, move |_xe| {
+        let _sub = subj.subscribe_with(ThreadPoolForSubjectMaterializer::new(), move |_xe| {
             tx.send(()).expect("failed_to_unwrap");
         });
 
@@ -642,6 +615,7 @@ mod tests {
     #[test]
     fn test_segment_reader_replay_then_live() {
         initialize();
+        let cb = Arc::new(ControlBus::new());
         let tmp = tempdir().expect("failed to create tempdir");
         // write a segment file
         let ts = emit_secs();
@@ -690,7 +664,7 @@ mod tests {
             segment_dir: tmp.path().to_string_lossy().into(),
             lmdb_env_path: tmp.path().to_string_lossy().into(),
         };
-        let actor = SegmentReaderActor::new(config, sink.clone());
+        let actor = SegmentReaderActor::new(cb, config, sink.clone());
         // send replay event
         let replay_evt = Event::new(
             Vec::new(),

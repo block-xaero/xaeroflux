@@ -2,7 +2,7 @@
 //!
 //! This module defines:
 //! - `SegmentMeta`: metadata about a single log segment and its pages.
-//! - `ReaderCursor`: tracks a consumer’s position within the segment log.
+//! - `ReaderCursor`: tracks a consumer's position within the segment log.
 //! - `MMRMeta`: Merkle Mountain Range index metadata per segment.
 
 use bytemuck::{Pod, Zeroable};
@@ -78,3 +78,48 @@ pub struct MMRMeta {
 
 unsafe impl Zeroable for MMRMeta {}
 unsafe impl Pod for MMRMeta {}
+
+/// For each leaf (event) we store exactly where its bytes live on disk
+/// and what its timestamp was.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct LeafLocation {
+    /// Which payload segment file ('.seg') holds the event
+    pub segment_index: u32, // 4 bytes
+    /// Which 16 KiB page within that segment
+    pub page_index: u32, // 4 bytes
+    /// Byte offset *within* that page where the frame starts
+    pub byte_offset: u32, // 4 bytes
+    /// Number of bytes in the archived frame (so we know how far to read)
+    pub length: u32, // 4 bytes
+    /// The event's timestamp in milliseconds since Unix epoch
+    pub ts: u64, // 8 bytes
+}
+
+// Total size = 4 + 4 + 4 + 4 + 8 = 24 bytes
+unsafe impl Zeroable for LeafLocation {}
+unsafe impl Pod for LeafLocation {}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct EventKey {
+    pub(crate) ts: u64,        // 8 bytes, big-endian
+    pub(crate) kind: u8,       // 1 byte
+    pub(crate) hash: [u8; 32], // 32 bytes
+}
+unsafe impl Pod for EventKey {}
+unsafe impl Zeroable for EventKey {}
+
+use std::fmt::Debug;
+
+impl Debug for EventKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "EventKey {{ ts: {}, kind: {}, hash: {} }}",
+            self.ts,
+            self.kind,
+            hex::encode(self.hash)
+        )
+    }
+}

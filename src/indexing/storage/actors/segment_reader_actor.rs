@@ -1,9 +1,9 @@
 //! SegmentReaderActor: Replays persisted segments on-demand.
 //!
 //! This module defines:
-//! - `SegmentReaderActor`: actor that listens for replay triggers,
-//!   reads segment metadata from LMDB, loads segment files from disk,
-//!   deserializes events, and forwards them to a consumer `Sink`.
+//! - `SegmentReaderActor`: actor that listens for replay triggers, reads segment metadata from
+//!   LMDB, loads segment files from disk, deserializes events, and forwards them to a consumer
+//!   `Sink`.
 //! - End-to-end replay logic for system-level replay events.
 
 use std::{
@@ -16,12 +16,13 @@ use rkyv::rancor::Failure;
 use crate::{
     Sink, XaeroEvent,
     core::{
-        aof::{LmdbEnv, iterate_segment_meta_by_range},
+        aof::storage::{lmdb::LmdbEnv, meta::iterate_segment_meta_by_range},
         date_time::{day_bounds_from_epoch_ms, emit_secs},
         event::Event,
         listeners::EventListener,
     },
     indexing::storage::{actors::segment_writer_actor::SegmentConfig, io},
+    system::control_bus::ControlBus,
 };
 /// Actor for replaying events from historical segments.
 ///
@@ -31,6 +32,7 @@ use crate::{
 /// - `meta_db`: LMDB environment containing segment metadata.
 /// - `jh`: handle to the background thread processing replay requests.
 pub struct SegmentReaderActor {
+    pub cb: Arc<ControlBus>,
     pub inbox: crossbeam::channel::Sender<Event<Vec<u8>>>,
     /// Only listens to Replay events and rejects all others.
     pub _listener: EventListener<Vec<u8>>,
@@ -43,7 +45,7 @@ impl SegmentReaderActor {
     ///
     /// Spawns a thread that:
     /// 1. Receives `SystemEvent::Replay` events on `inbox`.
-    /// 2. Queries LMDB for segments within today’s bounds.
+    /// 2. Queries LMDB for segments within today's bounds.
     /// 3. For each segment:
     ///    - Builds the segment file path from `segment_dir`, timestamp, and index.
     ///    - Memory-maps the file and iterates pages to extract serialized events.
@@ -56,7 +58,7 @@ impl SegmentReaderActor {
     ///
     /// # Panics
     /// Panics if LMDB environment initialization fails.
-    pub fn new(config: SegmentConfig, sink: Arc<Sink>) -> Arc<Self> {
+    pub fn new(cb: Arc<ControlBus>, config: SegmentConfig, sink: Arc<Sink>) -> Arc<Self> {
         // initialize LMDB environment from config
         let meta_db = Arc::new(Mutex::new(
             LmdbEnv::new(&config.lmdb_env_path).expect("failed to create LmdbEnv"),
@@ -157,6 +159,7 @@ impl SegmentReaderActor {
             }
         });
         Arc::new(SegmentReaderActor {
+            cb,
             _listener: EventListener::new(
                 "segment_reader_actor_listener",
                 Arc::new({
@@ -183,9 +186,8 @@ impl SegmentReaderActor {
 /// Unit tests for `SegmentReaderActor`.
 ///
 /// Tests:
-/// - `system_event_triggers_replay`: verifies that a `Replay` system event
-///   causes the actor to read a prepared segment file and send the deserialized
-///   "hello" event to the sink.
+/// - `system_event_triggers_replay`: verifies that a `Replay` system event causes the actor to read
+///   a prepared segment file and send the deserialized "hello" event to the sink.
 /// - `non_system_events_do_not_replay`: ensures that non-system events are ignored.
 #[cfg(test)]
 mod tests {
@@ -202,11 +204,13 @@ mod tests {
     use crate::{
         Sink, XaeroEvent,
         core::{
-            aof::{LmdbEnv, push_event},
+            aof::storage::{
+                format::SegmentMeta,
+                lmdb::{LmdbEnv, push_event},
+            },
             date_time::emit_secs,
             event::{Event, EventType, SystemEventKind},
             initialize,
-            meta::SegmentMeta,
         },
         indexing::storage::{
             actors::{
@@ -221,7 +225,7 @@ mod tests {
     fn system_event_triggers_replay() {
         // use a temp dir for segment file and LMDB
         let tmp = tempfile::tempdir().expect("failed_to_unwrap");
-
+        let cb = Arc::new(crate::system::control_bus::ControlBus::new());
         initialize();
 
         // 2) write a fake segment file *in* project_root
@@ -275,7 +279,7 @@ mod tests {
         // 4) hook up the actor against the same project_root
         let (tx, rx) = unbounded::<XaeroEvent>();
         let sink = Arc::new(Sink::new(tx));
-        let actor = SegmentReaderActor::new(config, sink.clone());
+        let actor = SegmentReaderActor::new(cb, config, sink.clone());
 
         // 5) fire the Replay system event
         let replay_evt = Event::new(
@@ -317,7 +321,9 @@ mod tests {
 
         let (tx, rx) = unbounded::<XaeroEvent>();
         let sink = Arc::new(Sink::new(tx));
-        let actor = SegmentReaderActor::new(config, sink.clone());
+        let cb: Arc<crate::system::control_bus::ControlBus> =
+            Arc::new(crate::system::control_bus::ControlBus::new());
+        let actor = SegmentReaderActor::new(cb, config, sink.clone());
 
         // send an application‐level event
         let app = Event::new(b"nope".to_vec(), EventType::ApplicationEvent(0).to_u8());

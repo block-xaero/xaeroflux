@@ -23,7 +23,6 @@ pub mod config;
 pub mod date_time;
 pub mod event;
 pub mod listeners;
-pub mod meta;
 pub mod size;
 use figlet_rs::FIGfont;
 use threadpool::ThreadPool;

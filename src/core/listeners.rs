@@ -1,11 +1,11 @@
 //! Event listener actor for xaeroflux.
 //!
 //! This module provides:
-//! - `EventListener<T>`: an actor that receives events via a channel,
-//!   dispatches them to worker threads, and tracks metrics.
+//! - `EventListener<T>`: an actor that receives events via a channel, dispatches them to worker
+//!   threads, and tracks metrics.
 //! - `EventListenerMeta`: statistics on processed and dropped events.
-//! - `VersioningScheme` and `AddressingScheme` traits for generating
-//!   unique listener versions and addresses.
+//! - `VersioningScheme` and `AddressingScheme` traits for generating unique listener versions and
+//!   addresses.
 
 use std::{
     fmt::Debug,

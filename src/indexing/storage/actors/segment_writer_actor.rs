@@ -20,15 +20,18 @@ use memmap2::MmapMut;
 
 use crate::{
     core::{
-        aof::{LmdbEnv, iterate_segment_meta_by_range, push_event},
+        aof::storage::{
+            format::SegmentMeta,
+            lmdb::{LmdbEnv, push_event},
+            meta::iterate_segment_meta_by_range,
+        },
         date_time::{day_bounds_from_epoch_ms, emit_secs},
         event::{Event, EventType},
         listeners::EventListener,
-        meta::SegmentMeta,
         size::PAGE_SIZE,
     },
-    indexing::storage::format::archive,
-    system::{CONTROL_BUS, control_bus::SystemPayload},
+    indexing::{hash::sha_256_hash_b, storage::format::archive},
+    system::control_bus::{ControlBus, SystemPayload},
 };
 
 /// Configuration for paged segment storage.
@@ -78,6 +81,7 @@ impl Default for SegmentConfig {
 /// - `_handle`: handle to the spawned writer thread.
 /// - `segment_config`: configuration parameters for this writer.
 pub struct SegmentWriterActor {
+    pub cb: Arc<ControlBus>,
     /// Send archived event blobs to this inbox
     pub inbox: Sender<Vec<u8>>,
     pub _listener: EventListener<Vec<u8>>,
@@ -86,19 +90,13 @@ pub struct SegmentWriterActor {
     pub segment_config: SegmentConfig,
 }
 
-impl Default for SegmentWriterActor {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl SegmentWriterActor {
     /// Create a `SegmentWriterActor` with default settings.
     ///
     /// Uses `SegmentConfig::default()` which sets 16KiB pages,
     /// 1024 pages per segment, and default directories.
-    pub fn new() -> Self {
-        Self::new_with_config(SegmentConfig::default())
+    pub fn new(cb: Arc<ControlBus>) -> Self {
+        Self::new_with_config(cb, SegmentConfig::default())
     }
 
     /// Create a `SegmentWriterActor` with a custom configuration.
@@ -110,11 +108,12 @@ impl SegmentWriterActor {
     /// - Ensures the LMDB directory exists and initializes `LmdbEnv`.
     /// - Spawns an `EventListener` to serialize and forward events.
     /// - Starts a background thread running `run_writer_loop` to handle writing.
-    pub fn new_with_config(config: SegmentConfig) -> Self {
+    pub fn new_with_config(cb: Arc<ControlBus>, config: SegmentConfig) -> Self {
         std::fs::create_dir_all(&config.lmdb_env_path).expect("failed to create directory");
         let meta_db = Arc::new(Mutex::new(
             LmdbEnv::new(&config.lmdb_env_path).expect("failed to create LmdbEnv"),
         ));
+        let cbc = Arc::clone(&cb);
         let (tx, rx) = channel::unbounded::<Vec<u8>>();
         let txc = tx.clone();
         let listener = EventListener::new(
@@ -133,11 +132,12 @@ impl SegmentWriterActor {
         let handle: thread::JoinHandle<()> = thread::Builder::new()
             .name("xaeroflux-segment-writer".into())
             .spawn(move || {
-                run_writer_loop(&meta_db_c, rx, cfg);
+                run_writer_loop(cbc, &meta_db_c, rx, cfg);
             })
             .expect("failed to spawn thread");
 
         SegmentWriterActor {
+            cb,
             inbox: tx,
             _listener: listener,
             _handle: handle,
@@ -165,7 +165,12 @@ impl SegmentWriterActor {
 /// - `meta_db`: LMDB environment for recording segment metadata.
 /// - `rx`: receiver of serialized event frames (`Vec<u8>`).
 /// - `config`: segment configuration including page size and directories.
-fn run_writer_loop(meta_db: &Arc<Mutex<LmdbEnv>>, rx: Receiver<Vec<u8>>, config: SegmentConfig) {
+fn run_writer_loop(
+    cb: Arc<ControlBus>,
+    meta_db: &Arc<Mutex<LmdbEnv>>,
+    rx: Receiver<Vec<u8>>,
+    config: SegmentConfig,
+) {
     let page_size = config.page_size;
     let segment_bytes = (config.pages_per_segment * page_size) as u64;
 
@@ -210,7 +215,7 @@ fn run_writer_loop(meta_db: &Arc<Mutex<LmdbEnv>>, rx: Receiver<Vec<u8>>, config:
     // event processing loop
     while let Ok(data) = rx.recv() {
         let write_len = data.len();
-
+        let leaf_hash = sha_256_hash_b(&data);
         // page-boundary check
         if write_pos + write_len > page_size {
             // flush full page
@@ -276,21 +281,18 @@ fn run_writer_loop(meta_db: &Arc<Mutex<LmdbEnv>>, rx: Receiver<Vec<u8>>, config:
             start
         );
         tracing::debug!("sending message to control bus");
-        let payload_written_msg_sent_ack = CONTROL_BUS
-            .get()
-            .expect("control_bus_not_initialized")
-            .sender()
-            .send(SystemPayload::PayloadWritten {
-                meta: SegmentMeta {
-                    page_index,
-                    segment_index: seg_id,
-                    write_pos,
-                    byte_offset,
-                    latest_segment_id: seg_id,
-                    ts_start,
-                    ts_end: emit_secs(),
-                },
-            });
+        let payload_written_msg_sent_ack = cb.sender().send(SystemPayload::PayloadWritten {
+            leaf_hash,
+            meta: SegmentMeta {
+                page_index,
+                segment_index: seg_id,
+                write_pos,
+                byte_offset,
+                latest_segment_id: seg_id,
+                ts_start,
+                ts_end: emit_secs(),
+            },
+        });
         match payload_written_msg_sent_ack {
             Ok(_) => tracing::debug!("Payload written message sent successfully"),
             Err(e) => {
@@ -322,12 +324,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        core::{
-            aof::{LmdbEnv, get_meta_val, push_event},
-            event::EventType,
-            initialize,
-            meta::SegmentMeta,
-        },
+        core::{aof::storage::meta::get_meta_val, event::EventType, initialize},
         indexing::storage::format::{self},
     };
 
@@ -414,6 +411,7 @@ mod tests {
     #[test]
     fn test_run_writer_loop_page_boundary() {
         initialize();
+        let cb = Arc::new(ControlBus::new());
         let tmp = tempdir().expect("failed_to_unwrap");
         // switch to temp dir so segment files are isolated
         std::env::set_current_dir(tmp.path()).expect("failed to set cwd");
@@ -451,7 +449,7 @@ mod tests {
         drop(tx);
 
         // Run the writer
-        run_writer_loop(&arc_env, rx, cfg.clone());
+        run_writer_loop(cb, &arc_env, rx, cfg.clone());
 
         // Read back segment 0
         let buf0 = std::fs::read(format!(
@@ -516,8 +514,8 @@ mod tests {
             tx.send(f).expect("failed_to_unwrap");
         }
         drop(tx);
-
-        run_writer_loop(&arc_env, rx, cfg.clone());
+        let cb = Arc::new(ControlBus::new());
+        run_writer_loop(cb, &arc_env, rx, cfg.clone());
 
         // Closure to read & unarchive one page, closing over ts_start
         let assert_page = |seg: usize, page_idx: usize, expected_byte: u8| {
@@ -551,6 +549,7 @@ mod tests {
     #[test]
     fn test_resume_segment_meta_initialization() {
         initialize();
+        let cb = Arc::new(ControlBus::new());
         // Setup a temporary LMDB environment and insert a SegmentMeta
         let tmp = tempdir().expect("failed to create tempdir");
         std::env::set_current_dir(tmp.path()).expect("failed to set cwd");
@@ -590,7 +589,7 @@ mod tests {
         };
 
         // Run the writer loop; it should pick up our seg_meta and write to segment 5
-        run_writer_loop(&arc_env, rx, cfg.clone());
+        run_writer_loop(cb, &arc_env, rx, cfg.clone());
 
         // Verify that the hot segment file is named correctly
         let sm_sid = seg_meta.segment_index;

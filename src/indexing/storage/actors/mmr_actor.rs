@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use super::segment_writer_actor::{SegmentConfig, SegmentWriterActor};
 use crate::{
     core::{
-        aof::{self, LmdbEnv, push_event},
+        aof::storage::lmdb::{LmdbEnv, push_event},
         event::Event,
         listeners::EventListener,
     },
@@ -19,7 +19,7 @@ use crate::{
         hash::sha_256,
         storage::{format::archive, mmr::XaeroMmrOps},
     },
-    system::CONTROL_BUS,
+    system::control_bus::{ControlBus, SystemPayload},
 };
 
 /// Actor responsible for indexing events into a Merkle Mountain Range (MMR).
@@ -30,7 +30,7 @@ use crate::{
 /// - `_store`: segment writer actor to persist leaf hashes in pages.
 /// - `listener`: event listener that drives the indexing pipeline.
 pub struct MmrIndexingActor {
-    pub(crate) _lmdb: Arc<Mutex<aof::LmdbEnv>>,
+    pub(crate) _lmdb: Arc<Mutex<LmdbEnv>>,
     pub(crate) _mmr: Arc<Mutex<crate::indexing::storage::mmr::XaeroMmr>>,
     pub(crate) _store: Arc<SegmentWriterActor>,
     pub listener: EventListener<Vec<u8>>,
@@ -49,16 +49,19 @@ impl MmrIndexingActor {
     ///
     /// Uses a single-threaded event handler by default.
     pub fn new(
+        cb: Arc<ControlBus>,
         store: Option<SegmentWriterActor>,
         listener: Option<EventListener<Vec<u8>>>,
     ) -> Self {
+        let cbc = Arc::clone(&cb);
         let _mmr = Arc::new(Mutex::new(crate::indexing::storage::mmr::XaeroMmr::new()));
         let _store = Arc::new(store.unwrap_or_else(|| {
-            SegmentWriterActor::new_with_config(super::segment_writer_actor::SegmentConfig {
+            SegmentWriterActor::new_with_config(cbc, super::segment_writer_actor::SegmentConfig {
                 prefix: "xaeroflux-mmr".to_string(),
                 ..Default::default()
             })
         }));
+
         // Use the store's lmdb_env_path instead of hardcoded path
         let path = &_store.segment_config.lmdb_env_path;
         let meta_db = Arc::new(Mutex::new(
@@ -105,13 +108,18 @@ impl MmrIndexingActor {
     ///
     /// This allows configuring storage paths while reusing the same MMR pipeline.
     pub fn new_with_config(
+        cb: Arc<ControlBus>,
         config: SegmentConfig,
         listener: Option<EventListener<Vec<u8>>>,
     ) -> Self {
+        let cb_clone = Arc::clone(&cb);
         // initialize in-memory MMR
         let _mmr = Arc::new(Mutex::new(crate::indexing::storage::mmr::XaeroMmr::new()));
         // create segment writer from config
-        let store = Arc::new(SegmentWriterActor::new_with_config(config.clone()));
+        let store = Arc::new(SegmentWriterActor::new_with_config(
+            cb_clone,
+            config.clone(),
+        ));
         // open LMDB using config path
         let meta_db = Arc::new(Mutex::new(
             LmdbEnv::new(&config.lmdb_env_path).expect("failed to create LmdbEnv"),
@@ -140,6 +148,10 @@ impl MmrIndexingActor {
                         .inbox
                         .send(leaf_hash.to_vec())
                         .expect("failed to send event");
+                    let res = cb.sender().send(SystemPayload::MmrAppended { leaf_hash });
+                    if res.is_err() {
+                        tracing::warn!("Failed to notify MMR append: {:?}", res);
+                    }
                 }),
                 None,
                 Some(1),
@@ -164,7 +176,7 @@ impl MmrIndexingActor {
     }
 
     /// Return a clone of the LMDB environment for raw event persistence.
-    pub fn lmdb(&self) -> Arc<Mutex<aof::LmdbEnv>> {
+    pub fn lmdb(&self) -> Arc<Mutex<LmdbEnv>> {
         Arc::clone(&self._lmdb)
     }
 }
@@ -173,7 +185,7 @@ impl MmrIndexingActor {
 ///
 /// Tests include:
 /// - Appending a single event and verifying the in-memory MMR leaf count.
-/// - Persisting the exact computed leaf hash to the segment writer’s inbox.
+/// - Persisting the exact computed leaf hash to the segment writer's inbox.
 #[cfg(test)]
 mod actor_tests {
     use std::time::Duration;
@@ -201,6 +213,8 @@ mod actor_tests {
     }
 
     fn make_test_store(prefix: String) -> (TempDir, SegmentWriterActor) {
+        initialize();
+        let cb = Arc::new(ControlBus::new());
         let tmp = tempdir().expect("failed to create tempdir");
         // small page size so tests finish quickly, 1 page per segment to avoid rollover
         let cfg = SegmentConfig {
@@ -210,16 +224,17 @@ mod actor_tests {
             segment_dir: tmp.path().to_string_lossy().into(),
             lmdb_env_path: tmp.path().to_string_lossy().into(),
         };
-        let store = SegmentWriterActor::new_with_config(cfg);
+        let store = SegmentWriterActor::new_with_config(cb, cfg);
         (tmp, store)
     }
 
     #[test]
     fn actor_appends_to_in_memory_mmr() {
         initialize();
+        let cb = Arc::new(ControlBus::new());
         // store config uses small pages; we only care about MMR here
         let (_tmp, store) = make_test_store("mmr".to_string());
-        let actor = MmrIndexingActor::new(Some(store), None);
+        let actor = MmrIndexingActor::new(cb, Some(store), None);
 
         // Fire one event
         let ev = make_event(b"foo".to_vec());
@@ -250,6 +265,7 @@ mod actor_tests {
         let tmp = tempdir().expect("failed to create tempdir");
         std::env::set_current_dir(tmp.path()).expect("failed to set cwd");
         initialize();
+        let cb = Arc::new(ControlBus::new());
         // capture what gets sent to disk
         let dir = tempdir().expect("failed to create tempdir");
         let prefix = dir.path().join("mmr").display().to_string();
@@ -257,7 +273,7 @@ mod actor_tests {
         let (_tmp, mut store) = make_test_store(prefix.clone());
         store.inbox = tx.clone();
 
-        let actor = MmrIndexingActor::new(Some(store), None);
+        let actor = MmrIndexingActor::new(cb, Some(store), None);
 
         // Fire one event
         let ev = make_event(b"bar".to_vec());
