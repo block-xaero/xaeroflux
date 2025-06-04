@@ -1,0 +1,14 @@
+[package]
+name = "xaeroflux-macros"
+version = "0.1.0-m3"
+edition = "2021"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+trybuild = "1.0.105"
+proc-macro2 = "1.0.95"
+quote        = "1.0.40"
+syn          = { version = "2.0.101", features = ["full"] }
+blake3       = "1.8.2"

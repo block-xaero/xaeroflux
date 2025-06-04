@@ -1,7 +1,6 @@
 use std::cmp::min;
 
-use crate::sys;
-
+use crate::sys::*;
 pub struct Wal {
     pub mmap: memmap2::MmapMut,
     pub offset: usize,
@@ -15,8 +14,8 @@ impl Drop for Wal {
 }
 impl Wal {
     pub fn new(f: &str) -> Self {
-        let mmap = sys::mm(f);
-        let page_size = sys::get_page_size();
+        let mmap = mm(f);
+        let page_size = get_page_size();
         Wal {
             mmap,
             offset: 0,

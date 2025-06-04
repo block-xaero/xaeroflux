@@ -1,4 +1,4 @@
-//! Application configuration definitions for xaeroflux.
+//! Application configuration definitions for xaeroflux-actors.
 //!
 //! This module defines the configuration structures for:
 //! - Global `Config`
