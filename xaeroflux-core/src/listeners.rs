@@ -1,4 +1,4 @@
-//! Event listener actor for xaeroflux.
+//! Event listener actor for xaeroflux-actors.
 //!
 //! This module provides:
 //! - `EventListener<T>`: an actor that receives events via a channel, dispatches them to worker
@@ -17,7 +17,8 @@ use std::{
 use crossbeam::channel::Sender;
 use threadpool::ThreadPool;
 
-use super::{DISPATCHER_POOL, XaeroData, event::Event, init_global_dispatcher_pool};
+use crate::event::Event;
+use crate::{DISPATCHER_POOL, XaeroData, init_global_dispatcher_pool};
 
 /// An asynchronous event listener actor.
 ///
@@ -38,9 +39,9 @@ where
 {
     pub id: [u8; 32], // auto-generated
     pub address: Option<String>,
-    pub(crate) inbox: Sender<Event<T>>,
+    pub inbox: Sender<Event<T>>,
     pub pool: ThreadPool,
-    pub(crate) dispatcher: Option<JoinHandle<()>>,
+    pub dispatcher: Option<JoinHandle<()>>,
     pub meta: Arc<EventListenerMeta>,
 }
 
@@ -95,7 +96,7 @@ where
                 .replace("-", "_"),
             seed_name.to_lowercase().replace(" ", "_").replace("-", "_"),
             self.emit_version(seed_name, seed_group),
-            crate::indexing::hash::sha_256::<String>(&seed_name.to_string())
+            crate::hash::sha_256::<String>(&seed_name.to_string())
                 .to_vec()
                 .iter()
                 .map(|x| format!("{x:02x}"))
@@ -129,7 +130,7 @@ where
     ) -> Self {
         let (tx, rx) = crossbeam::channel::unbounded();
 
-        let id: [u8; 32] = crate::indexing::hash::sha_256::<String>(&name.to_string());
+        let id: [u8; 32] = crate::hash::sha_256::<String>(&name.to_string());
         // let pool_size = match pool_size_override {
         //     Some(size) => {
         //         tracing::info!("Thread pool size: {}", size);
@@ -156,7 +157,7 @@ where
             .expect("dispatcher pool not initialized");
         let moveable = tp.clone();
         let dispatcher = std::thread::Builder::new()
-            .name(format!("xaeroflux-event-listener-{}", hex::encode(id)))
+            .name(format!("xaeroflux-actors-event-listener-{}", hex::encode(id)))
             .spawn(move || {
                 while let Ok(event) = rx.recv() {
                     let meta_c = meta.clone();
@@ -212,7 +213,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::initialize;
+    use crate::initialize;
 
     #[test]
     fn test_event_listener() {

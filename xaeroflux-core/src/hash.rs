@@ -2,8 +2,7 @@ use std::convert::TryInto;
 
 use sha2::Digest;
 
-use super::merkle_tree::XaeroMerkleNode;
-use crate::core::XaeroData;
+use crate::XaeroData;
 
 ///// Trait for hashing data in the Xaero system.
 /// This trait defines a method for hashing data of type `T`
@@ -34,16 +33,6 @@ where
     let hash = sha256.finalize();
     let node_hash: [u8; 32] = hash.as_slice().try_into().unwrap_or_default();
     node_hash
-}
-
-pub fn sha_256_concat(left: &XaeroMerkleNode, right: &XaeroMerkleNode) -> [u8; 32] {
-    let mut combined: [u8; 64] = [0; 64];
-    combined[0..32].copy_from_slice(&left.node_hash);
-    combined[32..64].copy_from_slice(&right.node_hash);
-    let mut sha256 = sha2::Sha256::new();
-    sha256.update(combined);
-    let hash = sha256.finalize();
-    hash.as_slice().try_into().unwrap_or_default()
 }
 
 pub fn sha_256_concat_hash(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {

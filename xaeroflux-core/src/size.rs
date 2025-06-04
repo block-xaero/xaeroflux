@@ -1,4 +1,4 @@
-//! Configuration of page and segment sizes for xaeroflux.
+//! Configuration of page and segment sizes for xaeroflux-actors.
 //!
 //! This module provides:
 //! - `PAGE_SIZE`: the system's memory page size (bytes).

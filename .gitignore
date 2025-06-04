@@ -1,7 +1,7 @@
 *seg
 *mdb
 xaeroflux-aof/*
-xaeroflux/*
+xaeroflux-actors/*
 # Rust build artifacts
 /target/
 **/*.rs.bk

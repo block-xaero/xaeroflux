@@ -7,7 +7,7 @@ use std::{
 use crossbeam::channel::Receiver;
 use rkyv::Archive;
 
-use crate::core::size::PAGE_SIZE;
+use crate::size::PAGE_SIZE;
 
 /// Diagnostics related to the network sync subsystem.
 #[repr(C)]
@@ -122,7 +122,7 @@ mod diag_tests {
     use tempfile::tempdir;
 
     use super::tail_mmr_segment_file;
-    use crate::core::size::{PAGE_SIZE, init_page_size, init_segment_size};
+    use crate::size::{PAGE_SIZE, init_page_size, init_segment_size};
 
     #[test]
     fn test_tail_mmr_segment_file_reads_pages() {
