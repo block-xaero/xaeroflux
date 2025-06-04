@@ -1,0 +1,71 @@
+[package]
+name = "xaeroflux-actors"
+version     = "0.1.0-m3"
+edition     = "2024"
+description = "EXPERIMENTAL: actor layer for xaeroflux"
+categories = ["database", "database-implementations"]
+keywords = ["unstable", "draft", "experimental"]
+authors = ["ricky.nj@gmail.com"]
+license = "MPL-2.0"
+documentation = "https://github.com/block-xaero/xaeroflux.git"
+repository = "https://github.com/block-xaero/xaeroflux.git"
+homepage = "https://blockxaero.io"
+readme = "README.md"
+
+[features]
+diagnostics = []
+default = []
+
+[lib]
+name = "xaeroflux_actors"  # This should match your library name without the "lib" prefix
+crate-type = ["staticlib", "cdylib", "rlib"] 
+
+[package.metadata.release]
+allow-branch      = ["main"]      # only release from main
+sign-commit       = true          # GPG-sign your release commits
+sign-tag          = true          # GPG-sign your git tags
+push-remote       = "origin"
+
+[build-dependencies]
+libc = "0.2.172"
+
+[dependencies]
+xaeroflux-core = {path = "../xaeroflux-core"}
+xaeroflux-macros = {path = "../xaeroflux-macros"}
+ed25519-dalek = { version = "2.1.1", features = ["rand_core"] }
+rand = "0.8"
+iroh = {version = "0.35.0", "default-features" = true, features = ["discovery-local-network", "discovery-pkarr-dht"] }
+multihash = "0.19.3" 
+iroh-gossip = { version = "0.35.0", default-features = false, features = ["net"] }
+iroh-blobs = "0.35.0"
+cid = "0.11.1"
+async-trait = "0.1.88"
+tokio = { version = "1.45.1", default-features = false, features = ["rt", "macros", "net", "sync"] }
+tokio-stream = "0.1.17"
+futures = "0.3.31"
+crdts = "7.3.2"
+bytemuck = "1.23.0"
+rkyv = "0.8.10"
+rkyv_dyn = "0.7.44"
+threadpool = "1.8.1"
+toml = "0.8.22"
+hex = "0.4.3"
+tracing = { version = "0.1.41", features = ["log"] }
+tracing-subscriber = { version = "0.3.18", features = ["env-filter", "time"] }
+sha2 = { version = "0.10.9" }
+anyhow = "1.0.98"
+liblmdb = "0.9.70"
+tempfile = "3.20.0"
+libc = "0.2.172"
+memmap2 = "0.9.5"
+crossbeam = "0.8.4"
+serde = { version = "1.0.219", features = ["derive"] }
+rustfix = "0.9.0"
+
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+overflow-checks = false
