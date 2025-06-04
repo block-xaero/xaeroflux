@@ -25,29 +25,25 @@ jobs:
 
       - name: Check formatting for all crates
         run: cargo fmt --all -- --check
-        env:
-          CARGO_TERM_COLOR: always
+        # <-- No `working-directory` needed, because Cargo.toml is in the repo root
 
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      # Cache the Cargo registry
       - name: Cache Cargo registry
         uses: actions/cache@v3
         with:
           path: ~/.cargo/registry
           key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
 
-      # Cache the Cargo git index
       - name: Cache Cargo git index
         uses: actions/cache@v3
         with:
           path: ~/.cargo/git
           key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
 
-      # Cache the target directory
       - name: Cache Cargo build output
         uses: actions/cache@v3
         with:
@@ -64,8 +60,9 @@ jobs:
 
       - name: Build entire workspace
         run: cargo build --workspace --verbose
+        # <-- still no `working-directory`
 
-      - name: Run all tests in workspace
+      - name: Run all workspace tests
         run: cargo test --workspace --verbose
 
       - name: Run clippy on all targets
