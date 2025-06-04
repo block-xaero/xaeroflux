@@ -449,7 +449,7 @@ pub struct XFluxHandle {
 
 #[cfg(test)]
 mod tests {
-    use std::{
+use std::{
         fs::OpenOptions,
         sync::{Arc, Mutex},
         time::Duration,
@@ -460,9 +460,9 @@ mod tests {
     use tempfile::tempdir;
     use xaeroflux_core::{
         date_time::emit_secs,
-        event::{Event, EventType, SystemEventKind},
+        event::{Event, EventType},
     };
-
+    use xaeroflux_macros::subject;
     use super::*;
     use crate::{
         aof::storage::{
@@ -478,6 +478,11 @@ mod tests {
         },
     };
 
+    #[test]
+    fn test_subject_macro(){
+        initialize();
+        subject!("workspace/cyan_workspace_123/object/cyan_object_white_board_id_134");
+    }
     #[test]
     fn test_segment_reader_replay_then_live() {
         initialize();
@@ -536,7 +541,7 @@ mod tests {
         // send replay event
         let replay_evt = Event::new(
             Vec::new(),
-            EventType::SystemEvent(SystemEventKind::Replay).to_u8(),
+            EventType::SystemEvent(xaeroflux_core::event::SystemEventKind::Replay).to_u8(),
         );
         actor._listener.inbox.send(replay_evt).expect("send replay");
         // receive and assert first (should be "hello")
