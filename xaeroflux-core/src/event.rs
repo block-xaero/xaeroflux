@@ -89,12 +89,15 @@ pub enum SystemEventKind {
 
 impl EventType {
     pub fn from_u8(value: u8) -> Self {
-        // MetaEvent codes are wire‐encoded as [META_BASE + inner]
+        // If it’s ≥ META_BASE, interpret as MetaEvent(inner)
         if value >= META_BASE {
             return EventType::MetaEvent(value - META_BASE);
         }
+
         match value {
             0 => EventType::ApplicationEvent(0),
+
+            // SystemEventKind variants (map numbers → enum)
             1 => EventType::SystemEvent(SystemEventKind::Start),
             2 => EventType::SystemEvent(SystemEventKind::Stop),
             3 => EventType::SystemEvent(SystemEventKind::Pause),
@@ -111,15 +114,24 @@ impl EventType {
             14 => EventType::SystemEvent(SystemEventKind::MmrAppendFailed),
             15 => EventType::SystemEvent(SystemEventKind::SecondaryIndexWritten),
             16 => EventType::SystemEvent(SystemEventKind::SecondaryIndexFailed),
-            17 => EventType::NetworkEvent(value),
-            18 => EventType::StorageEvent(value),
-            _ => panic!("Invalid event type"),
+
+            // Newly added system events:
+            17 => EventType::SystemEvent(SystemEventKind::SubjectCreated),
+            18 => EventType::SystemEvent(SystemEventKind::WorkspaceCreated),
+            19 => EventType::SystemEvent(SystemEventKind::ObjectCreated),
+
+            // Anything ≥20 and < META_BASE is reserved for NetworkEvent/StorageEvent.
+            v if (20..META_BASE).contains(&v) => EventType::NetworkEvent(v),
+            v if v < META_BASE => EventType::StorageEvent(v),
+
+            _ => panic!("Invalid event type: {}", value),
         }
     }
 
     pub fn to_u8(&self) -> u8 {
         match self {
             EventType::ApplicationEvent(v) => *v,
+
             EventType::SystemEvent(SystemEventKind::Start) => 1,
             EventType::SystemEvent(SystemEventKind::Stop) => 2,
             EventType::SystemEvent(SystemEventKind::Pause) => 3,
@@ -136,11 +148,15 @@ impl EventType {
             EventType::SystemEvent(SystemEventKind::MmrAppendFailed) => 14,
             EventType::SystemEvent(SystemEventKind::SecondaryIndexWritten) => 15,
             EventType::SystemEvent(SystemEventKind::SecondaryIndexFailed) => 16,
+
+            // Newly added system events:
             EventType::SystemEvent(SystemEventKind::SubjectCreated) => 17,
             EventType::SystemEvent(SystemEventKind::WorkspaceCreated) => 18,
             EventType::SystemEvent(SystemEventKind::ObjectCreated) => 19,
-            EventType::NetworkEvent(v) => *v,
-            EventType::StorageEvent(v) => *v,
+
+            EventType::NetworkEvent(v) => *v, // should be ≥20 and <META_BASE
+            EventType::StorageEvent(v) => *v, // also <META_BASE
+
             EventType::MetaEvent(v) => META_BASE + *v,
         }
     }

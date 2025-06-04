@@ -1,11 +1,10 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, LitStr};
+use syn::{LitStr, parse_macro_input};
 
 #[proc_macro]
 pub fn subject(input: TokenStream) -> TokenStream {
-    // 1) Parse exactly one string literal:
-    //    subject!("workspace/MyWS/object/MyObj")
+    // 1) Parse exactly one string literal: subject!("workspace/MyWS/object/MyObj")
     let subject_name_tokens = parse_macro_input!(input as LitStr);
     let span = subject_name_tokens.span();
     let literal_str = subject_name_tokens.value();
@@ -17,8 +16,8 @@ pub fn subject(input: TokenStream) -> TokenStream {
             &subject_name_tokens,
             "Subject must look like \"workspace/<workspace_id>/object/<object_id>\"",
         )
-            .to_compile_error()
-            .into();
+        .to_compile_error()
+        .into();
     }
 
     // 3) Check the “workspace” / “object” prefixes:
@@ -27,8 +26,8 @@ pub fn subject(input: TokenStream) -> TokenStream {
             &subject_name_tokens,
             "Subject must look like \"workspace/<workspace_id>/object/<object_id>\"",
         )
-            .to_compile_error()
-            .into();
+        .to_compile_error()
+        .into();
     }
 
     // 4) Extract the actual IDs:
@@ -40,8 +39,8 @@ pub fn subject(input: TokenStream) -> TokenStream {
             &subject_name_tokens,
             "workspace_id and object_id cannot be empty",
         )
-            .to_compile_error()
-            .into();
+        .to_compile_error()
+        .into();
     }
 
     // 5) Compute three separate blake3 hashes:
@@ -72,15 +71,9 @@ pub fn subject(input: TokenStream) -> TokenStream {
         .map(|b| quote! { #b })
         .collect::<Vec<_>>();
 
-    let ws_bytes_tokens = ws_bytes
-        .iter()
-        .map(|b| quote! { #b })
-        .collect::<Vec<_>>();
+    let ws_bytes_tokens = ws_bytes.iter().map(|b| quote! { #b }).collect::<Vec<_>>();
 
-    let obj_bytes_tokens = obj_bytes
-        .iter()
-        .map(|b| quote! { #b })
-        .collect::<Vec<_>>();
+    let obj_bytes_tokens = obj_bytes.iter().map(|b| quote! { #b }).collect::<Vec<_>>();
 
     // 7) Build LitStrs for workspace_id and object_id (reusing the same span):
     let ws_id_lit = LitStr::new(ws_id_str, span);
