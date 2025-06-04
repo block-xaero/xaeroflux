@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: Install Rust toolchain
+      - name: Install Rust toolchain (fmt + clippy)
         uses: actions-rs/toolchain@v1
         with:
           profile: minimal
@@ -23,8 +23,7 @@ jobs:
           override: true
           components: rustfmt, clippy
 
-      - name: Check formatting
-        working-directory: xaeroflux
+      - name: Check formatting for all crates
         run: cargo fmt --all -- --check
         env:
           CARGO_TERM_COLOR: always
@@ -34,29 +33,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Cache the Cargo registry to speed up dependency fetching.
+      # Cache the Cargo registry
       - name: Cache Cargo registry
         uses: actions/cache@v3
         with:
           path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('xaeroflux/**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
 
-      # Cache the Cargo git index.
+      # Cache the Cargo git index
       - name: Cache Cargo git index
         uses: actions/cache@v3
         with:
           path: ~/.cargo/git
-          key: ${{ runner.os }}-cargo-git-${{ hashFiles('xaeroflux/**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
 
-      # Cache the Cargo build output (target directory)
+      # Cache the target directory
       - name: Cache Cargo build output
         uses: actions/cache@v3
         with:
-          path: xaeroflux/target
-          key: ${{ runner.os }}-cargo-target-${{ hashFiles('xaeroflux/**/Cargo.lock') }}
+          path: target
+          key: ${{ runner.os }}-cargo-target-${{ hashFiles('**/Cargo.lock') }}
 
-      # Install nightly + clippy for the build job
-      - name: Install Rust toolchain
+      - name: Install Rust toolchain (clippy)
         uses: actions-rs/toolchain@v1
         with:
           profile: minimal
@@ -64,14 +62,11 @@ jobs:
           override: true
           components: clippy
 
-      - name: Build all workspace crates
-        working-directory: xaeroflux
+      - name: Build entire workspace
         run: cargo build --workspace --verbose
 
-      - name: Run all workspace tests
-        working-directory: xaeroflux
+      - name: Run all tests in workspace
         run: cargo test --workspace --verbose
 
-      - name: Run clippy on all targets and features
-        working-directory: xaeroflux
+      - name: Run clippy on all targets
         run: cargo clippy --all-targets --all-features
