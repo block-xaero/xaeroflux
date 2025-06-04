@@ -143,7 +143,7 @@ pub struct Subject {
     /// Ordered list of operators to apply per event.
     ops: Vec<Operator>,
     // /// Flag to indicate if `unsafe_run` has been called.
-    /// 2 fold: 1. ensure unsafe run is called atleast once 2. do not double call.
+    /// 2-fold: 1. ensure unsafe run is called atleast once 2. do not double call.
     pub unsafe_run_called: Arc<AtomicBool>,
 }
 
@@ -265,6 +265,15 @@ pub trait SubjectOps {
 }
 
 impl SubjectOps for Subject {
+    fn scan<F>(self: &Arc<Self>, scan_window: ScanWindow) -> Arc<Self>
+    where
+        F: Fn(XaeroEvent) -> XaeroEvent + Send + Sync + 'static,
+    {
+        let mut new = (**self).clone();
+        new.ops.push(Operator::Scan(Arc::new(scan_window)));
+        Arc::new(new)
+    }
+
     fn map<F>(self: &Arc<Self>, f: F) -> Arc<Self>
     where
         F: Fn(XaeroEvent) -> XaeroEvent + Send + Sync + 'static,
@@ -292,15 +301,6 @@ impl SubjectOps for Subject {
     fn blackhole(self: &Arc<Self>) -> Arc<Self> {
         let mut new = (**self).clone();
         new.ops.push(Operator::Blackhole);
-        Arc::new(new)
-    }
-
-    fn scan<F>(self: &Arc<Self>, scan_window: ScanWindow) -> Arc<Self>
-    where
-        F: Fn(XaeroEvent) -> XaeroEvent + Send + Sync + 'static,
-    {
-        let mut new = (**self).clone();
-        new.ops.push(Operator::Scan(Arc::new(scan_window)));
         Arc::new(new)
     }
 }
@@ -478,18 +478,6 @@ mod tests {
         },
     };
 
-    /// Helper to make a simple XaeroEvent with optional proof
-    fn make_evt(data: &[u8], with_proof: bool) -> XaeroEvent {
-        XaeroEvent {
-            evt: Event::new(data.to_vec(), 0),
-            merkle_proof: if with_proof {
-                Some(b"proof".to_vec())
-            } else {
-                None
-            },
-        }
-    }
-
     #[test]
     fn test_segment_reader_replay_then_live() {
         initialize();
@@ -535,7 +523,7 @@ mod tests {
         );
         push_event(&meta_env, &ev).expect("push_event");
         // instantiate actor
-        let (tx, rx) = crossbeam::channel::unbounded::<XaeroEvent>();
+        let (tx, rx) = unbounded::<XaeroEvent>();
         let sink = Arc::new(Sink::new(tx));
         let config = SegmentConfig {
             page_size: PAGE_SIZE,

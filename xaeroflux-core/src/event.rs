@@ -159,7 +159,6 @@ impl EventType {
     derive(Debug),
     archive_bounds(T::Archived: Debug),
 )]
-/// Event is the main data structure for the event system.
 pub struct Event<T>
 where
     T: XaeroData,

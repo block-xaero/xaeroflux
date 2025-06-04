@@ -23,6 +23,7 @@ jobs:
           components: rustfmt, clippy
       - name: Check formatting
         run: cargo fmt --all -- --check
+        working-directory: xaeroflux
         env:
           CARGO_TERM_COLOR: always
 
@@ -36,21 +37,21 @@ jobs:
         uses: actions/cache@v3
         with:
           path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('xaeroflux/**/Cargo.lock') }}
 
       # Cache the Cargo git index.
       - name: Cache Cargo git index
         uses: actions/cache@v3
         with:
           path: ~/.cargo/git
-          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-git-${{ hashFiles('xaeroflux/**/Cargo.lock') }}
 
-      # Optionally, cache the Cargo build output (target directory)
+      # Cache the Cargo build output (target directory)
       - name: Cache Cargo build output
         uses: actions/cache@v3
         with:
-          path: target
-          key: ${{ runner.os }}-cargo-target-${{ hashFiles('**/Cargo.lock') }}
+          path: xaeroflux/target
+          key: ${{ runner.os }}-cargo-target-${{ hashFiles('xaeroflux/**/Cargo.lock') }}
 
       # Install nightly + clippy for the build job
       - name: Install Rust toolchain
@@ -63,9 +64,12 @@ jobs:
 
       - name: Build all workspace crates
         run: cargo build --workspace --verbose
+        working-directory: xaeroflux
 
       - name: Run all workspace tests
         run: cargo test --workspace --verbose
+        working-directory: xaeroflux
 
       - name: Run clippy on all targets and features
         run: cargo clippy --all-targets --all-features
+        working-directory: xaeroflux

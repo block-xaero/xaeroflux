@@ -3,6 +3,10 @@ name = "xaeroflux-core"
 version = "0.1.0-m3"
 edition = "2024"
 
+[features]
+diagnostics = []
+default = []
+
 [dependencies]
 ed25519-dalek = { version = "2.1.1", features = ["rand_core"] }
 rand = "0.8"

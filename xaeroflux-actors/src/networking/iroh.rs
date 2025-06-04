@@ -14,9 +14,9 @@ use super::{
 };
 use crate::aof::storage::format::SegmentMeta;
 pub struct IrohControlPlane {
-    topic_groups: XaeroTopicGroup,
-    endpoint: Arc<Endpoint>,
-    control_plane: Arc<ControlPlane>,
+    pub topic_groups: XaeroTopicGroup,
+    pub endpoint: Arc<Endpoint>,
+    pub control_plane: Arc<ControlPlane>,
 }
 impl From<XaeroTopic> for TopicId {
     fn from(value: XaeroTopic) -> Self {
@@ -24,7 +24,7 @@ impl From<XaeroTopic> for TopicId {
     }
 }
 impl IrohControlPlane {
-    pub fn new(control_plane: Arc<ControlPlane>, bootstrap: Option<Vec<PublicKey>>) -> Self {
+    pub fn new(control_plane: Arc<ControlPlane>, _bootstrap: Option<Vec<PublicKey>>) -> Self {
         let kp = generate_ed25519_keypair().expect("Failed to generate Ed25519 keypair");
         let runtime = P2P_RUNTIME.get().expect("p2p_runtime_not_initialized");
         let ep = runtime
@@ -38,10 +38,10 @@ impl IrohControlPlane {
             })
             .expect("Failed to create Iroh endpoint");
         let epc = ep.clone();
-        let gossip = runtime
+        let _gossip = runtime
             .block_on(async { Gossip::builder().spawn(ep).await })
             .expect("Failed to spawn Iroh gossip");
-        let xtc = XaeroTopic::new("main", XaeroPlaneKind::ControlPlane);
+        let _xtc = XaeroTopic::new("main", XaeroPlaneKind::ControlPlane);
         let xtg = XaeroTopicGroup::new("xaeroflux-actors-control", XaeroPlaneKind::ControlPlane);
         Self {
             topic_groups: xtg,
