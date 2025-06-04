@@ -1,12 +1,11 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, spanned::Spanned, LitStr};
+use syn::{LitStr, parse_macro_input, spanned::Spanned};
 
 #[proc_macro]
 pub fn subject(input: TokenStream) -> TokenStream {
     // 1) Parse exactly one string literal out of the macro invocation:
-    //      subject!("workspace/MyWS/object/MyObj")
-    //
+    //    subject!("workspace/MyWS/object/MyObj")
     let subject_name_tokens = parse_macro_input!(input as LitStr);
     let span = subject_name_tokens.span();
     let literal_str = subject_name_tokens.value();
@@ -44,10 +43,8 @@ pub fn subject(input: TokenStream) -> TokenStream {
         .into();
     }
 
-    // 5) Compute three separate blake3 hashes:
-    //    a) hash of workspace_id
-    //    b) hash of object_id
-    //    c) hash of (workspace_hash || object_hash)
+    // 5) Compute three separate blake3 hashes: a) hash of workspace_id b) hash of object_id c) hash
+    //    of (workspace_hash || object_hash)
     //
     let mut hasher = blake3::Hasher::new();
     hasher.update(ws_id_str.as_bytes());
@@ -85,19 +82,15 @@ pub fn subject(input: TokenStream) -> TokenStream {
     let ws_id_lit = LitStr::new(ws_id_str, span);
     let obj_id_lit = LitStr::new(obj_id_str, span);
 
-    // 8) Now assemble the final token‐stream. When we call `new_with_workspace(...)`,
-    //    remember it takes:
-    //       ( name: String,
-    //         hash: [u8; 32],
-    //         workspace_id: [u8; 32],
-    //         object_id: [u8; 32] )
+    // 8) Now assemble the final token‐stream. When we call `new_with_workspace(...)`, remember it
+    //    takes: ( name: String, hash: [u8; 32], workspace_id: [u8; 32], object_id: [u8; 32] )
     //
     //    and then we immediately send two system events (WorkspaceCreated and ObjectCreated).
     let expanded = quote! {
         {
             // Bring everything into scope
-            use xaeroflux::{Subject, SubjectHash, SystemPayload, XaeroEvent};
-            use xaeroflux::core::event::{Event, EventType};
+            use xaeroflux_core::{Subject, SubjectHash, SystemPayload, XaeroEvent};
+            use xaeroflux_core::event::{Event, EventType};
 
             // 1) Construct the Subject itself
             let subject = xaeroflux::Subject::new_with_workspace(

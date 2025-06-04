@@ -209,13 +209,9 @@ pub enum SystemErrorCode {
 #[cfg(test)]
 mod tests {
 
-    use rkyv::{
-        Archived,
-        rancor::{Error, Failure},
-    };
+    use rkyv::{Archived, rancor::Failure};
 
-    use crate::event::Event;
-    use crate::initialize;
+    use crate::{event::Event, initialize};
 
     #[test]
     pub fn test_basic_serde() {
