@@ -1,10 +1,10 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{LitStr, parse_macro_input};
+use syn::{parse_macro_input, LitStr};
 
 #[proc_macro]
 pub fn subject(input: TokenStream) -> TokenStream {
-    // 1) Parse exactly one string literal out of the macro invocation:
+    // 1) Parse exactly one string literal:
     //    subject!("workspace/MyWS/object/MyObj")
     let subject_name_tokens = parse_macro_input!(input as LitStr);
     let span = subject_name_tokens.span();
@@ -17,17 +17,18 @@ pub fn subject(input: TokenStream) -> TokenStream {
             &subject_name_tokens,
             "Subject must look like \"workspace/<workspace_id>/object/<object_id>\"",
         )
-        .to_compile_error()
-        .into();
+            .to_compile_error()
+            .into();
     }
+
     // 3) Check the “workspace” / “object” prefixes:
     if parts[0] != "workspace" || parts[2] != "object" {
         return syn::Error::new_spanned(
             &subject_name_tokens,
             "Subject must look like \"workspace/<workspace_id>/object/<object_id>\"",
         )
-        .to_compile_error()
-        .into();
+            .to_compile_error()
+            .into();
     }
 
     // 4) Extract the actual IDs:
@@ -39,91 +40,95 @@ pub fn subject(input: TokenStream) -> TokenStream {
             &subject_name_tokens,
             "workspace_id and object_id cannot be empty",
         )
-        .to_compile_error()
-        .into();
+            .to_compile_error()
+            .into();
     }
 
-    // 5) Compute three separate blake3 hashes: a. hash of workspace_id b.hash of object_id c)
-    // hash
-    //    of (workspace_hash || object_hash)
+    // 5) Compute three separate blake3 hashes:
     //
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(ws_id_str.as_bytes());
-    let ws_hash = hasher.finalize();
-    let ws_hash_bytes = ws_hash.as_bytes();
+    //    a. hash of workspace_id
+    //    b. hash of object_id
+    //    c. hash of (workspace_hash || object_hash)
+    //
+    let mut h = blake3::Hasher::new();
+    h.update(ws_id_str.as_bytes());
+    let ws_hash = h.finalize();
+    let ws_bytes = ws_hash.as_bytes();
 
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(obj_id_str.as_bytes());
-    let obj_hash = hasher.finalize();
-    let obj_hash_bytes = obj_hash.as_bytes();
+    let mut h = blake3::Hasher::new();
+    h.update(obj_id_str.as_bytes());
+    let obj_hash = h.finalize();
+    let obj_bytes = obj_hash.as_bytes();
 
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(ws_hash_bytes);
-    hasher.update(obj_hash_bytes);
-    let subject_hash = hasher.finalize();
-    let subject_hash_bytes = subject_hash.as_bytes();
+    let mut h = blake3::Hasher::new();
+    h.update(ws_bytes);
+    h.update(obj_bytes);
+    let subject_hash = h.finalize();
+    let subject_bytes = subject_hash.as_bytes();
 
-    // 6) Turn each 32‐byte array into a Vec<TokenStream> of individual byte‐literals:
-    let subject_bytes_tokens = subject_hash_bytes
+    // 6) Turn each 32‐byte array into a Vec<TokenStream> of byte‐literals:
+    let subject_bytes_tokens = subject_bytes
         .iter()
         .map(|b| quote! { #b })
         .collect::<Vec<_>>();
 
-    let ws_bytes_tokens = ws_hash_bytes
+    let ws_bytes_tokens = ws_bytes
         .iter()
         .map(|b| quote! { #b })
         .collect::<Vec<_>>();
 
-    let obj_bytes_tokens = obj_hash_bytes
+    let obj_bytes_tokens = obj_bytes
         .iter()
         .map(|b| quote! { #b })
         .collect::<Vec<_>>();
 
-    // 7) Build LitStr’s for workspace_id and object_id, reusing the same span
+    // 7) Build LitStrs for workspace_id and object_id (reusing the same span):
     let ws_id_lit = LitStr::new(ws_id_str, span);
     let obj_id_lit = LitStr::new(obj_id_str, span);
 
-    // 8) Now assemble the final token‐stream. When we call `new_with_workspace(...)`, remember it
-    //    takes: ( name: String, hash: [u8; 32], workspace_id: [u8; 32], object_id: [u8; 32] )
-    //
-    //    and then we immediately send two system events (WorkspaceCreated and ObjectCreated).
+    // 8) Assemble the final token‐stream.
     let expanded = quote! {
         {
-            // Bring everything into scope
-            use xaeroflux_core::{Subject, SubjectHash, SystemPayload, XaeroEvent};
-            use xaeroflux_core::event::{Event, EventType};
+            // Bring everything into scope from the current crate:
+           use crate::{Subject, SubjectHash, XaeroEvent};
+           use crate::system::control_bus::SystemPayload;
+           use xaeroflux_core::event::{Event, EventType, SystemEventKind};
 
-            // 1) Construct the Subject itself
-            let subject = xaeroflux::Subject::new_with_workspace(
+            // 1) Construct the Subject itself, calling new_with_workspace(...)
+            let subject = Subject::new_with_workspace(
                 #subject_name_tokens.to_string(),         // name: String
-                [ #(#subject_bytes_tokens),* ],           // SubjectHash([u8; 32])
-                #ws_id_lit,
-                #obj_id_lit,
+                [ #(#subject_bytes_tokens),* ],           // hash: [u8; 32]
+                #ws_id_lit.to_string(),                    // workspace_id: String
+                #obj_id_lit.to_string(),                   // object_id: String
             );
 
-            // 2) Emit a “workspace created” system event payload
+            // 2) Emit a “WorkspaceCreated” system event
             let wc_evt = XaeroEvent {
-                evt: Event::new(
+                evt: xaeroflux_core::event::Event::new(
                     vec![ #(#ws_bytes_tokens),* ],       // payload = workspace_id bytes
-                    EventType::SystemEvent(xaeroflux::SystemEventKind::WorkspaceCreated)
+                    EventType::SystemEvent(
+                        SystemEventKind::WorkspaceCreated
+                    ).to_u8()
                 ),
                 merkle_proof: None,
             };
             subject.sink.tx.send(wc_evt)
                 .expect("failed to bootstrap: WorkspaceCreated");
 
-            // 3) Emit an “object created” system event payload
+            // 3) Emit an “ObjectCreated” system event
             let oc_evt = XaeroEvent {
-                evt: Event::new(
+                evt: xaeroflux_core::event::Event::new(
                     vec![ #(#obj_bytes_tokens),* ],      // payload = object_id bytes
-                    EventType::SystemEvent(xaeroflux::SystemEventKind::ObjectCreated)
+                    EventType::SystemEvent(
+                        SystemEventKind::ObjectCreated
+                    ).to_u8()
                 ),
                 merkle_proof: None,
             };
             subject.sink.tx.send(oc_evt)
                 .expect("failed to bootstrap: ObjectCreated");
 
-            // 4) Return the newly‐constructed `Arc<Subject>`
+            // 4) Return the newly‐constructed Arc<Subject>
             std::sync::Arc::new(subject)
         }
     };

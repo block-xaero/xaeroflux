@@ -1,4 +1,4 @@
-//! Core event definitions for xaeroflux-actors.
+//! Core event definitions for xaeroflux-core.
 //!
 //! This module provides:
 //! - `Event<T>`: generic event envelope with type, version, timestamp, and payload.
