@@ -5848,7 +5848,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "xaeroflux"
+name = "xaeroflux-actors"
 version = "0.1.0-m3"
 dependencies = [
  "anyhow",
@@ -5858,7 +5858,6 @@ dependencies = [
  "crdts",
  "crossbeam",
  "ed25519-dalek",
- "figlet-rs",
  "futures",
  "hex",
  "iroh",
@@ -5881,8 +5880,8 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
- "xaeroflux",
  "xaeroflux-core",
+ "xaeroflux-macros",
 ]
 
 [[package]]
@@ -5906,6 +5905,7 @@ dependencies = [
  "tempfile",
  "threadpool",
  "tokio",
+ "tokio-stream",
  "toml",
  "tracing",
  "tracing-subscriber",
@@ -5920,6 +5920,7 @@ dependencies = [
  "quote",
  "syn 2.0.101",
  "trybuild",
+ "xaeroflux-core",
 ]
 
 [[package]]

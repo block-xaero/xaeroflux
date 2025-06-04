@@ -1,0 +1,35 @@
+# Clippy configuration for a robust Rust open source project
+
+# Disallow use of `unwrap` to prevent potential runtime panics
+# Setting to "true" will trigger the lint for all unwrap() calls
+disallowed-methods = [
+    "std::option::Option::unwrap",
+    "std::result::Result::unwrap"
+]
+
+# Error on `todo!()` macros in code to prevent shipping incomplete code
+# To allow these during development, comment this line out
+#disallowed-macros = ["std::todo"]
+
+# Complexity thresholds
+too-many-arguments-threshold = 7
+too-many-lines-threshold = 150
+type-complexity-threshold = 250
+cognitive-complexity-threshold = 15
+
+# Doc comments
+doc-valid-idents = ["OAuth", "GitHub", "GitLab", "TypeScript", "JavaScript", "WebAssembly", "WebGL", "REST", "API", "GraphQL", "RPC", "TCP", "UDP", "HTTP", "HTTPS", "TLS", "SSL", "JSON", "TOML", "YAML", "HTML", "CSS", "DOM", "UUID", "SQL"]
+
+# Allow certain behaviors in tests
+allow-expect-in-tests = true
+allow-unwrap-in-tests = true
+allow-panic-in-tests = true
+
+# Other configuration (uncomment if needed)
+# enum-variant-size-threshold = 200
+# vec-box-size-threshold = 4000
+# trivial-copy-size-limit = 1024
+
+# Modules to exclude from Clippy checks
+# You might want to exclude tests or generated code
+# Example: exclude = ["tests/", "generated/"]

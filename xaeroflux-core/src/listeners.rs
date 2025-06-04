@@ -17,8 +17,7 @@ use std::{
 use crossbeam::channel::Sender;
 use threadpool::ThreadPool;
 
-use crate::event::Event;
-use crate::{DISPATCHER_POOL, XaeroData, init_global_dispatcher_pool};
+use crate::{DISPATCHER_POOL, XaeroData, event::Event, init_global_dispatcher_pool};
 
 /// An asynchronous event listener actor.
 ///
@@ -157,7 +156,10 @@ where
             .expect("dispatcher pool not initialized");
         let moveable = tp.clone();
         let dispatcher = std::thread::Builder::new()
-            .name(format!("xaeroflux-actors-event-listener-{}", hex::encode(id)))
+            .name(format!(
+                "xaeroflux-actors-event-listener-{}",
+                hex::encode(id)
+            ))
             .spawn(move || {
                 while let Ok(event) = rx.recv() {
                     let meta_c = meta.clone();
