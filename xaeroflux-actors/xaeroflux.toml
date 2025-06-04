@@ -2,7 +2,7 @@
 # XaeroFlux Core Configuration (TOML)
 ########################################
 version = 1                                                                    # Version of the XaeroFlux software
-name = "xaeroflux"                                                             # Name of this node
+name = "xaeroflux-actors"                                                             # Name of this node
 description = "A distributed event processing node for the XaeroFlux network."
 
 [threads]
