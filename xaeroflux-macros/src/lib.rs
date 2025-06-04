@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{LitStr, parse_macro_input, spanned::Spanned};
+use syn::{LitStr, parse_macro_input};
 
 #[proc_macro]
 pub fn subject(input: TokenStream) -> TokenStream {
@@ -43,7 +43,8 @@ pub fn subject(input: TokenStream) -> TokenStream {
         .into();
     }
 
-    // 5) Compute three separate blake3 hashes: a) hash of workspace_id b) hash of object_id c) hash
+    // 5) Compute three separate blake3 hashes: a. hash of workspace_id b.hash of object_id c)
+    // hash
     //    of (workspace_hash || object_hash)
     //
     let mut hasher = blake3::Hasher::new();
@@ -96,8 +97,8 @@ pub fn subject(input: TokenStream) -> TokenStream {
             let subject = xaeroflux::Subject::new_with_workspace(
                 #subject_name_tokens.to_string(),         // name: String
                 [ #(#subject_bytes_tokens),* ],           // SubjectHash([u8; 32])
-                [ #(#ws_bytes_tokens),* ],                // workspace_id: [u8; 32]
-                [ #(#obj_bytes_tokens),* ],               // object_id: [u8; 32]
+                #ws_id_lit,
+                #obj_id_lit,
             );
 
             // 2) Emit a “workspace created” system event payload

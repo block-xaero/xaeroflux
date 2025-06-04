@@ -263,14 +263,14 @@ impl XaeroTopicGroup {
         }
     }
 
-    pub fn add_topic(&mut self, topic: XaeroTopic) -> Result<(), ()> {
+    pub fn add_topic(&mut self, topic: XaeroTopic) -> Result<(), XaeroP2PError> {
         if (self.topic_count as usize) < MAX_TOPICS_PER_GROUP {
             let idx = self.topic_count as usize;
             self.topics[idx] = topic;
             self.topic_count += 1;
             Ok(())
         } else {
-            Err(())
+            Err(XaeroP2PError::ControlPlaneError)
         }
     }
 

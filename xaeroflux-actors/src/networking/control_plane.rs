@@ -13,7 +13,7 @@ pub struct ControlPlane {
 }
 
 impl ControlPlane {
-    fn init_using(bus: Arc<ControlBus>) -> Arc<Self> {
+    pub fn init_using(bus: Arc<ControlBus>) -> Arc<Self> {
         let control_rx = bus.subscribe();
         let control_tx = bus.tx.clone();
         let (tx, rx) = channel::unbounded::<NetworkPayload>();

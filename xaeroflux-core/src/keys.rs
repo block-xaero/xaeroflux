@@ -22,5 +22,5 @@ pub fn generate_ed25519_keypair() -> Result<Ed25519Keypair, Infallible> {
     let sk = SigningKey::generate(&mut csprng);
     let secret_key = sk.to_bytes();
     let public_key = sk.verifying_key();
-    Ed25519Keypair::new(secret_key, public_key.to_bytes()).try_into()
+    Ok(Ed25519Keypair::new(secret_key, public_key.to_bytes()))
 }

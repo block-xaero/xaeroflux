@@ -12,9 +12,6 @@ repository = "https://github.com/block-xaero/xaeroflux.git"
 homepage = "https://blockxaero.io"
 readme = "README.md"
 
-[features]
-diagnostics = []
-default = []
 
 [lib]
 name = "xaeroflux_actors"  # This should match your library name without the "lib" prefix

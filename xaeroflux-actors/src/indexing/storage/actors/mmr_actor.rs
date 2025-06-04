@@ -51,7 +51,7 @@ impl MmrIndexingActor {
         let cbc = Arc::clone(&cb);
         let _mmr = Arc::new(Mutex::new(crate::indexing::storage::mmr::XaeroMmr::new()));
         let _store = Arc::new(store.unwrap_or_else(|| {
-            SegmentWriterActor::new_with_config(cbc, super::segment_writer_actor::SegmentConfig {
+            SegmentWriterActor::new_with_config(cbc, SegmentConfig {
                 prefix: "xaeroflux-actors-mmr".to_string(),
                 ..Default::default()
             })
@@ -147,8 +147,6 @@ impl MmrIndexingActor {
                     if res.is_err() {
                         tracing::warn!("Failed to notify MMR append: {:?}", res);
                     }
-
-                    let res = cb.sender().send(SystemPayload::MmrAppended { leaf_hash });
                 }),
                 None,
                 Some(1),

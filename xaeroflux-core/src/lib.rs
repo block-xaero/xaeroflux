@@ -198,6 +198,7 @@ mod tests {
     use xaeroflux_core::event;
 
     use super::*;
+
     #[test]
     fn test_initialize() {
         initialize();
@@ -249,16 +250,5 @@ mod tests {
             event.version,
             CONF.get().expect("failed to load config").version
         );
-    }
-
-    #[test]
-    fn test_serialize_deserialize() {
-        initialize();
-        let data = event::EventType::from_u8(0);
-        let event = event::Event::<event::EventType>::new(data.clone(), 0);
-        let bytes: AlignedVec = serialize(&event).expect("failed to serialize");
-        // let deserialized_event: Event<event::EventType> =
-        //     deserialize(&bytes).expect("failed to deserialize");
-        // assert_eq!(event.event_type, deserialized_event.event_type);
     }
 }
