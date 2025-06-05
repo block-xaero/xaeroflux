@@ -1,7 +1,16 @@
 [package]
 name = "xaeroflux-core"
 version = "0.2.0-m3"
-edition = "2024"
+edition     = "2024"
+description = "EXPERIMENTAL: actor layer for xaeroflux"
+categories = ["database", "database-implementations"]
+keywords = ["unstable", "draft", "experimental"]
+authors = ["ricky.nj@gmail.com"]
+license = "MPL-2.0"
+documentation = "https://github.com/block-xaero/xaeroflux.git"
+repository = "https://github.com/block-xaero/xaeroflux.git"
+homepage = "https://blockxaero.io"
+readme = "README.md"
 
 [features]
 diagnostics = []
