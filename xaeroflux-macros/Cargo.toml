@@ -15,7 +15,7 @@ readme = "README.md"
 proc-macro = true
 
 [dependencies]
-xaeroflux-core = { path = "../xaeroflux-core" }
+xaeroflux-core = "0.2.0-m3"
 trybuild = "1.0.105"
 proc-macro2 = "1.0.95"
 quote = "1.0.40"
