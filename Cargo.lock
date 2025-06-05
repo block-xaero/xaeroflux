@@ -5848,6 +5848,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "xaeroflux"
+version = "0.1.0-m3.1"
+dependencies = [
+ "xaeroflux-actors",
+ "xaeroflux-core",
+ "xaeroflux-macros",
+]
+
+[[package]]
 name = "xaeroflux-actors"
 version = "0.1.0-m3"
 dependencies = [
