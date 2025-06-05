@@ -10,7 +10,7 @@ default = []
 [dependencies]
 ed25519-dalek = { version = "2.1.1", features = ["rand_core"] }
 rand = "0.8"
-tokio = { version = "1.45.1", default-features = false, features = ["rt", "macros", "net", "sync"] }
+tokio = { version = "1.45.1", default-features = false, features = ["rt-multi-thread", "macros", "net", "sync"] }
 tokio-stream = "0.1.17"
 crdts = "7.3.2"
 bytemuck = "1.23.0"
