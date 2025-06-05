@@ -1,0 +1,10 @@
+# xaeroflux/xaeroflux/Cargo.toml
+[package]
+name    = "xaeroflux"
+version = "0.1.0-m3.1"
+edition = "2024"
+
+[dependencies]
+xaeroflux-core   = "0.1.0-m3.1"
+xaeroflux-actors = "0.1.0-m3.1"
+xaeroflux-macros = "0.1.0-m3.1"

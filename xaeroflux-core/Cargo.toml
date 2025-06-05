@@ -1,6 +1,6 @@
 [package]
 name = "xaeroflux-core"
-version = "0.1.0-m3"
+version = "0.1.0-m3.1"
 edition = "2024"
 
 [features]

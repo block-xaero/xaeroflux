@@ -1,2 +1,2 @@
 [workspace]
-members = ["xaeroflux-actors", "xaeroflux-core", "xaeroflux-macros"]
+members = ["xaeroflux", "xaeroflux-actors", "xaeroflux-core", "xaeroflux-macros"]
