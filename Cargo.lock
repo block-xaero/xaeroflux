@@ -5852,7 +5852,7 @@ name = "xaeroflux"
 version = "0.2.0-m3"
 dependencies = [
  "xaeroflux-actors",
- "xaeroflux-core",
+ "xaeroflux-core 0.2.0-m3",
  "xaeroflux-macros",
 ]
 
@@ -5889,13 +5889,42 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
- "xaeroflux-core",
+ "xaeroflux-core 0.2.0-m3 (registry+https://github.com/rust-lang/crates.io-index)",
  "xaeroflux-macros",
 ]
 
 [[package]]
 name = "xaeroflux-core"
 version = "0.2.0-m3"
+dependencies = [
+ "bytemuck",
+ "crdts",
+ "crossbeam",
+ "ed25519-dalek",
+ "figlet-rs",
+ "hex",
+ "libc",
+ "memmap2",
+ "rand 0.8.5",
+ "rkyv 0.8.10",
+ "rkyv_dyn",
+ "rustfix",
+ "serde",
+ "sha2",
+ "tempfile",
+ "threadpool",
+ "tokio",
+ "tokio-stream",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "xaeroflux-core"
+version = "0.2.0-m3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75109ad297a99f08fcb84cef4208c980264cd8246c93851ed68f370cbdb78e44"
 dependencies = [
  "bytemuck",
  "crdts",
@@ -5929,7 +5958,7 @@ dependencies = [
  "quote",
  "syn 2.0.101",
  "trybuild",
- "xaeroflux-core",
+ "xaeroflux-core 0.2.0-m3",
 ]
 
 [[package]]
