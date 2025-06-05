@@ -5858,7 +5858,7 @@ dependencies = [
 
 [[package]]
 name = "xaeroflux-actors"
-version = "0.1.0-m3"
+version = "0.1.0-m3.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5895,7 +5895,7 @@ dependencies = [
 
 [[package]]
 name = "xaeroflux-core"
-version = "0.1.0-m3"
+version = "0.1.0-m3.1"
 dependencies = [
  "bytemuck",
  "crdts",
@@ -5922,7 +5922,7 @@ dependencies = [
 
 [[package]]
 name = "xaeroflux-macros"
-version = "0.1.0-m3"
+version = "0.1.0-m3.1"
 dependencies = [
  "blake3",
  "proc-macro2",
