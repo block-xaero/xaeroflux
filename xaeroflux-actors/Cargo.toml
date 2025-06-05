@@ -28,7 +28,7 @@ push-remote       = "origin"
 libc = "0.2.172"
 
 [dependencies]
-xaeroflux-core = {path = "../xaeroflux-core"}
+xaeroflux-core = "0.2.0-m3"
 xaeroflux-macros = {path = "../xaeroflux-macros"}
 ed25519-dalek = { version = "2.1.1", features = ["rand_core"] }
 rand = "0.8"
