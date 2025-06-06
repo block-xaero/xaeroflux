@@ -6,17 +6,32 @@
 //! - Constructors for default and custom segment configurations.
 //! - Accessors for the in-memory MMR, segment store, and LMDB environment.
 
-use std::sync::{Arc, Mutex};
+use std::{
+    sync::{Arc, Mutex},
+    thread,
+};
 
-use xaeroflux_core::{event::Event, hash::sha_256, listeners::EventListener};
+use crossbeam::channel::Receiver;
+use xaeroflux_core::{
+    XAERO_DISPATCHER_POOL,
+    event::{Event, EventType, SystemEventKind},
+    hash::sha_256,
+    listeners::EventListener,
+    system_paths::*,
+};
 
 use super::segment_writer_actor::{SegmentConfig, SegmentWriterActor};
 use crate::{
+    BusKind, Pipe, XaeroEvent,
     aof::storage::lmdb::{LmdbEnv, push_event},
-    indexing::storage::{format::archive, mmr::XaeroMmrOps},
-    system::control_bus::{ControlBus, SystemPayload},
+    indexing::storage::{
+        format::archive,
+        mmr::{XaeroMmr, XaeroMmrOps},
+    },
+    subject::SubjectHash,
 };
 
+pub static NAME_PREFIX: &str = "mmr_actor";
 /// Actor responsible for indexing events into a Merkle Mountain Range (MMR).
 ///
 /// Fields:
@@ -25,10 +40,9 @@ use crate::{
 /// - `_store`: segment writer actor to persist leaf hashes in pages.
 /// - `listener`: event listener that drives the indexing pipeline.
 pub struct MmrIndexingActor {
-    pub(crate) _lmdb: Arc<Mutex<LmdbEnv>>,
-    pub(crate) _mmr: Arc<Mutex<crate::indexing::storage::mmr::XaeroMmr>>,
-    pub(crate) _store: Arc<SegmentWriterActor>,
-    pub listener: EventListener<Vec<u8>>,
+    pub name: SubjectHash,
+    pub pipe: Arc<Pipe>,
+    pub(crate) _handle: thread::JoinHandle<()>,
 }
 
 impl MmrIndexingActor {
@@ -44,55 +58,111 @@ impl MmrIndexingActor {
     ///
     /// Uses a single-threaded event handler by default.
     pub fn new(
-        cb: Arc<ControlBus>,
-        store: Option<SegmentWriterActor>,
-        listener: Option<EventListener<Vec<u8>>>,
+        name: SubjectHash,
+        pipe: Arc<Pipe>,
+        segment_config_opt: Option<SegmentConfig>,
     ) -> Self {
-        let cbc = Arc::clone(&cb);
+        let pipe_clone0 = pipe.clone();
         let _mmr = Arc::new(Mutex::new(crate::indexing::storage::mmr::XaeroMmr::new()));
-        let _store = Arc::new(store.unwrap_or_else(|| {
-            SegmentWriterActor::new_with_config(cbc, SegmentConfig {
-                prefix: "xaeroflux-actors-mmr".to_string(),
+        let _store = Arc::new(SegmentWriterActor::new_with_config(
+            name,
+            pipe_clone0,
+            segment_config_opt.unwrap_or(SegmentConfig {
+                prefix: "mmr".to_string(),
                 ..Default::default()
-            })
-        }));
-
-        // Use the store's lmdb_env_path instead of hardcoded path
-        let path = &_store.segment_config.lmdb_env_path;
-        let meta_db = Arc::new(Mutex::new(
-            LmdbEnv::new(path).expect("failed to create LmdbEnv"),
+            }),
         ));
+        // Use the store's lmdb_env_path instead of hardcoded path
+        let meta_db = Arc::new(Mutex::new(
+            LmdbEnv::new(
+                emit_data_path_with_subject_hash(
+                    &_store.segment_config.lmdb_env_path,
+                    name.0,
+                    NAME_PREFIX,
+                )
+                .as_str(),
+                BusKind::Data,
+            )
+            .expect("failed to create LmdbEnv"),
+        ));
+        let (tx, rx) = crossbeam::channel::unbounded();
+        let txc = tx.clone();
+        let rxc = rx.clone();
+        let pipe_clone1 = pipe.clone();
         let mdb_c = meta_db.clone();
         let _store_clone = _store.clone();
         let mmr_clone = _mmr.clone();
-        let _listener = listener.unwrap_or_else(|| {
-            EventListener::new(
-                "mmr_indexing_actor",
-                Arc::new(move |e: Event<Vec<u8>>| {
-                    let framed = archive(&e);
-                    // TODO: THIS SHOULD BE NON BLOCKING
-                    push_event(&mdb_c, &e).expect("failed to push event");
-                    let leaf_hash = sha_256(&framed);
-                    {
-                        mmr_clone
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner())
-                            .append(leaf_hash);
+        let _listener = EventListener::new(
+            "mmr_indexing_actor",
+            Arc::new(move |e: Event<Vec<u8>>| {
+                let res = txc.send(e);
+                match res {
+                    Ok(_) => {}
+                    Err(_) => {
+                        tracing::error!("mmr_indexing_actor listener dropped an event!");
                     }
-                    _store_clone
-                        .inbox
-                        .send(leaf_hash.to_vec())
-                        .expect("failed to send event");
-                }),
-                None,
-                Some(1), // single-threaded handler
-            )
-        });
+                }
+            }),
+            None,
+            Some(1), // single-threaded handler
+        );
+        XAERO_DISPATCHER_POOL
+            .get()
+            .expect("XAERO_DISPATCHER_POOL::get()")
+            .execute(move || {
+                while let Ok(evt) = pipe.source.rx.recv() {
+                    let event_type = evt.evt.event_type.clone();
+                    let res = tx.send(evt.evt);
+                    match res {
+                        Ok(_) => {}
+                        Err(_) => {
+                            tracing::error!("failed to send event of type {event_type:?}");
+                        }
+                    }
+                }
+            });
+        let jh = std::thread::Builder::new()
+            .name(name.to_string())
+            .spawn(move || {
+                Self::run_mmr_writer_loop(&mdb_c, _store_clone, mmr_clone, rxc);
+            })
+            .expect("failed to spawn mmr writer thread");
+
         Self {
-            _mmr,
-            _store,
-            listener: _listener,
-            _lmdb: meta_db,
+            name,
+            pipe: pipe_clone1,
+            _handle: jh,
+        }
+    }
+
+    fn run_mmr_writer_loop(
+        mdb_c: &Arc<Mutex<LmdbEnv>>,
+        _store_clone: Arc<SegmentWriterActor>,
+        mmr_clone: Arc<Mutex<XaeroMmr>>,
+        rx: Receiver<Event<Vec<u8>>>,
+    ) {
+        while let Ok(e) = rx.recv() {
+            let framed = archive(&e);
+            push_event(&mdb_c, &e).expect("failed to push event");
+            let leaf_hash = sha_256(&framed);
+            {
+                mmr_clone
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .append(leaf_hash);
+            }
+            _store_clone
+                .pipe
+                .sink
+                .tx
+                .send(XaeroEvent {
+                    evt: Event::new(
+                        leaf_hash.to_vec(),
+                        EventType::SystemEvent(SystemEventKind::MmrAppended).to_u8(),
+                    ),
+                    merkle_proof: None,
+                })
+                .expect("failed to send event");
         }
     }
 
@@ -102,92 +172,21 @@ impl MmrIndexingActor {
     /// - `listener`: optional custom event listener; if `None`, a default is created as in `new`.
     ///
     /// This allows configuring storage paths while reusing the same MMR pipeline.
-    pub fn new_with_config(
-        cb: Arc<ControlBus>,
-        config: SegmentConfig,
-        listener: Option<EventListener<Vec<u8>>>,
-    ) -> Self {
-        let cb_clone = Arc::clone(&cb);
-        // initialize in-memory MMR
-        let _mmr = Arc::new(Mutex::new(crate::indexing::storage::mmr::XaeroMmr::new()));
-        // create segment writer from config
-        let store = Arc::new(SegmentWriterActor::new_with_config(
-            cb_clone,
-            config.clone(),
-        ));
-        // open LMDB using config path
-        let meta_db = Arc::new(Mutex::new(
-            LmdbEnv::new(&config.lmdb_env_path).expect("failed to create LmdbEnv"),
-        ));
-        let mdb_c = meta_db.clone();
-        let store_clone = store.clone();
-        let mmr_clone = _mmr.clone();
-        // build listener
-        let _listener = listener.unwrap_or_else(|| {
-            EventListener::new(
-                "mmr_indexing_actor",
-                Arc::new(move |e: Event<Vec<u8>>| {
-                    let framed = archive(&e);
-                    // persist event metadata
-                    push_event(&mdb_c, &e).expect("failed to push event");
-                    // append to in-memory MMR
-                    let leaf_hash = sha_256(&framed);
-                    {
-                        mmr_clone
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner())
-                            .append(leaf_hash);
-                    }
-                    // send to segment writer
-                    store_clone
-                        .inbox
-                        .send(leaf_hash.to_vec())
-                        .expect("failed to send event");
-                    let res = cb.sender().send(SystemPayload::MmrAppended { leaf_hash });
-                    if res.is_err() {
-                        tracing::warn!("Failed to notify MMR append: {:?}", res);
-                    }
-                }),
-                None,
-                Some(1),
-            )
-        });
-        Self {
-            _mmr,
-            _store: store,
-            listener: _listener,
-            _lmdb: meta_db,
-        }
-    }
-
-    /// Return a clone of the shared in-memory MMR instance.
-    pub fn mmr(&self) -> Arc<Mutex<crate::indexing::storage::mmr::XaeroMmr>> {
-        Arc::clone(&self._mmr)
-    }
-
-    /// Return a clone of the segment writer actor used for paging leaf hashes.
-    pub fn store(&self) -> Arc<SegmentWriterActor> {
-        Arc::clone(&self._store)
-    }
-
-    /// Return a clone of the LMDB environment for raw event persistence.
-    pub fn lmdb(&self) -> Arc<Mutex<LmdbEnv>> {
-        Arc::clone(&self._lmdb)
+    pub fn new_with_config(name: SubjectHash, pipe: Arc<Pipe>, config: SegmentConfig) -> Self {
+        Self::new(name, pipe, Some(config))
     }
 }
 
-/// Unit tests for `MmrIndexingActor`.
-///
-/// Tests include:
-/// - Appending a single event and verifying the in-memory MMR leaf count.
-/// - Persisting the exact computed leaf hash to the segment writer's inbox.
 #[cfg(test)]
 mod actor_tests {
-    use std::time::Duration;
+    use std::{sync::Arc, time::Duration};
 
-    use crossbeam::channel;
-    use tempfile::{TempDir, tempdir};
-    use xaeroflux_core::{event::Event, hash::sha_256};
+    use crossbeam::channel::Receiver;
+    use iroh_blobs::store::bao_tree::blake3;
+    use xaeroflux_core::{
+        event::{Event, EventType, SystemEventKind},
+        hash::sha_256,
+    };
 
     use super::*;
     use crate::{
@@ -195,90 +194,91 @@ mod actor_tests {
         indexing::storage::{actors::segment_writer_actor::SegmentConfig, format::archive},
     };
 
-    /// Build a simple Event from raw bytes.
-    fn make_event(data: Vec<u8>) -> Event<Vec<u8>> {
-        Event::new(data, 1)
+    /// Helper to wrap an Event<Vec<u8>> into a XaeroEvent and send it via pipe.
+    fn send_app_event(pipe: &Arc<Pipe>, data: Vec<u8>) {
+        let e = Event::new(data.clone(), EventType::ApplicationEvent(1).to_u8());
+        let xaero_evt = XaeroEvent {
+            evt: e,
+            merkle_proof: None,
+        };
+        pipe.sink.tx.send(xaero_evt).unwrap();
     }
 
-    /// Helper to push an event into the listener's inbox.
-    fn fire_event(listener: &EventListener<Vec<u8>>, evt: Event<Vec<u8>>) {
-        listener.inbox.send(evt).expect("failed to send event");
-    }
-
-    fn make_test_store(prefix: String) -> (TempDir, SegmentWriterActor) {
+    #[test]
+    fn actor_appends_leaf_to_pipe() {
         initialize();
-        let cb = Arc::new(ControlBus::new());
-        let tmp = tempdir().expect("failed to create tempdir");
-        // small page size so tests finish quickly, 1 page per segment to avoid rollover
+        // Create a data pipe for MMR (it listens on Data events)
+        let pipe = Pipe::new(BusKind::Data, None);
+        let rx_out: Receiver<XaeroEvent> = pipe.source.rx.clone();
+
+        // Compute SubjectHash (for example, using "mmr-actor" as namespace)
+        let mut hasher = blake3::Hasher::new();
+        hasher.update("mmr-actor".as_bytes());
+        let subject_hash = SubjectHash(*hasher.finalize().as_bytes());
+
+        // Construct MmrIndexingActor with no custom segment config
+        let actor = MmrIndexingActor::new(subject_hash, pipe.clone(), None);
+
+        // Send one application event into actor
+        let payload = b"foo".to_vec();
+        send_app_event(&pipe, payload.clone());
+
+        // Expect a SystemEvent::MmrAppended on the same pipe with correct leaf hash
+        let got = rx_out
+            .recv_timeout(Duration::from_secs(1))
+            .expect("expected MmrAppended event");
+        // Unpack the leaf hash from got.evt.data
+        let leaf_hash = got.evt.data.clone();
+        // Compute expected: sha256( archive(&app_event) )
+        let e = Event::new(payload.clone(), EventType::ApplicationEvent(1).to_u8());
+        let expected_hash = sha_256(&archive(&e)).to_vec();
+        assert_eq!(leaf_hash, expected_hash);
+        assert_eq!(
+            got.evt.event_type.to_u8(),
+            EventType::SystemEvent(SystemEventKind::MmrAppended).to_u8()
+        );
+    }
+
+    #[test]
+    fn actor_persists_leaf_to_segment_writer() {
+        initialize();
+        // Prepare a temp directory and change cwd so segment writer writes here
+        let tmp = tempfile::tempdir().expect("failed to create tempdir");
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        // Create a data pipe and subscribe to its rx to capture writes
+        let pipe = Pipe::new(BusKind::Data, None);
+        let rx_out: Receiver<XaeroEvent> = pipe.source.rx.clone();
+
+        // Compute SubjectHash
+        let mut hasher = blake3::Hasher::new();
+        hasher.update("mmr-actor".as_bytes());
+        let subject_hash = SubjectHash(*hasher.finalize().as_bytes());
+
+        // Build a small SegmentConfig so we write a file quickly
         let cfg = SegmentConfig {
             page_size: 32,
             pages_per_segment: 1,
-            prefix,
+            prefix: "mmr-test".to_string(),
             segment_dir: tmp.path().to_string_lossy().into(),
             lmdb_env_path: tmp.path().to_string_lossy().into(),
         };
-        let store = SegmentWriterActor::new_with_config(cb, cfg);
-        (tmp, store)
-    }
 
-    #[test]
-    fn actor_appends_to_in_memory_mmr() {
-        initialize();
-        let cb = Arc::new(ControlBus::new());
-        // store config uses small pages; we only care about MMR here
-        let (_tmp, store) = make_test_store("mmr".to_string());
-        let actor = MmrIndexingActor::new(cb, Some(store), None);
+        // Construct MmrIndexingActor (it will internally create its own SegmentWriterActor)
+        let actor = MmrIndexingActor::new(subject_hash, pipe.clone(), Some(cfg));
 
-        // Fire one event
-        let ev = make_event(b"foo".to_vec());
-        fire_event(&actor.listener, ev);
-        // wait until the listener has processed the event (or timeout)
-        use std::time::{Duration, Instant};
-        let start = Instant::now();
-        while actor
-            .listener
-            .meta
-            .events_processed
-            .load(std::sync::atomic::Ordering::SeqCst)
-            < 1
-        {
-            if start.elapsed() > Duration::from_secs(1) {
-                panic!("Timed out waiting for listener to process event");
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        // Send one application event into actor
+        let payload = b"bar".to_vec();
+        send_app_event(&pipe, payload.clone());
 
-        // The MMR should contain exactly one leaf
-        let mmr = actor._mmr.lock().expect("failed to lock MMR");
-        assert_eq!(mmr.leaf_count(), 1, "MMR should have one leaf");
-    }
-
-    #[test]
-    fn actor_persists_exact_leaf_hash_to_store() {
-        let tmp = tempdir().expect("failed to create tempdir");
-        std::env::set_current_dir(tmp.path()).expect("failed to set cwd");
-        initialize();
-        let cb = Arc::new(ControlBus::new());
-        // capture what gets sent to disk
-        let dir = tempdir().expect("failed to create tempdir");
-        let prefix = dir.path().join("mmr").display().to_string();
-        let (tx, rx) = channel::bounded::<Vec<u8>>(1);
-        let (_tmp, mut store) = make_test_store(prefix.clone());
-        store.inbox = tx.clone();
-
-        let actor = MmrIndexingActor::new(cb, Some(store), None);
-
-        // Fire one event
-        let ev = make_event(b"bar".to_vec());
-        fire_event(&actor.listener, ev.clone());
-
-        // Read the hash from the store's inbox
-        let got = rx
-            .recv_timeout(Duration::from_millis(100))
-            .expect("expected one leaf hash");
-
-        // It must equal sha256( archive(&ev) )
-        let expected = sha_256(&archive(&ev)).to_vec();
-        assert_eq!(got, expected, "Persisted hash must match expected digest");
+        // The SegmentWriterActor will receive the MmrAppended XaeroEvent on the same pipe,
+        // so we should see it:
+        let got = rx_out
+            .recv_timeout(Duration::from_secs(1))
+            .expect("expected MmrAppended from segment writer");
+        assert_eq!(
+            got.evt.event_type.to_u8(),
+            EventType::SystemEvent(SystemEventKind::MmrAppended).to_u8()
+        );
     }
 }

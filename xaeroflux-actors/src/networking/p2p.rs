@@ -1,12 +1,38 @@
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
-use crossbeam::channel::Receiver;
+use crossbeam::channel::{Receiver, Sender};
+use xaeroflux_macros::PipeKind;
 
 use crate::{
-    aof::storage::format::SegmentMeta, indexing::storage::mmr::Peak,
-    system::control_bus::SystemPayload,
+    aof::storage::format::SegmentMeta, indexing::storage::mmr::Peak, pipe::BusKind,
+    system_payload::SystemPayload,
 };
+
+// TODO: Maybe in future make `Source` and `Sink` and `Pipe` generic.
+struct NetworkSource {
+    pub(crate) rx: Receiver<NetworkPayload>,
+}
+
+struct NetworkSink {
+    pub(crate) tx: Sender<NetworkPayload>,
+}
+
+struct NetworkPipe {
+    pub source: NetworkSource,
+    pub sink: NetworkSink,
+    pub bus_kind: BusKind,
+    pub bounds: Option<usize>,
+}
+
+#[derive(PipeKind)]
+#[pipe_kind(Control)]
+pub struct ControlNetworkPipe(Arc<NetworkPipe>);
+
+#[derive(PipeKind)]
+#[pipe_kind(Data)]
+pub struct DataNetworkPipe(Arc<NetworkPipe>);
+
 
 #[repr(C)]
 #[derive(Clone, Copy)]

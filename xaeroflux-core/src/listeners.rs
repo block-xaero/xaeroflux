@@ -14,7 +14,7 @@ use std::{
     thread::JoinHandle,
 };
 
-use crossbeam::channel::Sender;
+use crossbeam::channel::{Receiver, Sender};
 use threadpool::ThreadPool;
 
 use crate::{DISPATCHER_POOL, XaeroData, event::Event, init_global_dispatcher_pool};
@@ -53,58 +53,6 @@ pub struct EventListenerMeta {
     pub events_processed: Arc<AtomicUsize>,
     pub events_dropped: Arc<AtomicUsize>,
 }
-/// Trait for listeners to emit a version string based on seed name/group.
-///
-/// Implementors produce a unique version using a timestamp.
-pub trait VersioningScheme {
-    fn emit_version(&self, seed_name: &str, seed_group: &str) -> String;
-}
-impl<T> VersioningScheme for EventListener<T>
-where
-    T: XaeroData + 'static,
-{
-    fn emit_version(&self, seed_name: &str, seed_group: &str) -> String {
-        format!(
-            "{}_{}_{}",
-            seed_group,
-            seed_name,
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("Time went backwards")
-                .as_micros() as u64
-        )
-    }
-}
-/// Trait for listeners to emit a unique hierarchical address.
-///
-/// The address incorporates group/name, version, and a hashed identifier.
-pub trait AddressingScheme {
-    fn emit_address(&self, seed_name: &str, seed_group: &str) -> String;
-}
-
-impl<T> AddressingScheme for EventListener<T>
-where
-    T: XaeroData,
-{
-    fn emit_address(&self, seed_name: &str, seed_group: &str) -> String {
-        format!(
-            "{}/{}/{}/{}",
-            seed_group
-                .to_lowercase()
-                .replace(" ", "_")
-                .replace("-", "_"),
-            seed_name.to_lowercase().replace(" ", "_").replace("-", "_"),
-            self.emit_version(seed_name, seed_group),
-            crate::hash::sha_256::<String>(&seed_name.to_string())
-                .to_vec()
-                .iter()
-                .map(|x| format!("{x:02x}"))
-                .collect::<String>()
-                .to_lowercase()
-                .replace("-", "_")
-        )
-    }
-}
 
 impl<T> EventListener<T>
 where
@@ -128,7 +76,6 @@ where
         _pool_size_override: Option<usize>,
     ) -> Self {
         let (tx, rx) = crossbeam::channel::unbounded();
-
         let id: [u8; 32] = crate::hash::sha_256::<String>(&name.to_string());
         // let pool_size = match pool_size_override {
         //     Some(size) => {

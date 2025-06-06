@@ -4,7 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use xaeroflux_core::event::SystemErrorCode;
+use xaeroflux_core::event::{Event, EventType::SystemEvent, SystemErrorCode, SystemEventKind};
 
 /// A single cache entry: optional payload meta, MMR-appended flag, and timestamp.
 struct CacheEntry {
@@ -14,15 +14,16 @@ struct CacheEntry {
 }
 
 use crate::{
+    Pipe, XaeroEvent,
     aof::storage::{
         format::SegmentMeta,
         lmdb::{LmdbEnv, put_secondary_index},
     },
-    system::control_bus::{ControlBus, SystemPayload},
+    system_payload::SystemPayload,
 };
 
 pub struct SecondaryIndexActor {
-    bus: Arc<ControlBus>,
+    pub pipe: Arc<Pipe>,
     cache: Mutex<HashMap<[u8; 32], CacheEntry>>,
     lmdb_env: Arc<Mutex<LmdbEnv>>,
     gc_ttl: Duration,
@@ -49,14 +50,28 @@ impl SecondaryIndexActor {
                 if entry.mmr_appended {
                     drop(cache);
                     let res = put_secondary_index(&self.lmdb_env, &leaf_hash, &meta);
-                    let tx = self.bus.sender();
+                    let tx = self.pipe.sink.tx.clone();
                     if res.is_ok() {
-                        tx.send(SystemPayload::SecondaryIndexWritten { leaf_hash })
-                            .expect("failed_to_unravel");
+                        tx.send(XaeroEvent {
+                            evt: Event::new(
+                                bytemuck::bytes_of(&SystemPayload::MMRLeafAppended { leaf_hash })
+                                    .to_vec(),
+                                SystemEvent(SystemEventKind::MmrAppended).to_u8(),
+                            ),
+                            merkle_proof: None,
+                        })
+                        .expect("failed_to_unravel");
                     } else {
-                        tx.send(SystemPayload::SecondaryIndexFailed {
-                            leaf_hash,
-                            error_code: SystemErrorCode::SecondaryIndex as u16,
+                        tx.send(XaeroEvent {
+                            evt: Event::new(
+                                bytemuck::bytes_of(&SystemPayload::MmrAppendFailed {
+                                    leaf_hash,
+                                    error_code: SystemErrorCode::MmrAppend as u16,
+                                })
+                                .to_vec(),
+                                SystemEvent(SystemEventKind::MmrAppendFailed).to_u8(),
+                            ),
+                            merkle_proof: None,
                         })
                         .expect("failed_to_unravel");
                     }
@@ -74,16 +89,36 @@ impl SecondaryIndexActor {
                 if let Some(meta) = entry.meta {
                     drop(cache);
                     let res = put_secondary_index(&self.lmdb_env, &leaf_hash, &meta);
-                    let tx = self.bus.sender();
+                    let pc = self.pipe.clone();
                     if res.is_ok() {
-                        tx.send(SystemPayload::SecondaryIndexWritten { leaf_hash })
+                        pc.sink
+                            .tx
+                            .send(XaeroEvent {
+                                evt: Event::new(
+                                    bytemuck::bytes_of(&SystemPayload::SecondaryIndexWritten {
+                                        leaf_hash,
+                                    })
+                                    .to_vec(),
+                                    SystemEvent(SystemEventKind::SecondaryIndexWritten).to_u8(),
+                                ),
+                                merkle_proof: None,
+                            })
                             .expect("failed_to_unravel");
                     } else {
-                        tx.send(SystemPayload::SecondaryIndexFailed {
-                            leaf_hash,
-                            error_code: SystemErrorCode::SecondaryIndex as u16,
-                        })
-                        .expect("failed_to_unravel");
+                        pc.sink
+                            .tx
+                            .send(XaeroEvent {
+                                evt: Event::new(
+                                    bytemuck::bytes_of(&SystemPayload::SecondaryIndexFailed {
+                                        leaf_hash,
+                                        error_code: SystemErrorCode::SecondaryIndex as u16,
+                                    })
+                                    .to_vec(),
+                                    SystemEvent(SystemEventKind::SecondaryIndexFailed).to_u8(),
+                                ),
+                                merkle_proof: None,
+                            })
+                            .expect("failed_to_unravel");
                     }
                 }
             }
@@ -91,19 +126,21 @@ impl SecondaryIndexActor {
         }
     }
 
-    pub fn new(bus: Arc<ControlBus>, lmdb_env: Arc<Mutex<LmdbEnv>>, gc_ttl: Duration) -> Arc<Self> {
+    pub fn new(pipe: Arc<Pipe>, lmdb_env: Arc<Mutex<LmdbEnv>>, gc_ttl: Duration) -> Arc<Self> {
+        let pc = pipe.clone();
         let actor = Arc::new(SecondaryIndexActor {
-            bus: bus.clone(),
+            pipe,
             cache: Mutex::new(HashMap::new()),
             lmdb_env: lmdb_env.clone(),
             gc_ttl,
         });
-
-        let rx = bus.subscribe();
+        let rxc = pc.source.rx.clone();
         let h = actor.clone();
         std::thread::spawn(move || {
-            while let Ok(evt) = rx.recv() {
-                h.handle_event(evt);
+            while let Ok(evt) = rxc.recv() {
+                h.handle_event(*bytemuck::from_bytes::<SystemPayload>(
+                    evt.evt.data.as_slice(),
+                ));
             }
         });
 
@@ -119,26 +156,31 @@ mod tests {
     };
 
     use tempfile::tempdir;
-
+    use xaeroflux_core::initialize;
     use super::SecondaryIndexActor;
     use crate::{
+        BusKind, Pipe,
         aof::storage::{
             format::SegmentMeta,
             lmdb::{LmdbEnv, get_secondary_index},
         },
-        system::control_bus::{ControlBus, SystemPayload},
+        system_payload::SystemPayload,
     };
 
     #[test]
     fn test_secondary_index_actor_write() {
+        initialize();
         // Setup LMDB env and actor
         let dir = tempdir().expect("failed_to_unravel");
         let env = Arc::new(Mutex::new(
-            LmdbEnv::new(dir.path().to_str().expect("failed_to_unravel"))
-                .expect("failed_to_unravel"),
+            LmdbEnv::new(
+                dir.path().to_str().expect("failed_to_unravel"),
+                BusKind::Data,
+            )
+            .expect("failed_to_unravel"),
         ));
-        let bus = Arc::new(ControlBus::new());
-        let actor = SecondaryIndexActor::new(bus.clone(), env.clone(), Duration::from_secs(60));
+        let pipe = Pipe::new(BusKind::Data, None);
+        let actor = SecondaryIndexActor::new(pipe.clone(), env.clone(), Duration::from_secs(60));
 
         // Simulate payload written then MMR appended
         let meta = SegmentMeta {
@@ -165,13 +207,17 @@ mod tests {
 
     #[test]
     fn test_secondary_index_actor_mmr_first() {
+        initialize();
         let dir = tempdir().expect("failed_to_unravel");
         let env = Arc::new(Mutex::new(
-            LmdbEnv::new(dir.path().to_str().expect("failed_to_unravel"))
-                .expect("failed_to_unravel"),
+            LmdbEnv::new(
+                dir.path().to_str().expect("failed_to_unravel"),
+                BusKind::Data,
+            )
+            .expect("failed_to_unravel"),
         ));
-        let bus = Arc::new(ControlBus::new());
-        let actor = SecondaryIndexActor::new(bus.clone(), env.clone(), Duration::from_secs(60));
+        let pipe = Pipe::new(BusKind::Data, None);
+        let actor = SecondaryIndexActor::new(pipe.clone(), env.clone(), Duration::from_secs(60));
 
         let leaf_hash = [2u8; 32];
         actor.handle_event(SystemPayload::MmrAppended { leaf_hash });

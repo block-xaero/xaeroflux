@@ -1,7 +1,62 @@
 use proc_macro::TokenStream;
-use quote::quote;
-use syn::{LitStr, parse_macro_input};
+use proc_macro2::Ident;
+use quote::{format_ident, quote};
+use syn::{DeriveInput, Lit, LitStr, Meta, parse_macro_input};
 
+#[proc_macro_derive(PipeKind, attributes(pipe_kind))]
+pub fn derive_pipe_kind(input: TokenStream) -> TokenStream {
+    // Parse the struct we're deriving for.
+    let input = parse_macro_input!(input as DeriveInput);
+    let struct_name = input.ident;
+
+    // Look for exactly one #[pipe_kind(...)] attribute.
+    let mut found: Option<Ident> = None;
+    for attr in input.attrs.into_iter() {
+        if attr.path().is_ident("pipe_kind") {
+            if found.is_some() {
+                panic!("Multiple `#[pipe_kind]` attributes found. Only one is allowed.");
+            }
+            // Parse the contents as a single Ident (e.g. Control or Data).
+            let kind_ident = attr.parse_args::<Ident>().expect(
+                "`#[pipe_kind(...)]` must contain exactly one bare identifier, e.g. `Control` or \
+                 `Data`",
+            );
+            found = Some(kind_ident);
+        }
+    }
+
+    let kind_ident =
+        found.expect("Missing `#[pipe_kind(Control)]` or `#[pipe_kind(Data)]` attribute.");
+
+    // Map that identifier into the corresponding BusKind variant.
+    let bus_variant = match kind_ident.to_string().as_str() {
+        "Control" => quote! { BusKind::Control },
+        "Data" => quote! { BusKind::Data },
+        other => panic!(
+            "`#[pipe_kind(...)]` must be either `Control` or `Data`, got `{}`",
+            other
+        ),
+    };
+
+    // Generate `impl StructName { pub fn new(bounds: Option<usize>) -> Self {
+    // StructName(Pipe::new(BusKind::X, bounds)) } }`.
+    let expanded = quote! {
+        impl #struct_name {
+            pub fn new(bounds: Option<usize>) -> Self {
+                use crossbeam::channel::Sender;
+                use crossbeam::channel::Receiver;
+                use crossbeam::channel::bounded;
+                let (tx, rx) =  crossbeam::channel::bounded(bounds.unwrap_or(100));
+                let source = NetworkSource{rx};
+                let sink = NetworkSink{tx};
+                #struct_name(Arc::new(crate::networking::p2p::NetworkPipe{source,
+                    sink, bus_kind: #bus_variant,
+                    bounds}))
+            }
+        }
+    };
+    TokenStream::from(expanded)
+}
 #[proc_macro]
 pub fn subject(input: TokenStream) -> TokenStream {
     // 1) Parse exactly one string literal: subject!("workspace/MyWS/object/MyObj")
@@ -83,18 +138,20 @@ pub fn subject(input: TokenStream) -> TokenStream {
     let expanded = quote! {
         {
             // Bring everything into scope from the current crate:
-           use crate::{Subject, SubjectHash, XaeroEvent};
-           use crate::system::control_bus::SystemPayload;
-           use xaeroflux_core::event::{Event, EventType, SystemEventKind};
-
+            use crate::subject::SubjectHash;
+            use crate::XaeroEvent;
+            use crate::subject::Subject;
+            use xaeroflux_core::event::{Event, EventType, SystemEventKind};
+            use crate::{BusKind, Pipe};
             // 1) Construct the Subject itself, calling new_with_workspace(...)
             let subject = Subject::new_with_workspace(
                 #subject_name_tokens.to_string(),         // name: String
                 [ #(#subject_bytes_tokens),* ],           // hash: [u8; 32]
-                #ws_id_lit.to_string(),                    // workspace_id: String
-                #obj_id_lit.to_string(),                   // object_id: String
+            #ws_id_lit.to_string(),                    // workspace_id: String
+            #obj_id_lit.to_string(),                   // object_id: String
             );
-
+            let control_pipe = Pipe::new(BusKind::Control,Some(100));
+            let data_pipe = Pipe::new(BusKind::Data,Some(100));
             // 2) Emit a “WorkspaceCreated” system event
             let wc_evt = XaeroEvent {
                 evt: xaeroflux_core::event::Event::new(
@@ -105,7 +162,7 @@ pub fn subject(input: TokenStream) -> TokenStream {
                 ),
                 merkle_proof: None,
             };
-            subject.sink.tx.send(wc_evt)
+            subject.control.sink.tx.send(wc_evt)
                 .expect("failed to bootstrap: WorkspaceCreated");
 
             // 3) Emit an “ObjectCreated” system event
@@ -118,7 +175,7 @@ pub fn subject(input: TokenStream) -> TokenStream {
                 ),
                 merkle_proof: None,
             };
-            subject.sink.tx.send(oc_evt)
+            subject.control.sink.tx.send(oc_evt)
                 .expect("failed to bootstrap: ObjectCreated");
 
             // 4) Return the newly‐constructed Arc<Subject>
