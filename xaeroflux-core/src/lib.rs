@@ -14,6 +14,7 @@ pub mod listeners;
 pub mod logs;
 pub mod size;
 pub mod sys;
+pub mod system_paths;
 
 use std::{any::Any, env, fmt::Debug, sync::OnceLock};
 
@@ -54,6 +55,9 @@ pub static DISPATCHER_POOL: OnceLock<ThreadPool> = OnceLock::new();
 /// Global thread pool for performing I/O-bound tasks.
 pub static IO_POOL: OnceLock<ThreadPool> = OnceLock::new();
 
+/// `XaeroEvent` thread pool for dispatching work to worker threads.
+pub static XAERO_DISPATCHER_POOL: OnceLock<ThreadPool> = OnceLock::new();
+
 /// Global runtime for peer-to-peer networking tasks.
 pub static P2P_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 
@@ -72,6 +76,14 @@ pub fn init_p2p_runtime() -> &'static tokio::runtime::Runtime {
             .build()
             .expect("Failed to create P2P runtime")
     })
+}
+
+pub fn init_xaero_pool() {
+    XAERO_DISPATCHER_POOL.get_or_init(|| {
+        let conf = CONF.get_or_init(Config::default);
+        let no_of_worker_threads = conf.threads.num_worker_threads.max(1);
+        ThreadPool::new(no_of_worker_threads)
+    });
 }
 
 /// Initializes the global dispatcher thread pool.

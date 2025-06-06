@@ -13,18 +13,21 @@ use std::{
 
 use rkyv::rancor::Failure;
 use xaeroflux_core::{
+    XAERO_DISPATCHER_POOL,
     date_time::{day_bounds_from_epoch_ms, emit_secs},
     event::{Event, SystemEventKind},
     listeners::EventListener,
+    system_paths::{emit_control_path_with_subject_hash, emit_data_path_with_subject_hash},
 };
 
 use crate::{
-    ScanWindow, Sink, XaeroEvent,
+    BusKind, Pipe, ScanWindow, XaeroEvent,
     aof::storage::{lmdb::LmdbEnv, meta::iterate_segment_meta_by_range},
     indexing::storage::{actors::segment_writer_actor::SegmentConfig, io},
-    system::control_bus::ControlBus,
+    subject::SubjectHash,
 };
 
+pub static NAME_PREFIX: &str = "segment_reader";
 /// Actor for replaying events from historical segments.
 ///
 /// Fields:
@@ -33,11 +36,8 @@ use crate::{
 /// - `meta_db`: LMDB environment containing segment metadata.
 /// - `jh`: handle to the background thread processing replay requests.
 pub struct SegmentReaderActor {
-    pub cb: Arc<ControlBus>,
-    pub inbox: crossbeam::channel::Sender<Event<Vec<u8>>>,
-    /// Only listens to Replay events and rejects all others.
-    pub _listener: EventListener<Vec<u8>>,
-    pub meta_db: Arc<Mutex<LmdbEnv>>,
+    pub name: SubjectHash,
+    pub pipe: Arc<Pipe>,
     pub jh: std::thread::JoinHandle<()>,
 }
 
@@ -57,18 +57,59 @@ impl SegmentReaderActor {
     /// - `config`: directory and LMDB path settings for segment files and metadata.
     /// - `sink`: consumer of replayed events.
     ///
-    /// # Panics
-    /// Panics if LMDB environment initialization fails.
-    pub fn new(cb: Arc<ControlBus>, config: SegmentConfig, sink: Arc<Sink>) -> Arc<Self> {
+    /// # Panics    ///  if LMDB environment initialization fails.
+    pub fn new(name: SubjectHash, pipe: Arc<Pipe>, config: SegmentConfig) -> Arc<Self> {
+        let (tx, rx) = crossbeam::channel::bounded::<Event<Vec<u8>>>(0);
+        let dir_path = match pipe.sink.kind {
+            BusKind::Control =>
+                emit_control_path_with_subject_hash(&config.segment_dir, name.0, NAME_PREFIX),
+            BusKind::Data =>
+                emit_data_path_with_subject_hash(&config.segment_dir, name.0, NAME_PREFIX),
+        };
         // initialize LMDB environment from config
         let meta_db = Arc::new(Mutex::new(
-            LmdbEnv::new(&config.lmdb_env_path).expect("failed to create LmdbEnv"),
+            LmdbEnv::new(dir_path.as_str(), BusKind::Data).expect("failed to create LmdbEnv"),
         ));
-        let segment_dir = config.segment_dir.clone();
 
-        let (start_of_day, end_of_day) = day_bounds_from_epoch_ms(emit_secs());
-        let (tx, rx) = crossbeam::channel::bounded::<Event<Vec<u8>>>(0);
+        let segment_dir = dir_path;
+        let pipe_clone = Arc::clone(&pipe);
+        let pipe_rx = pipe_clone.source.rx.clone();
         let txc = tx.clone();
+        let listener = EventListener::new(
+            "segment_reader_actor_listener",
+            Arc::new({
+                move |e: Event<Vec<u8>>| {
+                    let res = txc.send(e);
+                    match res {
+                        Ok(_) => {}
+                        Err(e) => {
+                            tracing::error!("Failed to send event to inbox: {}", e);
+                        }
+                    }
+                }
+            }),
+            None,
+            Some(1), // FIXME: This should be a proper thread pool CONFIG
+        );
+        XAERO_DISPATCHER_POOL
+            .get()
+            .expect("xaero pool not initialized!")
+            .execute(move || {
+                while let Ok(xae) = pipe_rx.recv() {
+                    let res = listener.inbox.send(xae.evt);
+                    match res {
+                        Ok(_) => {
+                            tracing::info!("xae sent!")
+                        }
+                        Err(err_xae) => {
+                            tracing::error!("xae failed due to {:?}", err_xae)
+                        }
+                    }
+                }
+            });
+        let (start_of_day, end_of_day) = day_bounds_from_epoch_ms(emit_secs());
+        let txc = tx.clone();
+        let txc_sr_init = txc.clone();
         let mdbc = meta_db.clone();
         let jh = std::thread::spawn(move || {
             // ensure we run with the project root as our working directory,
@@ -141,7 +182,7 @@ impl SegmentReaderActor {
                                                     evt: e,
                                                     merkle_proof: None,
                                                 };
-                                                let res = sink.tx.send(xaero_event);
+                                                let res = tx.send(xaero_event.evt);
                                                 match res {
                                                     Ok(_) => {
                                                         tracing::info!(
@@ -176,37 +217,10 @@ impl SegmentReaderActor {
                 }
             }
         });
-        Arc::new(SegmentReaderActor {
-            cb,
-            _listener: EventListener::new(
-                "segment_reader_actor_listener",
-                Arc::new({
-                    move |e: Event<Vec<u8>>| {
-                        let res = txc.send(e);
-                        match res {
-                            Ok(_) => {}
-                            Err(e) => {
-                                tracing::error!("Failed to send event to inbox: {}", e);
-                            }
-                        }
-                    }
-                }),
-                None,
-                Some(1), // FIXME: This should be a proper thread pool CONFIG
-            ),
-            meta_db,
-            inbox: tx,
-            jh,
-        })
+        Arc::new(SegmentReaderActor { name, pipe, jh })
     }
 }
 
-/// Unit tests for `SegmentReaderActor`.
-///
-/// Tests:
-/// - `system_event_triggers_replay`: verifies that a `Replay` system event causes the actor to read
-///   a prepared segment file and send the deserialized "hello" event to the sink.
-/// - `non_system_events_do_not_replay`: ensures that non-system events are ignored.
 #[cfg(test)]
 mod tests {
     use std::{
@@ -215,7 +229,9 @@ mod tests {
         time::Duration,
     };
 
-    use crossbeam::channel::unbounded;
+    use bytemuck::bytes_of;
+    use crossbeam::channel::Receiver;
+    use iroh_blobs::store::bao_tree::blake3;
     use memmap2::MmapMut;
     use tempfile::tempdir;
     use xaeroflux_core::{
@@ -224,7 +240,7 @@ mod tests {
     };
 
     use crate::{
-        Sink, XaeroEvent,
+        BusKind, Pipe, XaeroEvent,
         aof::storage::{
             format::SegmentMeta,
             lmdb::{LmdbEnv, push_event},
@@ -236,17 +252,18 @@ mod tests {
             },
             format::{PAGE_SIZE, archive},
         },
+        subject::SubjectHash,
     };
 
-    /// If you send a Replay‐system‐event, you should get back exactly the one 'hello' from disk.
+    /// Sending a Replay system event should cause SegmentReaderActor to read the segment file
+    /// and re‐emit the "hello" application event on its pipe.
     #[test]
     fn system_event_triggers_replay() {
-        // use a temp dir for segment file and LMDB
-        let tmp = tempfile::tempdir().expect("failed_to_unwrap");
-        let cb = Arc::new(crate::system::control_bus::ControlBus::new());
         initialize();
+        // Create a temp directory for segment file and LMDB
+        let tmp = tempdir().expect("failed to create tempdir");
 
-        // 2) write a fake segment file *in* project_root
+        // Write a fake segment file in the temp directory
         let ts = emit_secs();
         let idx = 0;
         let seg_file = format!(
@@ -262,18 +279,20 @@ mod tests {
                 .truncate(true)
                 .read(true)
                 .open(&seg_file)
-                .expect("failed_to_unwrap");
-            file.set_len(PAGE_SIZE as u64).expect("failed_to_unwrap");
-            let mut mmap = unsafe { MmapMut::map_mut(&file).expect("failed_to_unwrap") };
+                .expect("failed to open segment file");
+            file.set_len(PAGE_SIZE as u64)
+                .expect("failed to set length");
+            let mut mmap = unsafe { MmapMut::map_mut(&file).expect("failed to map") };
             let e = Event::new(b"hello".to_vec(), EventType::ApplicationEvent(1).to_u8());
             let frame = archive(&e);
             mmap[0..frame.len()].copy_from_slice(&frame);
-            mmap.flush().expect("failed_to_unwrap");
+            mmap.flush().expect("failed to flush");
         }
 
-        // 3) push the matching SegmentMeta into your LMDB (that still lives in tmpdir)
+        // Insert corresponding SegmentMeta into LMDB under tmp directory
         let meta_db = Arc::new(Mutex::new(
-            LmdbEnv::new(tmp.path().to_str().expect("failed_to_unwrap")).expect("failed_to_unwrap"),
+            LmdbEnv::new(tmp.path().to_str().unwrap(), BusKind::Data)
+                .expect("failed to create LMDB"),
         ));
         let seg_meta = SegmentMeta {
             page_index: 0,
@@ -284,13 +303,11 @@ mod tests {
             byte_offset: 0,
             latest_segment_id: 0,
         };
-        let ev = Event::new(
-            bytemuck::bytes_of(&seg_meta).to_vec(),
-            EventType::MetaEvent(1).to_u8(),
-        );
-        push_event(&meta_db, &ev).expect("failed_to_unwrap");
+        let meta_bytes = bytes_of(&seg_meta).to_vec();
+        let meta_ev = Event::new(meta_bytes, EventType::MetaEvent(1).to_u8());
+        push_event(&meta_db, &meta_ev).expect("failed to push segment_meta");
 
-        // build config for reader
+        // Build config for reader
         let config = SegmentConfig {
             page_size: PAGE_SIZE,
             pages_per_segment: 1,
@@ -299,37 +316,47 @@ mod tests {
             lmdb_env_path: tmp.path().to_string_lossy().to_string(),
         };
 
-        // 4) hook up the actor against the same project_root
-        let (tx, rx) = unbounded::<XaeroEvent>();
-        let sink = Arc::new(Sink::new(tx));
-        let actor = SegmentReaderActor::new(cb, config, sink.clone());
+        // Compute SubjectHash as blake3("xaeroflux-actors")
+        let mut hasher = blake3::Hasher::new();
+        hasher.update("xaeroflux-actors".as_bytes());
+        let subject_hash = SubjectHash(*hasher.finalize().as_bytes());
 
-        // 5) fire the Replay system event
+        // Create a control pipe and subscribe to its rx for replayed events
+        let pipe = Pipe::new(BusKind::Control, None);
+        let rx_out: Receiver<XaeroEvent> = pipe.source.rx.clone();
+
+        // Construct the actor with subject_hash and pipe
+        let actor = SegmentReaderActor::new(subject_hash, pipe.clone(), config);
+
+        // Send a Replay system event into actor.inbox
         let replay_evt = Event::new(
             Vec::new(),
             EventType::SystemEvent(SystemEventKind::Replay).to_u8(),
         );
         actor
-            ._listener
-            .inbox
-            .send(replay_evt)
-            .expect("failed_to_unwrap");
+            .pipe
+            .sink
+            .tx
+            .send(XaeroEvent {
+                evt: replay_evt,
+                merkle_proof: None,
+            })
+            .unwrap();
 
-        // 6) now it will find the file you wrote in project_root
-        let got = rx
+        // Expect to receive the "hello" app event back on the pipe
+        let got = rx_out
             .recv_timeout(Duration::from_secs(1))
-            .expect("should have seen our replayed application‐event");
+            .expect("expected a replayed application event");
         assert_eq!(got.evt.data, b"hello".to_vec());
     }
 
-    /// An ApplicationEvent should *not* trigger any replay.
+    /// Sending a non‐system (application) event should *not* trigger replay.
     #[test]
     fn non_system_events_do_not_replay() {
         initialize();
-        let tmp = tempdir().expect("failed_to_unwrap");
-        env::set_current_dir(tmp.path()).expect("failed_to_unwrap");
+        let tmp = tempdir().expect("failed to create tempdir");
+        env::set_current_dir(tmp.path()).unwrap();
 
-        // build config for reader
         let config = SegmentConfig {
             page_size: PAGE_SIZE,
             pages_per_segment: 1,
@@ -338,21 +365,31 @@ mod tests {
             lmdb_env_path: tmp.path().to_string_lossy().to_string(),
         };
 
-        let lmdb =
-            LmdbEnv::new(tmp.path().to_str().expect("failed_to_unwrap")).expect("failed_to_unwrap");
-        let _meta_db = Arc::new(Mutex::new(lmdb));
+        // Compute SubjectHash
+        let mut hasher = blake3::Hasher::new();
+        hasher.update("xaeroflux-actors".as_bytes());
+        let subject_hash = SubjectHash(*hasher.finalize().as_bytes());
 
-        let (tx, rx) = unbounded::<XaeroEvent>();
-        let sink = Arc::new(Sink::new(tx));
-        let cb: Arc<crate::system::control_bus::ControlBus> =
-            Arc::new(crate::system::control_bus::ControlBus::new());
-        let actor = SegmentReaderActor::new(cb, config, sink.clone());
+        // Create control pipe and subscribe
+        let pipe = Pipe::new(BusKind::Control, None);
+        let rx_out: Receiver<XaeroEvent> = pipe.source.rx.clone();
 
-        // send an application‐level event
-        let app = Event::new(b"nope".to_vec(), EventType::ApplicationEvent(0).to_u8());
-        actor._listener.inbox.send(app).expect("failed_to_unwrap");
+        // Construct SegmentReaderActor
+        let actor = SegmentReaderActor::new(subject_hash, pipe.clone(), config);
 
-        // we should see *nothing*
-        assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
+        // Send an application-level event into inbox (not a replay)
+        let app_ev = Event::new(b"nope".to_vec(), EventType::ApplicationEvent(0).to_u8());
+        actor
+            .pipe
+            .sink
+            .tx
+            .send(XaeroEvent {
+                evt: app_ev,
+                merkle_proof: None,
+            })
+            .unwrap();
+
+        // There should be no event replayed
+        assert!(rx_out.recv_timeout(Duration::from_millis(200)).is_err());
     }
 }

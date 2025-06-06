@@ -20,6 +20,7 @@ use xaeroflux_core::{
 };
 
 use super::format::{EventKey, SegmentMeta};
+use crate::BusKind;
 
 #[repr(usize)]
 pub enum DBI {
@@ -40,7 +41,7 @@ unsafe impl Sync for LmdbEnv {} // raw pointers are Sync
 unsafe impl Send for LmdbEnv {} // raw pointers are Send
 // No need for Sync, since we guard with a Mutex
 impl LmdbEnv {
-    pub fn new(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(path: &str, pipe_kind: BusKind) -> Result<Self, Box<dyn std::error::Error>> {
         std::fs::create_dir_all(path)?;
         // 1) create & configure env
         let mut env = ptr::null_mut();
@@ -67,15 +68,24 @@ impl LmdbEnv {
                 return Err(Box::new(std::io::Error::from_raw_os_error(sc_env_open)));
             }
         }
-        // 2) open both DBIs using helper
-        let aof_dbi = unsafe { open_named_db(env, c"xaeroflux-actors-aof".as_ptr())? };
-        let meta_dbi = unsafe { open_named_db(env, c"xaeroflux-actors-meta".as_ptr())? };
-        let secondary = unsafe { open_named_db(env, c"xaeroflux-actors-secondary".as_ptr())? };
-
-        Ok(Self {
-            env,
-            dbis: [aof_dbi, meta_dbi, secondary],
-        })
+        match pipe_kind {
+            BusKind::Control => {
+                let aof_dbi = unsafe { open_named_db(env, c"/aof".as_ptr())? };
+                let meta_dbi = unsafe { open_named_db(env, c"/meta".as_ptr())? };
+                Ok(Self {
+                    env,
+                    dbis: [aof_dbi, meta_dbi, 0],
+                })
+            }
+            BusKind::Data => {
+                let aof_dbi = unsafe { open_named_db(env, c"/aof".as_ptr())? };
+                let secondary = unsafe { open_named_db(env, c"/secondary".as_ptr())? };
+                Ok(Self {
+                    env,
+                    dbis: [aof_dbi, 0, secondary],
+                })
+            }
+        }
     }
 }
 
@@ -487,8 +497,11 @@ mod tests {
         initialize();
         let dir = tempdir().expect("failed_to_unravel");
         let arc_env = Arc::new(Mutex::new(
-            LmdbEnv::new(dir.path().to_str().expect("failed_to_unravel"))
-                .expect("failed_to_unravel"),
+            LmdbEnv::new(
+                dir.path().to_str().expect("failed_to_unravel"),
+                BusKind::Data,
+            )
+            .expect("failed_to_unravel"),
         ));
         let data = b"payload".to_vec();
         let leaf_hash = sha_256(&data);
@@ -515,8 +528,11 @@ mod tests {
         initialize();
         let dir = tempdir().expect("failed_to_unravel");
         let arc_env = Arc::new(Mutex::new(
-            LmdbEnv::new(dir.path().to_str().expect("failed_to_unravel"))
-                .expect("failed_to_unravel"),
+            LmdbEnv::new(
+                dir.path().to_str().expect("failed_to_unravel"),
+                BusKind::Data,
+            )
+            .expect("failed_to_unravel"),
         ));
         let leaf_hash = [0u8; 32];
         let got = get_secondary_index(&arc_env, &leaf_hash).expect("get_secondary_index");
@@ -528,8 +544,11 @@ mod tests {
     fn test_env_creation_and_dbi_handles() {
         initialize();
         let dir = tempdir().expect("failed to unravel");
-        let env = LmdbEnv::new(dir.path().to_str().expect("failed to unravel"))
-            .expect("failed to unravel");
+        let env = LmdbEnv::new(
+            dir.path().to_str().expect("failed to unravel"),
+            BusKind::Control,
+        )
+        .expect("failed to unravel");
         // env.env should be non-null and dbis > 0
         assert!(!env.env.is_null());
         assert!(env.dbis[0] > 0);
@@ -576,8 +595,11 @@ mod tests {
         initialize();
         let dir = tempdir().expect("failed to unravel");
         let arc_env = Arc::new(Mutex::new(
-            LmdbEnv::new(dir.path().to_str().expect("failed to unravel"))
-                .expect("failed to unravel"),
+            LmdbEnv::new(
+                dir.path().to_str().expect("failed to unravel"),
+                BusKind::Data,
+            )
+            .expect("failed to unravel"),
         ));
         // push two events
         let e1 = Event::new(b"one".to_vec(), 1);
@@ -614,8 +636,11 @@ mod tests {
     fn test_open_named_db_idempotent() {
         initialize();
         let dir = tempdir().expect("failed to unravel");
-        let env = LmdbEnv::new(dir.path().to_str().expect("failed to unravel"))
-            .expect("failed to unravel");
+        let env = LmdbEnv::new(
+            dir.path().to_str().expect("failed to unravel"),
+            BusKind::Control,
+        )
+        .expect("failed to unravel");
         // opening again should give same handle values
         let a1 = unsafe {
             open_named_db(env.env, c"xaeroflux-actors-aof".as_ptr()).expect("failed to unravel")
@@ -632,7 +657,11 @@ mod tests {
         initialize();
         let dir = tempdir().expect("failed_to_unwrap");
         let arc_env = Arc::new(Mutex::new(
-            LmdbEnv::new(dir.path().to_str().expect("failed_to_unwrap")).expect("failed_to_unwrap"),
+            LmdbEnv::new(
+                dir.path().to_str().expect("failed_to_unwrap"),
+                BusKind::Control,
+            )
+            .expect("failed_to_unwrap"),
         ));
         // two different metas
         let meta1 = SegmentMeta {
@@ -704,7 +733,11 @@ mod tests {
         initialize();
         let dir = tempdir().expect("failed_to_unwrap");
         let arc_env = Arc::new(Mutex::new(
-            LmdbEnv::new(dir.path().to_str().expect("failed_to_unwrap")).expect("failed_to_unwrap"),
+            LmdbEnv::new(
+                dir.path().to_str().expect("failed_to_unwrap"),
+                BusKind::Data,
+            )
+            .expect("failed_to_unwrap"),
         ));
         let seg_meta = SegmentMeta {
             page_index: 8,
@@ -757,7 +790,11 @@ mod tests {
         initialize();
         let dir = tempdir().expect("failed_to_unwrap");
         let env = Arc::new(Mutex::new(
-            LmdbEnv::new(dir.path().to_str().expect("failed_to_unwrap")).expect("failed_to_unwrap"),
+            LmdbEnv::new(
+                dir.path().to_str().expect("failed_to_unwrap"),
+                BusKind::Control,
+            )
+            .expect("failed_to_unwrap"),
         ));
 
         // no metas inserted yet
@@ -770,7 +807,11 @@ mod tests {
         initialize();
         let dir = tempdir().expect("failed_to_unwrap");
         let env = Arc::new(Mutex::new(
-            LmdbEnv::new(dir.path().to_str().expect("failed_to_unwrap")).expect("failed_to_unwrap"),
+            LmdbEnv::new(
+                dir.path().to_str().expect("failed_to_unwrap"),
+                BusKind::Control,
+            )
+            .expect("failed_to_unwrap"),
         ));
 
         // push one meta at ts = now
@@ -796,7 +837,11 @@ mod tests {
         initialize();
         let dir = tempdir().expect("failed_to_unwrap");
         let env = Arc::new(Mutex::new(
-            LmdbEnv::new(dir.path().to_str().expect("failed_to_unwrap")).expect("failed_to_unwrap"),
+            LmdbEnv::new(
+                dir.path().to_str().expect("failed_to_unwrap"),
+                BusKind::Control,
+            )
+            .expect("failed_to_unwrap"),
         ));
 
         // create three metas at t=10,20,30

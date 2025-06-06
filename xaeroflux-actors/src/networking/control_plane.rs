@@ -3,31 +3,23 @@ use std::sync::Arc;
 use crossbeam::channel::{self, Receiver, Sender};
 use xaeroflux_core::P2P_RUNTIME;
 
-use super::p2p::NetworkPayload;
-use crate::system::control_bus::{ControlBus, SystemPayload};
+use super::p2p::{ControlNetworkPipe, NetworkPayload};
+use crate::{
+    pipe::{BusKind, Pipe},
+    system_payload::SystemPayload,
+};
 
 /// ControlPlane manages relaying control events for the networking layer.
 pub struct ControlPlane {
-    pub control_tx: Sender<NetworkPayload>,
-    pub control_rx: Receiver<NetworkPayload>,
+    /// system payloads flow in through this.
+    pub pipe: Arc<Pipe>,
+    pub network: ControlNetworkPipe,
 }
 
 impl ControlPlane {
-    pub fn init_using(bus: Arc<ControlBus>) -> Arc<Self> {
-        let control_rx = bus.subscribe();
-        let control_tx = bus.tx.clone();
-        let (tx, rx) = channel::unbounded::<NetworkPayload>();
-        let txc = tx.clone();
-        let rxc = rx.clone();
-        let txcc = txc.clone();
-        let rxcc = rxc.clone();
+    pub fn init_using(system: Arc<Pipe>, network: ControlNetworkPipe) -> Arc<Self> {
         // outgoing loop
-        spin_outgoing_loop(tx, control_rx);
-        spin_incoming_loop(rx, control_tx);
-        Arc::new(ControlPlane {
-            control_tx: txcc,
-            control_rx: rxcc,
-        })
+        todo!()
     }
 }
 fn spin_incoming_loop(rxc: Receiver<NetworkPayload>, control_tx: Sender<SystemPayload>) {

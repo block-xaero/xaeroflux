@@ -18,23 +18,28 @@ use std::{
 use crossbeam::channel::{self, Receiver, Sender};
 use memmap2::MmapMut;
 use xaeroflux_core::{
+    XAERO_DISPATCHER_POOL,
     date_time::{day_bounds_from_epoch_ms, emit_secs},
-    event::{Event, EventType},
+    event::{Event, EventType, SystemEventKind},
     hash::sha_256_hash_b,
     listeners::EventListener,
     size::PAGE_SIZE,
+    system_paths::{emit_control_path_with_subject_hash, emit_data_path_with_subject_hash},
 };
 
 use crate::{
+    BusKind, Pipe, XaeroEvent,
     aof::storage::{
         format::SegmentMeta,
         lmdb::{LmdbEnv, push_event},
         meta::iterate_segment_meta_by_range,
     },
     indexing::storage::format::archive,
-    system::control_bus::{ControlBus, SystemPayload},
+    subject::SubjectHash,
+    system_payload::SystemPayload,
 };
 
+pub static NAME_PREFIX: &str = "segment_writer";
 /// Configuration for paged segment storage.
 ///
 /// Fields:
@@ -82,10 +87,9 @@ impl Default for SegmentConfig {
 /// - `_handle`: handle to the spawned writer thread.
 /// - `segment_config`: configuration parameters for this writer.
 pub struct SegmentWriterActor {
-    pub cb: Arc<ControlBus>,
+    pub name: SubjectHash,
+    pub pipe: Arc<Pipe>,
     /// Send archived event blobs to this inbox
-    pub inbox: Sender<Vec<u8>>,
-    pub _listener: EventListener<Vec<u8>>,
     pub meta_db: Arc<Mutex<LmdbEnv>>,
     pub _handle: thread::JoinHandle<()>,
     pub segment_config: SegmentConfig,
@@ -96,8 +100,8 @@ impl SegmentWriterActor {
     ///
     /// Uses `SegmentConfig::default()` which sets 16KiB pages,
     /// 1024 pages per segment, and default directories.
-    pub fn new(cb: Arc<ControlBus>) -> Self {
-        Self::new_with_config(cb, SegmentConfig::default())
+    pub fn new(name: SubjectHash, pipe: Arc<Pipe>) -> Self {
+        Self::new_with_config(name, pipe, SegmentConfig::default())
     }
 
     /// Create a `SegmentWriterActor` with a custom configuration.
@@ -109,12 +113,34 @@ impl SegmentWriterActor {
     /// - Ensures the LMDB directory exists and initializes `LmdbEnv`.
     /// - Spawns an `EventListener` to serialize and forward events.
     /// - Starts a background thread running `run_writer_loop` to handle writing.
-    pub fn new_with_config(cb: Arc<ControlBus>, config: SegmentConfig) -> Self {
+    pub fn new_with_config(name: SubjectHash, pipe: Arc<Pipe>, config: SegmentConfig) -> Self {
         std::fs::create_dir_all(&config.lmdb_env_path).expect("failed to create directory");
-        let meta_db = Arc::new(Mutex::new(
-            LmdbEnv::new(&config.lmdb_env_path).expect("failed to create LmdbEnv"),
-        ));
-        let cbc = Arc::clone(&cb);
+        let meta_db = match pipe.sink.kind {
+            BusKind::Control => Arc::new(Mutex::new(
+                LmdbEnv::new(
+                    emit_control_path_with_subject_hash(
+                        config.lmdb_env_path.as_str(),
+                        name.0,
+                        NAME_PREFIX,
+                    )
+                    .as_str(),
+                    BusKind::Data,
+                )
+                .expect("failed_to_create_lmdb_env"),
+            )),
+            BusKind::Data => Arc::new(Mutex::new(
+                LmdbEnv::new(
+                    emit_data_path_with_subject_hash(
+                        config.lmdb_env_path.as_str(),
+                        name.0,
+                        NAME_PREFIX,
+                    )
+                    .as_str(),
+                    BusKind::Data,
+                )
+                .expect("failed_to_create_lmdb_env"),
+            )),
+        };
         let (tx, rx) = channel::unbounded::<Vec<u8>>();
         let txc = tx.clone();
         let listener = EventListener::new(
@@ -126,21 +152,32 @@ impl SegmentWriterActor {
             None,
             Some(1), // single-threaded handler
         );
-
+        let txc = tx.clone();
+        let pipe_clone0 = pipe.clone();
+        XAERO_DISPATCHER_POOL
+            .get()
+            .expect("XAERO_DISPATCHER_POOL::get")
+            .execute(move || {
+                while let Ok(framed) = pipe_clone0.source.rx.recv() {
+                    listener
+                        .inbox
+                        .send(framed.evt)
+                        .expect("failed to send event");
+                }
+            });
         // spawn writer-loop with owned config and receiver
         let cfg = config.clone();
         let meta_db_c = meta_db.clone();
+        let pipe_clone1 = pipe.clone();
         let handle: thread::JoinHandle<()> = thread::Builder::new()
             .name("xaeroflux-actors-segment-writer".into())
             .spawn(move || {
-                run_writer_loop(cbc, &meta_db_c, rx, cfg);
+                run_writer_loop(pipe_clone1, &meta_db_c, rx, cfg);
             })
             .expect("failed to spawn thread");
-
         SegmentWriterActor {
-            cb,
-            inbox: tx,
-            _listener: listener,
+            name,
+            pipe,
             _handle: handle,
             meta_db,
             segment_config: config.clone(),
@@ -167,7 +204,7 @@ impl SegmentWriterActor {
 /// - `rx`: receiver of serialized event frames (`Vec<u8>`).
 /// - `config`: segment configuration including page size and directories.
 fn run_writer_loop(
-    cb: Arc<ControlBus>,
+    pipe: Arc<Pipe>,
     meta_db: &Arc<Mutex<LmdbEnv>>,
     rx: Receiver<Vec<u8>>,
     config: SegmentConfig,
@@ -282,17 +319,26 @@ fn run_writer_loop(
             start
         );
         tracing::debug!("sending message to control bus");
-        let payload_written_msg_sent_ack = cb.sender().send(SystemPayload::PayloadWritten {
-            leaf_hash,
-            meta: SegmentMeta {
-                page_index,
-                segment_index: seg_id,
-                write_pos,
-                byte_offset,
-                latest_segment_id: seg_id,
-                ts_start,
-                ts_end: emit_secs(),
-            },
+        let bytes_of_payload_written =
+            bytemuck::bytes_of::<SystemPayload>(&SystemPayload::PayloadWritten {
+                leaf_hash,
+                meta: SegmentMeta {
+                    page_index,
+                    segment_index: seg_id,
+                    write_pos,
+                    byte_offset,
+                    latest_segment_id: seg_id,
+                    ts_start,
+                    ts_end: emit_secs(),
+                },
+            })
+            .to_vec();
+        let payload_written_msg_sent_ack = pipe.sink.tx.send(XaeroEvent {
+            evt: Event::new(
+                bytes_of_payload_written,
+                EventType::SystemEvent(SystemEventKind::PayloadWritten).to_u8(),
+            ),
+            merkle_proof: None,
         });
         match payload_written_msg_sent_ack {
             Ok(_) => tracing::debug!("Payload written message sent successfully"),
@@ -336,7 +382,11 @@ mod tests {
         initialize();
         let dir = tempdir().expect("failed to unpack tempdir");
         let arc_env = Arc::new(Mutex::new(
-            LmdbEnv::new(dir.path().to_str().expect("failed_to_unwrap")).expect("failed_to_unwrap"),
+            LmdbEnv::new(
+                dir.path().to_str().expect("failed_to_unwrap"),
+                BusKind::Data,
+            )
+            .expect("failed_to_unwrap"),
         ));
         // fire a dummy segment_meta event
         let seg_meta = SegmentMeta {
@@ -370,6 +420,7 @@ mod tests {
     /// Pure page/segment math
     #[test]
     fn test_page_segment_math() {
+        initialize();
         const PAGE_SIZE: usize = 16;
         const PAGES_PER_SEGMENT: usize = 4;
         let cases = [
@@ -391,6 +442,7 @@ mod tests {
     /// flush_range actually writes to disk
     #[test]
     fn test_flush_range_persists() {
+        initialize();
         let dir = tempdir().expect("failed_to_unwrap_value");
         let file_path = dir.path().join("flush.bin");
         let mut file = OpenOptions::new()
@@ -414,14 +466,13 @@ mod tests {
     #[test]
     fn test_run_writer_loop_page_boundary() {
         initialize();
-        let cb = Arc::new(ControlBus::new());
         let tmp = tempdir().expect("failed_to_unwrap");
         // switch to temp dir so segment files are isolated
         std::env::set_current_dir(tmp.path()).expect("failed to set cwd");
         // capture start timestamp for segment filename
         let ts_start = emit_secs();
 
-        // Buil
+        // Build
         // Create two events with different payload sizes:
         let ev1 = Event::new(vec![9; 4], EventType::ApplicationEvent(1).to_u8());
         let ev2 = Event::new(vec![7; 1], EventType::ApplicationEvent(1).to_u8());
@@ -442,7 +493,11 @@ mod tests {
 
         // Set up arc_env (now that tmp and cwd are set)
         let arc_env = Arc::new(Mutex::new(
-            LmdbEnv::new(tmp.path().to_str().expect("failed_to_unwrap")).expect("failed_to_unwrap"),
+            LmdbEnv::new(
+                tmp.path().to_str().expect("failed_to_unwrap"),
+                BusKind::Control,
+            )
+            .expect("failed_to_unwrap"),
         ));
 
         // Send them
@@ -450,9 +505,9 @@ mod tests {
         tx.send(framed1.clone()).expect("failed_to_unwrap");
         tx.send(framed2.clone()).expect("failed_to_unwrap");
         drop(tx);
-
+        let control_pipe = Pipe::new(BusKind::Control, None);
         // Run the writer
-        run_writer_loop(cb, &arc_env, rx, cfg.clone());
+        run_writer_loop(control_pipe, &arc_env, rx, cfg.clone());
 
         // Read back segment 0
         let buf0 = std::fs::read(format!(
@@ -506,7 +561,11 @@ mod tests {
         };
 
         let arc_env = Arc::new(Mutex::new(
-            LmdbEnv::new(tmp.path().to_str().expect("failed_to_unwrap")).expect("failed_to_unwrap"),
+            LmdbEnv::new(
+                tmp.path().to_str().expect("failed_to_unwrap"),
+                BusKind::Control,
+            )
+            .expect("failed_to_unwrap"),
         ));
 
         // Send all four framed events into the writer:
@@ -517,8 +576,8 @@ mod tests {
             tx.send(f).expect("failed_to_unwrap");
         }
         drop(tx);
-        let cb = Arc::new(ControlBus::new());
-        run_writer_loop(cb, &arc_env, rx, cfg.clone());
+        let control_pipe = Pipe::new(BusKind::Control, None);
+        run_writer_loop(control_pipe, &arc_env, rx, cfg.clone());
 
         // Closure to read & unarchive one page, closing over ts_start
         let assert_page = |seg: usize, page_idx: usize, expected_byte: u8| {
@@ -551,14 +610,20 @@ mod tests {
     /// Test that the writer resumes on the "hot" segment file named from the latest SegmentMeta
     #[test]
     fn test_resume_segment_meta_initialization() {
+        use std::{sync::Arc, thread::sleep, time::Duration};
+
+        use crate::{BusKind, Pipe, XaeroEvent};
+
         initialize();
-        let cb = Arc::new(ControlBus::new());
         // Setup a temporary LMDB environment and insert a SegmentMeta
         let tmp = tempdir().expect("failed to create tempdir");
         std::env::set_current_dir(tmp.path()).expect("failed to set cwd");
         let arc_env = Arc::new(Mutex::new(
-            LmdbEnv::new(tmp.path().to_str().expect("failed_to_unwrap"))
-                .expect("failed to create LmdbEnv"),
+            LmdbEnv::new(
+                tmp.path().to_str().expect("failed_to_unwrap"),
+                BusKind::Control,
+            )
+            .expect("failed to create LmdbEnv"),
         ));
         let now = emit_secs();
         let seg_meta = SegmentMeta {
@@ -577,10 +642,6 @@ mod tests {
         // Prepare a single application event to write
         let app_ev = Event::new(vec![42; 4], EventType::ApplicationEvent(1).to_u8());
         let framed = format::archive(&app_ev);
-        let (tx, rx) = channel::unbounded();
-        tx.send(framed.clone())
-            .expect("failed to send framed event");
-        drop(tx);
 
         // Configure the writer to use a small page so the entire frame fits
         let cfg = SegmentConfig {
@@ -591,8 +652,22 @@ mod tests {
             lmdb_env_path: tmp.path().to_string_lossy().into(),
         };
 
-        // Run the writer loop; it should pick up our seg_meta and write to segment 5
-        run_writer_loop(cb, &arc_env, rx, cfg.clone());
+        // Prepare pipe and actor
+        let pipe = Pipe::new(BusKind::Data, None);
+        let subject_hash = SubjectHash::from([0u8; 32]);
+        let _actor = SegmentWriterActor::new(subject_hash, pipe.clone());
+
+        // Send the framed event through the pipe as a XaeroEvent
+        pipe.sink
+            .tx
+            .send(XaeroEvent {
+                evt: Event::new(framed.clone(), EventType::ApplicationEvent(1).to_u8()),
+                merkle_proof: None,
+            })
+            .expect("failed to send XaeroEvent");
+
+        // Wait briefly for background thread to write the segment
+        sleep(Duration::from_millis(100));
 
         // Verify that the hot segment file is named correctly
         let sm_sid = seg_meta.segment_index;
