@@ -5851,9 +5851,9 @@ dependencies = [
 name = "xaeroflux"
 version = "0.2.0-m3"
 dependencies = [
- "xaeroflux-actors 0.2.0-m3 (registry+https://github.com/rust-lang/crates.io-index)",
- "xaeroflux-core 0.2.0-m3 (registry+https://github.com/rust-lang/crates.io-index)",
- "xaeroflux-macros 0.2.0-m3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "xaeroflux-actors",
+ "xaeroflux-core 0.2.0-m3",
+ "xaeroflux-macros",
 ]
 
 [[package]]
@@ -5890,46 +5890,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "xaeroflux-core 0.2.0-m3",
- "xaeroflux-macros 0.2.0-m3",
-]
-
-[[package]]
-name = "xaeroflux-actors"
-version = "0.2.0-m3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8463f893b5ef6509b51225270153fd59c44fae9c45235b95933c5556b451861a"
-dependencies = [
- "anyhow",
- "async-trait",
- "bytemuck",
- "cid",
- "crdts",
- "crossbeam",
- "ed25519-dalek",
- "futures",
- "hex",
- "iroh",
- "iroh-blobs",
- "iroh-gossip",
- "libc",
- "liblmdb",
- "memmap2",
- "multihash",
- "rand 0.8.5",
- "rkyv 0.8.10",
- "rkyv_dyn",
- "rustfix",
- "serde",
- "sha2",
- "tempfile",
- "threadpool",
- "tokio",
- "tokio-stream",
- "toml",
- "tracing",
- "tracing-subscriber",
- "xaeroflux-core 0.2.0-m3 (registry+https://github.com/rust-lang/crates.io-index)",
- "xaeroflux-macros 0.2.0-m3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "xaeroflux-macros",
 ]
 
 [[package]]
@@ -5991,20 +5952,6 @@ dependencies = [
 [[package]]
 name = "xaeroflux-macros"
 version = "0.2.0-m3"
-dependencies = [
- "blake3",
- "proc-macro2",
- "quote",
- "syn 2.0.101",
- "trybuild",
- "xaeroflux-core 0.2.0-m3 (registry+https://github.com/rust-lang/crates.io-index)",
-]
-
-[[package]]
-name = "xaeroflux-macros"
-version = "0.2.0-m3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a409116214a6d2c4cc48be2937502e1a0493d70572b56c430fd76e50022449bf"
 dependencies = [
  "blake3",
  "proc-macro2",

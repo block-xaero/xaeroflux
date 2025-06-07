@@ -168,7 +168,7 @@ mod meta_tests {
     };
 
     use super::*;
-    use crate::{aof::storage::lmdb::push_event, core::initialize, BusKind};
+    use crate::{BusKind, aof::storage::lmdb::push_event, core::initialize};
 
     /// Helper to build a SegmentMeta with predictable fields.
     fn make_meta(ts_start: u64, ts_end: u64, idx: usize) -> SegmentMeta {
@@ -188,8 +188,11 @@ mod meta_tests {
         initialize();
         let dir = tempdir().expect("failed_to_unravel");
         let env = Arc::new(Mutex::new(
-            LmdbEnv::new(dir.path().to_str().expect("failed_to_unravel"), BusKind::Data)
-                .expect("failed_to_unravel"),
+            LmdbEnv::new(
+                dir.path().to_str().expect("failed_to_unravel"),
+                BusKind::Data,
+            )
+            .expect("failed_to_unravel"),
         ));
 
         let all = iterate_segment_meta_by_range(&env, 0, None).expect("failed_to_unravel");
@@ -201,8 +204,11 @@ mod meta_tests {
         initialize();
         let dir = tempdir().expect("failed_to_unravel");
         let env = Arc::new(Mutex::new(
-            LmdbEnv::new(dir.path().to_str().expect("failed_to_unravel"), BusKind::Data)
-                .expect("failed_to_unravel"),
+            LmdbEnv::new(
+                dir.path().to_str().expect("failed_to_unravel"),
+                BusKind::Data,
+            )
+            .expect("failed_to_unravel"),
         ));
 
         let ts = emit_secs();
@@ -226,8 +232,11 @@ mod meta_tests {
         initialize();
         let dir = tempdir().expect("failed_to_unravel");
         let env = Arc::new(Mutex::new(
-            LmdbEnv::new(dir.path().to_str().expect("failed_to_unravel"), BusKind::Control)
-                .expect("failed_to_unravel"),
+            LmdbEnv::new(
+                dir.path().to_str().expect("failed_to_unravel"),
+                BusKind::Control,
+            )
+            .expect("failed_to_unravel"),
         ));
 
         // create three metas at t=10,20,30

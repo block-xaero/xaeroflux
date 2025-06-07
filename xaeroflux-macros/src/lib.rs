@@ -1,7 +1,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::Ident;
-use quote::{format_ident, quote};
-use syn::{DeriveInput, Lit, LitStr, Meta, parse_macro_input};
+use quote::quote;
+use syn::{DeriveInput, LitStr, parse_macro_input};
 
 #[proc_macro_derive(PipeKind, attributes(pipe_kind))]
 pub fn derive_pipe_kind(input: TokenStream) -> TokenStream {

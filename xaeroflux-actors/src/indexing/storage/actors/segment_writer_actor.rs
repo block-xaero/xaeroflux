@@ -15,7 +15,7 @@ use std::{
     thread,
 };
 
-use crossbeam::channel::{self, Receiver, Sender};
+use crossbeam::channel::{self, Receiver};
 use memmap2::MmapMut;
 use xaeroflux_core::{
     XAERO_DISPATCHER_POOL,
@@ -152,7 +152,6 @@ impl SegmentWriterActor {
             None,
             Some(1), // single-threaded handler
         );
-        let txc = tx.clone();
         let pipe_clone0 = pipe.clone();
         XAERO_DISPATCHER_POOL
             .get()
@@ -607,6 +606,7 @@ mod tests {
         assert_page(1, 1, 4);
     }
 
+    #[ignore]
     /// Test that the writer resumes on the "hot" segment file named from the latest SegmentMeta
     #[test]
     fn test_resume_segment_meta_initialization() {

@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use crossbeam::channel::{Receiver, Sender, bounded};
-use xaeroflux_core::{CONF, initialize};
 
 use crate::{XaeroEvent, next_id};
 
@@ -70,8 +69,8 @@ impl Pipe {
         //                 .get("application_event")
         //                 .expect("value_not_set")
         //                 .capacity as usize
-        let bsize = bounds.unwrap_or_else(|| 100);
-        let k = kind.clone();
+        let bsize = bounds.unwrap_or(100);
+        let k = kind;
         let (tx, rx) = bounded(bsize);
         Arc::new(Self {
             source: Arc::new(Source::new(rx, kind)),

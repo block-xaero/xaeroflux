@@ -33,7 +33,6 @@ pub struct ControlNetworkPipe(Arc<NetworkPipe>);
 #[pipe_kind(Data)]
 pub struct DataNetworkPipe(Arc<NetworkPipe>);
 
-
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub enum NetworkPayload {
@@ -195,7 +194,6 @@ pub struct ProofResponse {
     pub leaf_index: u64,
     pub proof: Vec<[u8; 32]>,
 }
-
 pub trait XaeroPlane {
     fn join_topic(&self, topic: &str) -> Result<(), XaeroP2PError>;
     fn leave_topic(&self, topic: &str) -> Result<(), XaeroP2PError>;

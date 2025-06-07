@@ -18,7 +18,6 @@ pub static EVENT_HEADER: &[u8; 4] = b"XAER";
 /// Base value offset for encoding `MetaEvent` variants in the event type byte.
 pub const META_BASE: u8 = 128;
 
-
 #[repr(C)]
 /// Discriminant for different categories of events.
 ///

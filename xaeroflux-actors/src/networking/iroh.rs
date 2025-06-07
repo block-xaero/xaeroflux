@@ -3,14 +3,11 @@ use std::sync::Arc;
 use crossbeam::channel::Receiver;
 use iroh::{Endpoint, PublicKey, SecretKey};
 use iroh_gossip::{net::Gossip, proto::TopicId};
-use xaeroflux_core::{keys::generate_ed25519_keypair, P2P_RUNTIME};
+use xaeroflux_core::{P2P_RUNTIME, keys::generate_ed25519_keypair};
 
 use super::{
     control_plane::ControlPlane,
-    p2p::{
-        NetworkPayload, XaeroControlPlane, XaeroPlaneKind, XaeroTopic,
-        XaeroTopicGroup,
-    },
+    p2p::{NetworkPayload, XaeroControlPlane, XaeroPlaneKind, XaeroTopic, XaeroTopicGroup},
 };
 use crate::aof::storage::format::SegmentMeta;
 pub struct IrohControlPlane {
@@ -50,27 +47,26 @@ impl IrohControlPlane {
         }
     }
 }
-
 impl XaeroControlPlane for IrohControlPlane {
     fn announce_peaks(
         &self,
-        peaks: Vec<crate::indexing::storage::mmr::Peak>,
-        root_hash: [u8; 32],
+        _peaks: Vec<crate::indexing::storage::mmr::Peak>,
+        _root_hash: [u8; 32],
     ) -> Result<(), super::p2p::XaeroP2PError> {
         todo!()
     }
 
     fn publish_segment_rolled_over(
         &self,
-        seg_meta: SegmentMeta,
+        _seg_meta: SegmentMeta,
     ) -> Result<(), super::p2p::XaeroP2PError> {
         todo!()
     }
 
     fn publish_segment_rolled_over_failed(
         &self,
-        seg_meta: SegmentMeta,
-        error_code: u16,
+        _seg_meta: SegmentMeta,
+        _error_code: u16,
     ) -> Result<(), super::p2p::XaeroP2PError> {
         todo!()
     }

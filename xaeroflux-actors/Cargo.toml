@@ -12,7 +12,9 @@ repository = "https://github.com/block-xaero/xaeroflux.git"
 homepage = "https://blockxaero.io"
 readme = "README.md"
 
-
+# FIXME: This needs to go away after p2p is completely done.
+[lints.rust]
+unused = "allow"
 
 [lib]
 name = "xaeroflux_actors"  # This should match your library name without the "lib" prefix
