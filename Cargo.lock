@@ -5857,6 +5857,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "xaeroflux"
+version = "0.3.0-m3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b5d112993425ad8727f4d1b51333768c02dd555ca23fcae3029f57e23e5af74"
+dependencies = [
+ "xaeroflux-actors 0.3.0-m3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "xaeroflux-core 0.3.0-m3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "xaeroflux-macros 0.3.0-m3 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
 name = "xaeroflux-actors"
 version = "0.3.0-m3"
 dependencies = [
@@ -6015,6 +6026,14 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "xaeroflux-ffi"
+version = "0.3.0-m3"
+dependencies = [
+ "blake3",
+ "xaeroflux 0.3.0-m3 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
