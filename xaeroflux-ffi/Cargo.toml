@@ -1,0 +1,8 @@
+[package]
+name = "xaeroflux-ffi"
+version = "0.3.0-m3"
+edition = "2024"
+
+[dependencies]
+xaeroflux = "0.3.0-m3"
+blake3 = "1.8.2"
