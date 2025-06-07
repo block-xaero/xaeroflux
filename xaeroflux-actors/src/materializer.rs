@@ -8,7 +8,6 @@ use crate::{
     Operator, XaeroEvent,
     subject::{Subject, Subscription},
 };
-use crate::pipe::BusKind;
 
 /// Strategy for wiring `Subject` + pipeline into threads and invoking handlers.
 pub trait Materializer: Send + Sync {
@@ -16,7 +15,7 @@ pub trait Materializer: Send + Sync {
     fn materialize(
         &self,
         subject: Arc<Subject>,
-        handler: Arc<dyn Fn(XaeroEvent) + Send + Sync + 'static>
+        handler: Arc<dyn Fn(XaeroEvent) + Send + Sync + 'static>,
     ) -> Subscription;
 }
 

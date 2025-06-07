@@ -157,6 +157,7 @@ mod tests {
 
     use tempfile::tempdir;
     use xaeroflux_core::initialize;
+
     use super::SecondaryIndexActor;
     use crate::{
         BusKind, Pipe,

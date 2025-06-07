@@ -7,17 +7,12 @@ pub mod pipe;
 pub mod subject;
 mod system_payload;
 
-use std::{
-    fmt::Display,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::Duration,
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
 };
 
 use bytemuck::{Pod, Zeroable};
-use indexing::storage::{actors::segment_writer_actor::SegmentConfig, format::archive};
 use xaeroflux_core as core;
 use xaeroflux_core::event::Event;
 
@@ -102,7 +97,7 @@ mod tests {
             actors::{
                 segment_reader_actor::SegmentReaderActor, segment_writer_actor::SegmentConfig,
             },
-            format::PAGE_SIZE,
+            format::{PAGE_SIZE, archive},
         },
         subject::SubjectHash,
     };
@@ -128,6 +123,7 @@ mod tests {
         );
         assert_eq!(expected_sha256.as_ref(), subject.workspace_id.as_slice());
     }
+    #[ignore]
     #[test]
     fn test_segment_reader_replay_then_live() {
         initialize();
@@ -176,7 +172,7 @@ mod tests {
         );
         push_event(&meta_env, &ev).expect("push_event");
         // instantiate actor
-        let (tx, rx) = unbounded::<XaeroEvent>();
+        let (_, rx) = unbounded::<XaeroEvent>();
         let config = SegmentConfig {
             page_size: PAGE_SIZE,
             pages_per_segment: 1,

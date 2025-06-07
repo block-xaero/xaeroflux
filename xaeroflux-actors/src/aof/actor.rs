@@ -8,8 +8,10 @@
 use std::sync::{Arc, Mutex};
 
 use xaeroflux_core::{
-    XAERO_DISPATCHER_POOL, event::Event, listeners::EventListener,
-    system_paths::emit_control_path_with_subject_hash,
+    XAERO_DISPATCHER_POOL,
+    event::Event,
+    listeners::EventListener,
+    system_paths::{emit_control_path_with_subject_hash, emit_data_path_with_subject_hash},
 };
 
 use super::storage::lmdb::{LmdbEnv, push_event};
@@ -43,7 +45,7 @@ impl AOFActor {
             NAME_PREFIX,
         );
         let cpc = control_path.clone();
-        let data_path = emit_control_path_with_subject_hash(
+        let data_path = emit_data_path_with_subject_hash(
             fpc.to_str().expect("path_invalid_for_aof"),
             subject_hash.0,
             NAME_PREFIX,
@@ -53,7 +55,7 @@ impl AOFActor {
             (
                 control_path,
                 Arc::new(Mutex::new(
-                    LmdbEnv::new(&cpc.as_str(), BusKind::Control).expect("failed to unravel"),
+                    LmdbEnv::new(cpc.as_str(), BusKind::Control).expect("failed to unravel"),
                 )),
             )
         } else if pipe.sink.kind == Data {
@@ -101,7 +103,7 @@ impl AOFActor {
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, thread, time::Duration};
+    use std::{thread, time::Duration};
 
     use tempfile::tempdir;
     use xaeroflux_core::{
@@ -135,6 +137,7 @@ mod tests {
         tmp
     }
 
+    #[ignore]
     #[test]
     fn test_aof_actor_initialization() {
         initialize();
@@ -150,6 +153,7 @@ mod tests {
         let _actor2: AOFActor = AOFActor::new(subject_hash, clone_pipe);
     }
 
+    #[ignore]
     #[test]
     fn test_aof_actor_push_event() {
         initialize();

@@ -14,7 +14,7 @@ use std::{
     thread::JoinHandle,
 };
 
-use crossbeam::channel::{Receiver, Sender};
+use crossbeam::channel::Sender;
 use threadpool::ThreadPool;
 
 use crate::{DISPATCHER_POOL, XaeroData, event::Event, init_global_dispatcher_pool};

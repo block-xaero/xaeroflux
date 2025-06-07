@@ -4,27 +4,21 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    thread,
     thread::JoinHandle,
     time::Duration,
 };
 
 use bytemuck::{Pod, Zeroable};
-use crossbeam::channel::{SendError, unbounded};
-use futures::task::SpawnExt;
-use xaeroflux_core::{XAERO_DISPATCHER_POOL, hash::sha_256_hash};
+use xaeroflux_core::hash::sha_256_hash;
 
 use crate::{
     Operator, ScanWindow, XFluxHandle, XaeroEvent,
     aof::actor::AOFActor,
-    indexing::storage::{
-        actors::{
-            mmr_actor::MmrIndexingActor,
-            secondary_index_actor::SecondaryIndexActor,
-            segment_reader_actor::SegmentReaderActor,
-            segment_writer_actor::{SegmentConfig, SegmentWriterActor},
-        },
-        format::archive,
+    indexing::storage::actors::{
+        mmr_actor::MmrIndexingActor,
+        secondary_index_actor::SecondaryIndexActor,
+        segment_reader_actor::SegmentReaderActor,
+        segment_writer_actor::{SegmentConfig, SegmentWriterActor},
     },
     materializer::{Materializer, ThreadPoolForSubjectMaterializer},
     next_id,
@@ -36,7 +30,7 @@ use crate::{
 pub struct SubjectHash(pub [u8; 32]);
 impl Display for SubjectHash {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        hex::encode(&self.0).fmt(f)
+        hex::encode(self.0).fmt(f)
     }
 }
 impl From<[u8; 32]> for SubjectHash {
@@ -215,8 +209,6 @@ impl Subject {
         tracing::debug!("unsafe_run called for Subject: {}", self.name);
         tracing::debug!("initializing control bus");
         // 4) hook up the actor against the same project_root
-        let (tx, rx) = unbounded::<XaeroEvent>();
-        let control_pipe = self.control.clone();
         tracing::debug!("control bus initialized");
         self.unsafe_run_called.store(true, Ordering::SeqCst);
         // Instantiate system actors

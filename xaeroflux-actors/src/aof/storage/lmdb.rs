@@ -1,5 +1,6 @@
 use std::{
     ffi::CString,
+    io::{Error, ErrorKind},
     ptr,
     sync::{Arc, Mutex},
 };
@@ -8,10 +9,10 @@ use std::{
 // use rkyv::rancor::Failure;
 // use rkyv::api::high::access;
 use liblmdb::{
-    MDB_CREATE, MDB_RDONLY, MDB_RESERVE, MDB_cursor_op_MDB_NEXT, MDB_dbi, MDB_env, MDB_txn,
-    MDB_val, mdb_cursor_close, mdb_cursor_get, mdb_cursor_open, mdb_dbi_close, mdb_dbi_open,
-    mdb_env_create, mdb_env_open, mdb_env_set_mapsize, mdb_env_set_maxdbs, mdb_put, mdb_txn_abort,
-    mdb_txn_begin, mdb_txn_commit,
+    MDB_CREATE, MDB_NOTFOUND, MDB_RDONLY, MDB_RESERVE, MDB_SUCCESS, MDB_cursor_op_MDB_NEXT,
+    MDB_dbi, MDB_env, MDB_txn, MDB_val, mdb_cursor_close, mdb_cursor_get, mdb_cursor_open,
+    mdb_dbi_close, mdb_dbi_open, mdb_env_create, mdb_env_open, mdb_env_set_mapsize,
+    mdb_env_set_maxdbs, mdb_put, mdb_strerror, mdb_txn_abort, mdb_txn_begin, mdb_txn_commit,
 };
 use rkyv::{rancor::Failure, util::AlignedVec};
 use xaeroflux_core::{
@@ -42,7 +43,11 @@ unsafe impl Send for LmdbEnv {} // raw pointers are Send
 // No need for Sync, since we guard with a Mutex
 impl LmdbEnv {
     pub fn new(path: &str, pipe_kind: BusKind) -> Result<Self, Box<dyn std::error::Error>> {
-        std::fs::create_dir_all(path)?;
+        let res = std::fs::create_dir_all(path);
+        match res {
+            Ok(_) => {}
+            Err(e) => return Err(e.into()),
+        }
         // 1) create & configure env
         let mut env = ptr::null_mut();
         unsafe {
@@ -79,59 +84,75 @@ impl LmdbEnv {
             }
             BusKind::Data => {
                 let aof_dbi = unsafe { open_named_db(env, c"/aof".as_ptr())? };
+                let meta_dbi = unsafe { open_named_db(env, c"/meta".as_ptr())? };
                 let secondary = unsafe { open_named_db(env, c"/secondary".as_ptr())? };
                 Ok(Self {
                     env,
-                    dbis: [aof_dbi, 0, secondary],
+                    dbis: [aof_dbi, meta_dbi, secondary],
                 })
             }
         }
     }
 }
 
-/// Open a named database in the LMDB environment.
-/// This function is unsafe because it directly interacts with the LMDB C API.
-/// It assumes that the environment is already created and opened.
-/// It also assumes that the database name is valid and does not contain null characters.
-/// The function will create the database if it does not exist.
-/// It returns the database handle (MDB_dbi) on success.
-/// If an error occurs, it returns a boxed error.
-/// The caller is responsible for managing the lifetime of the database handle.
 /// Opens or creates a named database in the LMDB environment.
 ///
-/// Begins a write transaction, opens (or creates) the given database name,
-/// commits the transaction, and returns the `MDB_dbi` handle.
+/// This two-phase open-or-create function is robust and idempotent:
+/// 1. First, it tries to open the database without MDB_CREATE in a write transaction.
+/// 2. If not found, it aborts and retries with MDB_CREATE.
 ///
 /// # Safety
-/// This function calls directly into the LMDB C API and assumes the
-/// environment is valid. The caller must ensure the `env` pointer is correct
-/// and `name_ptr` is a valid C string.
+/// Assumes `env` is a valid pointer to an open LMDB environment, and `name_ptr` is a valid C
+/// string.
 unsafe fn open_named_db(
     env: *mut MDB_env,
     name_ptr: *const i8,
 ) -> Result<MDB_dbi, Box<dyn std::error::Error>> {
-    unsafe {
-        let mut txn = ptr::null_mut();
-        let sc_tx_begin = mdb_txn_begin(env, ptr::null_mut(), 0, &mut txn);
-        if sc_tx_begin != 0 {
-            return Err(Box::new(std::io::Error::from_raw_os_error(sc_tx_begin)));
-        }
-        let mut dbi = 0;
-        let sc_dbi_open = mdb_dbi_open(txn, name_ptr, MDB_CREATE, &mut dbi);
-        if sc_dbi_open != 0 {
-            let sc_tx_commit = mdb_txn_commit(txn);
-            if sc_tx_commit != 0 {
-                return Err(Box::new(std::io::Error::from_raw_os_error(sc_tx_commit)));
-            }
-            return Err(Box::new(std::io::Error::from_raw_os_error(sc_dbi_open)));
-        }
-        let sc_tx_commit = mdb_txn_commit(txn);
-        if sc_tx_commit != 0 {
-            return Err(Box::new(std::io::Error::from_raw_os_error(sc_tx_commit)));
-        }
-        // return the dbi
-        Ok(dbi)
+    let mut txn = std::ptr::null_mut();
+    // Phase 1: Try open without MDB_CREATE
+    let rc = unsafe { mdb_txn_begin(env, std::ptr::null_mut(), 0, &mut txn) };
+    if rc != MDB_SUCCESS as i32 {
+        return Err(from_lmdb_err(rc));
     }
+    let mut dbi: MDB_dbi = 0;
+    let rc_open = unsafe { mdb_dbi_open(txn, name_ptr, 0, &mut dbi) };
+    if rc_open == MDB_SUCCESS as i32 {
+        let rc_commit = unsafe { mdb_txn_commit(txn) };
+        if rc_commit != MDB_SUCCESS as i32 {
+            return Err(from_lmdb_err(rc_commit));
+        }
+        Ok(dbi)
+    } else if rc_open == MDB_NOTFOUND {
+        unsafe { mdb_txn_abort(txn) };
+        // Phase 2: Try open/create with MDB_CREATE
+        let mut txn2 = std::ptr::null_mut();
+        let rc2 = unsafe { mdb_txn_begin(env, std::ptr::null_mut(), 0, &mut txn2) };
+        if rc2 != MDB_SUCCESS as i32 {
+            return Err(from_lmdb_err(rc2));
+        }
+        let mut dbi2: MDB_dbi = 0;
+        let rc_create = unsafe { mdb_dbi_open(txn2, name_ptr, MDB_CREATE, &mut dbi2) };
+        if rc_create != MDB_SUCCESS as i32 {
+            unsafe { mdb_txn_abort(txn2) };
+            return Err(from_lmdb_err(rc_create));
+        }
+        let rc_commit = unsafe { mdb_txn_commit(txn2) };
+        if rc_commit != MDB_SUCCESS as i32 {
+            return Err(from_lmdb_err(rc_commit));
+        }
+        return Ok(dbi2);
+    } else {
+        unsafe { mdb_txn_abort(txn) };
+        return Err(from_lmdb_err(rc_open));
+    }
+}
+
+pub fn from_lmdb_err(code: i32) -> Box<dyn std::error::Error> {
+    let cstr = unsafe { mdb_strerror(code) };
+    let msg = unsafe { std::ffi::CStr::from_ptr(cstr) }
+        .to_string_lossy()
+        .into_owned();
+    Box::<dyn std::error::Error>::from(msg)
 }
 
 impl Drop for LmdbEnv {
@@ -636,18 +657,16 @@ mod tests {
     fn test_open_named_db_idempotent() {
         initialize();
         let dir = tempdir().expect("failed to unravel");
+        let prefix = dir.path().to_str();
+        let prefix = dir.path().to_str();
         let env = LmdbEnv::new(
             dir.path().to_str().expect("failed to unravel"),
             BusKind::Control,
         )
         .expect("failed to unravel");
         // opening again should give same handle values
-        let a1 = unsafe {
-            open_named_db(env.env, c"xaeroflux-actors-aof".as_ptr()).expect("failed to unravel")
-        };
-        let m1 = unsafe {
-            open_named_db(env.env, c"xaeroflux-actors-meta".as_ptr()).expect("failed to unravel")
-        };
+        let a1 = unsafe { open_named_db(env.env, c"/aof".as_ptr()).expect("failed to unravel") };
+        let m1 = unsafe { open_named_db(env.env, c"/meta".as_ptr()).expect("failed to unravel") };
         assert_eq!(a1, env.dbis[0]);
         assert_eq!(m1, env.dbis[1]);
     }
