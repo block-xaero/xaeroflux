@@ -16,10 +16,11 @@ use xaeroflux_core::{
     listeners::EventListener,
     system_paths::*,
 };
+use xaeroflux_core::event::XaeroEvent;
 
 use super::segment_writer_actor::{SegmentConfig, SegmentWriterActor};
 use crate::{
-    BusKind, Pipe, XaeroEvent,
+    BusKind, Pipe,
     aof::storage::lmdb::{LmdbEnv, push_event},
     indexing::storage::{
         actors::ExecutionState,

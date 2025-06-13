@@ -7,6 +7,7 @@
 //! - Unit tests verifying segment math, flush behavior, and rollover/resume logic.
 
 use std::{
+    cell::RefCell,
     fs::{File, OpenOptions},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -24,9 +25,9 @@ use xaeroflux_core::{
     size::PAGE_SIZE,
     system_paths::{emit_control_path_with_subject_hash, emit_data_path_with_subject_hash},
 };
-
+use xaeroflux_core::event::{ScanWindow, XaeroEvent};
 use crate::{
-    BusKind, Pipe, XaeroEvent,
+    BusKind, Pipe, 
     aof::storage::{
         format::SegmentMeta,
         lmdb::{LmdbEnv, push_event},
@@ -36,6 +37,12 @@ use crate::{
     subject::SubjectHash,
     system_payload::SystemPayload,
 };
+
+// thread_local! {
+//     // Each thread gets its own Vec with pre-allocated capacity
+//     static ARCHIVE_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::with_capacity(8192));
+//     static PAYLOAD_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::with_capacity(512));
+// }
 
 pub static NAME_PREFIX: &str = "segment_writer";
 
@@ -75,6 +82,8 @@ struct WriterState {
     memory_map: Option<MmapMut>,
     filename: PathBuf,
     initialized: bool,
+    // archive_buffer: Vec<u8>,
+    // payload_buffer: Vec<u8>
 }
 
 impl WriterState {
@@ -159,7 +168,6 @@ impl WriterState {
     ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(ref mut mm) = self.memory_map {
             mm.flush_range(self.byte_offset, config.page_size)?;
-            mm.flush()?; // Ensure all data is written to disk
         }
         Ok(())
     }

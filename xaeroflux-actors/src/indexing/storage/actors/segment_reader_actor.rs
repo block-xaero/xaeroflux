@@ -25,9 +25,9 @@ use xaeroflux_core::{
     listeners::EventListener,
     system_paths::{emit_control_path_with_subject_hash, emit_data_path_with_subject_hash},
 };
-
+use xaeroflux_core::event::{ScanWindow,XaeroEvent};
 use crate::{
-    BusKind, Pipe, ScanWindow, XaeroEvent,
+    BusKind, Pipe,
     aof::storage::{lmdb::LmdbEnv, meta::iterate_segment_meta_by_range},
     indexing::storage::{actors::segment_writer_actor::SegmentConfig, io},
     subject::SubjectHash,
@@ -303,9 +303,10 @@ mod tests {
         init_xaero_pool, shutdown_all_pools,
     };
 
+    use xaeroflux_core::event::{ScanWindow, XaeroEvent};
     use super::*;
     use crate::{
-        BusKind, Pipe, ScanWindow, XaeroEvent,
+        BusKind, Pipe,
         core::initialize,
         indexing::storage::{actors::segment_writer_actor::SegmentConfig, format::PAGE_SIZE},
         subject::SubjectHash,

@@ -10,9 +10,9 @@ use std::{
 
 use bytemuck::{Pod, Zeroable};
 use xaeroflux_core::hash::sha_256_hash;
-
+use xaeroflux_core::event::{ScanWindow, Operator,XaeroEvent};
 use crate::{
-    Operator, ScanWindow, XFluxHandle, XaeroEvent,
+    XFluxHandle,
     aof::actor::AOFActor,
     indexing::storage::actors::{
         mmr_actor::MmrIndexingActor,

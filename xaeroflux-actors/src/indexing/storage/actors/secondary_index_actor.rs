@@ -12,9 +12,9 @@ struct CacheEntry {
     mmr_appended: bool,
     timestamp: Instant,
 }
-
+use xaeroflux_core::event::XaeroEvent;
 use crate::{
-    Pipe, XaeroEvent,
+    Pipe,
     aof::storage::{
         format::SegmentMeta,
         lmdb::{LmdbEnv, put_secondary_index},
