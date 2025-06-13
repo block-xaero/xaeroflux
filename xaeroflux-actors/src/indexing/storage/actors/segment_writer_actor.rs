@@ -19,15 +19,18 @@ use memmap2::MmapMut;
 use xaeroflux_core::{
     XAERO_DISPATCHER_POOL,
     date_time::{day_bounds_from_epoch_ms, emit_secs},
-    event::{Event, EventType, EventType::SystemEvent, SystemEventKind, SystemEventKind::Shutdown},
+    event::{
+        Event, EventType, EventType::SystemEvent, ScanWindow, SystemEventKind,
+        SystemEventKind::Shutdown, XaeroEvent,
+    },
     hash::sha_256_hash_b,
     listeners::EventListener,
     size::PAGE_SIZE,
     system_paths::{emit_control_path_with_subject_hash, emit_data_path_with_subject_hash},
 };
-use xaeroflux_core::event::{ScanWindow, XaeroEvent};
+
 use crate::{
-    BusKind, Pipe, 
+    BusKind, Pipe,
     aof::storage::{
         format::SegmentMeta,
         lmdb::{LmdbEnv, push_event},
@@ -146,6 +149,7 @@ impl WriterState {
         // Use append mode to avoid truncating existing data
         let file = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(&self.filename)?;
