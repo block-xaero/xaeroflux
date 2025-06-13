@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use xaeroflux_core::{
     XAERO_DISPATCHER_POOL,
     event::Event,
+    init_xaero_pool,
     listeners::EventListener,
     system_paths::{emit_control_path_with_subject_hash, emit_data_path_with_subject_hash},
 };
@@ -36,6 +37,7 @@ pub struct AOFActor {
 impl AOFActor {
     pub fn new(subject_hash: SubjectHash, pipe: Arc<Pipe>) -> Self {
         initialize();
+        init_xaero_pool();
         let c = CONF.get().expect("failed to unravel");
         let fp = &c.aof.file_path;
         let fpc = fp.clone();
@@ -82,20 +84,17 @@ impl AOFActor {
         // L3 : We dispatch xaero event to EventListener
         // TODO: we need to do merkle proof handshake here.
         let pipe_clone = pipe.clone();
-        XAERO_DISPATCHER_POOL
-            .get()
-            .expect("xaero pool not initialized")
-            .execute(move || {
-                while let Ok(event) = pipe_clone.source.rx.recv() {
-                    let res = listener.inbox.send(event.evt);
-                    match res {
-                        Ok(_) => {
-                            tracing::debug!("sent Xaero event successfully")
-                        }
-                        Err(e) => tracing::error!("failed to send Xaero event error: {}", e),
+        threadpool::Builder::new().build().execute(move || {
+            while let Ok(event) = pipe_clone.source.rx.recv() {
+                let res = listener.inbox.send(event.evt);
+                match res {
+                    Ok(_) => {
+                        tracing::debug!("sent Xaero event successfully")
                     }
+                    Err(e) => tracing::error!("failed to send Xaero event error: {}", e),
                 }
-            });
+            }
+        });
 
         Self { pipe, env }
     }
@@ -137,7 +136,6 @@ mod tests {
         tmp
     }
 
-    #[ignore]
     #[test]
     fn test_aof_actor_initialization() {
         initialize();
@@ -153,7 +151,6 @@ mod tests {
         let _actor2: AOFActor = AOFActor::new(subject_hash, clone_pipe);
     }
 
-    #[ignore]
     #[test]
     fn test_aof_actor_push_event() {
         initialize();

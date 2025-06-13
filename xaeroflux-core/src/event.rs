@@ -62,8 +62,10 @@ pub enum SystemEventKind {
     Shutdown,
     /// Indicates the system or actor should restart.
     Restart,
-    /// Replay is a special event that is used to replay the event log
-    Replay, // Replay is a special event that is used to replay the event log
+    /// Replay control events to rehydrate control bus state.
+    ReplayControl,
+    /// Replay data events to rehydrate application/data bus state.
+    ReplayData,
     /// Indicates an event payload was written to a page.
     PayloadWritten,
     /// Indicates a segment rollover completed successfully.
@@ -104,21 +106,20 @@ impl EventType {
             4 => EventType::SystemEvent(SystemEventKind::Resume),
             5 => EventType::SystemEvent(SystemEventKind::Shutdown),
             6 => EventType::SystemEvent(SystemEventKind::Restart),
-            7 => EventType::SystemEvent(SystemEventKind::Replay),
-            8 => EventType::SystemEvent(SystemEventKind::PayloadWritten),
-            9 => EventType::SystemEvent(SystemEventKind::SegmentRolledOver),
-            10 => EventType::SystemEvent(SystemEventKind::SegmentRollOverFailed),
-            11 => EventType::SystemEvent(SystemEventKind::PageFlushed),
-            12 => EventType::SystemEvent(SystemEventKind::PageFlushFailed),
-            13 => EventType::SystemEvent(SystemEventKind::MmrAppended),
-            14 => EventType::SystemEvent(SystemEventKind::MmrAppendFailed),
-            15 => EventType::SystemEvent(SystemEventKind::SecondaryIndexWritten),
-            16 => EventType::SystemEvent(SystemEventKind::SecondaryIndexFailed),
-
-            // Newly added system events:
-            17 => EventType::SystemEvent(SystemEventKind::SubjectCreated),
-            18 => EventType::SystemEvent(SystemEventKind::WorkspaceCreated),
-            19 => EventType::SystemEvent(SystemEventKind::ObjectCreated),
+            7 => EventType::SystemEvent(SystemEventKind::ReplayControl),
+            8 => EventType::SystemEvent(SystemEventKind::ReplayData),
+            9 => EventType::SystemEvent(SystemEventKind::PayloadWritten),
+            10 => EventType::SystemEvent(SystemEventKind::SegmentRolledOver),
+            11 => EventType::SystemEvent(SystemEventKind::SegmentRollOverFailed),
+            12 => EventType::SystemEvent(SystemEventKind::PageFlushed),
+            13 => EventType::SystemEvent(SystemEventKind::PageFlushFailed),
+            14 => EventType::SystemEvent(SystemEventKind::MmrAppended),
+            15 => EventType::SystemEvent(SystemEventKind::MmrAppendFailed),
+            16 => EventType::SystemEvent(SystemEventKind::SecondaryIndexWritten),
+            17 => EventType::SystemEvent(SystemEventKind::SecondaryIndexFailed),
+            18 => EventType::SystemEvent(SystemEventKind::SubjectCreated),
+            19 => EventType::SystemEvent(SystemEventKind::WorkspaceCreated),
+            20 => EventType::SystemEvent(SystemEventKind::ObjectCreated),
 
             // Anything ≥20 and < META_BASE is reserved for NetworkEvent/StorageEvent.
             v if (20..META_BASE).contains(&v) => EventType::NetworkEvent(v),
@@ -138,21 +139,20 @@ impl EventType {
             EventType::SystemEvent(SystemEventKind::Resume) => 4,
             EventType::SystemEvent(SystemEventKind::Shutdown) => 5,
             EventType::SystemEvent(SystemEventKind::Restart) => 6,
-            EventType::SystemEvent(SystemEventKind::Replay) => 7,
-            EventType::SystemEvent(SystemEventKind::PayloadWritten) => 8,
-            EventType::SystemEvent(SystemEventKind::SegmentRolledOver) => 9,
-            EventType::SystemEvent(SystemEventKind::SegmentRollOverFailed) => 10,
-            EventType::SystemEvent(SystemEventKind::PageFlushed) => 11,
-            EventType::SystemEvent(SystemEventKind::PageFlushFailed) => 12,
-            EventType::SystemEvent(SystemEventKind::MmrAppended) => 13,
-            EventType::SystemEvent(SystemEventKind::MmrAppendFailed) => 14,
-            EventType::SystemEvent(SystemEventKind::SecondaryIndexWritten) => 15,
-            EventType::SystemEvent(SystemEventKind::SecondaryIndexFailed) => 16,
-
-            // Newly added system events:
-            EventType::SystemEvent(SystemEventKind::SubjectCreated) => 17,
-            EventType::SystemEvent(SystemEventKind::WorkspaceCreated) => 18,
-            EventType::SystemEvent(SystemEventKind::ObjectCreated) => 19,
+            EventType::SystemEvent(SystemEventKind::ReplayControl) => 7,
+            EventType::SystemEvent(SystemEventKind::ReplayData) => 8,
+            EventType::SystemEvent(SystemEventKind::PayloadWritten) => 9,
+            EventType::SystemEvent(SystemEventKind::SegmentRolledOver) => 10,
+            EventType::SystemEvent(SystemEventKind::SegmentRollOverFailed) => 11,
+            EventType::SystemEvent(SystemEventKind::PageFlushed) => 12,
+            EventType::SystemEvent(SystemEventKind::PageFlushFailed) => 13,
+            EventType::SystemEvent(SystemEventKind::MmrAppended) => 14,
+            EventType::SystemEvent(SystemEventKind::MmrAppendFailed) => 15,
+            EventType::SystemEvent(SystemEventKind::SecondaryIndexWritten) => 16,
+            EventType::SystemEvent(SystemEventKind::SecondaryIndexFailed) => 17,
+            EventType::SystemEvent(SystemEventKind::SubjectCreated) => 18,
+            EventType::SystemEvent(SystemEventKind::WorkspaceCreated) => 19,
+            EventType::SystemEvent(SystemEventKind::ObjectCreated) => 20,
 
             EventType::NetworkEvent(v) => *v, // should be ≥20 and <META_BASE
             EventType::StorageEvent(v) => *v, // also <META_BASE

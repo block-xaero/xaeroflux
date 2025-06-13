@@ -1,27 +1,20 @@
 // src/ffi.rs
 
-use std::{
-    ffi::{CStr, CString},
-    hash::Hasher,
-    os::raw::c_char,
-    sync::Arc,
-};
+use std::{ffi::CStr, os::raw::c_char};
 
-use xaeroflux::{
-    actors::{XaeroEvent, subject::Subject},
-    subject,
-};
+use xaeroflux::actors::{XaeroEvent, subject::Subject};
 
 /// Opaque pointer to a Subject pipeline.
 #[repr(C)]
 pub struct FfiSubject {
     _private: [u8; 0],
 }
-
 /// Create a new Subject pipeline for the given name.
 /// Returns a pointer you must later pass to the other calls.
+/// # Safety
+/// Document unsafe reference here
 #[unsafe(no_mangle)]
-pub extern "C" fn xf_subject_new(
+pub unsafe extern "C" fn xf_subject_new(
     name: *const c_char,
     workspace_name: *const c_char,
     object_name: *const c_char,
@@ -53,12 +46,12 @@ pub extern "C" fn xf_subject_new(
 /// `cb` is a C function pointer you supply from Dart.
 pub type MapCallback = extern "C" fn(evt: *mut XaeroEvent) -> *mut XaeroEvent;
 #[unsafe(no_mangle)]
-pub extern "C" fn xf_subject_map(handle: *mut FfiSubject, cb: MapCallback) -> *mut FfiSubject {
+pub extern "C" fn xf_subject_map(handle: *mut FfiSubject, _cb: MapCallback) -> *mut FfiSubject {
     // — cast handle → &mut Subject
     // — wrap cb in Arc<Fn(XaeroEvent)->XaeroEvent>
     // — subj.pipe = subj.pipe.map(callback)
     // — return the same handle for chaining
-    return handle as *mut FfiSubject;
+    handle
 }
 
 /// Filter operator: drop or keep events based on your predicate.
@@ -67,10 +60,10 @@ pub type FilterCallback = extern "C" fn(evt: *const XaeroEvent) -> bool;
 #[unsafe(no_mangle)]
 pub extern "C" fn xf_subject_filter(
     handle: *mut FfiSubject,
-    cb: FilterCallback,
+    _cb: FilterCallback,
 ) -> *mut FfiSubject {
     // — same pattern for Filter
-    return handle as *mut FfiSubject;
+    handle
 }
 
 /// Drop events lacking a Merkle proof (no callback needed).
@@ -78,7 +71,7 @@ pub extern "C" fn xf_subject_filter(
 pub extern "C" fn xf_subject_filter_merkle_proofs(handle: *mut FfiSubject) -> *mut FfiSubject {
     // subj.pipe = subj.pipe.filter_merkle_proofs()
     // return handle
-    return handle as *mut FfiSubject;
+    handle
 }
 
 /// Terminal operator: no more events.
@@ -86,12 +79,12 @@ pub extern "C" fn xf_subject_filter_merkle_proofs(handle: *mut FfiSubject) -> *m
 pub extern "C" fn xf_subject_blackhole(handle: *mut FfiSubject) -> *mut FfiSubject {
     // subj.pipe = subj.pipe.blackhole();
     // return handle
-    return handle as *mut FfiSubject;
+    handle
 }
 
 /// Run the pipeline to completion (or until it blocks).  
 /// After calling this, the Subject is consumed/dropped.
 #[unsafe(no_mangle)]
-pub extern "C" fn xf_subject_unsafe_run(handle: *mut FfiSubject) {
+pub extern "C" fn xf_subject_unsafe_run(_handle: *mut FfiSubject) {
     // Box::from_raw(handle as *mut Subject).run();
 }

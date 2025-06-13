@@ -26,12 +26,15 @@ sign-commit       = true          # GPG-sign your release commits
 sign-tag          = true          # GPG-sign your git tags
 push-remote       = "origin"
 
+[dev-dependencies]
+serial_test = "0.10.0"
+
 [build-dependencies]
 libc = "0.2.172"
 
 [dependencies]
-xaeroflux-core = "0.3.0-m3"
-xaeroflux-macros = "0.3.0-m3"
+xaeroflux-core = {path = "../xaeroflux-core"}
+xaeroflux-macros = {path = "../xaeroflux-macros"}
 ed25519-dalek = { version = "2.1.1", features = ["rand_core"] }
 rand = "0.8"
 iroh = {version = "0.35.0", "default-features" = true, features = ["discovery-local-network", "discovery-pkarr-dht"] }

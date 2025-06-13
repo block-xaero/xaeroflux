@@ -71,6 +71,7 @@ pub struct XFluxHandle {
 mod tests {
     use std::{
         fs::OpenOptions,
+        path::Path,
         sync::{Arc, Mutex},
         time::Duration,
     };
@@ -83,6 +84,8 @@ mod tests {
     use xaeroflux_core::{
         date_time::emit_secs,
         event::{Event, EventType, SystemEventKind},
+        init_xaero_pool, shutdown_all_pools,
+        system_paths::emit_data_path_with_subject_hash,
     };
     use xaeroflux_macros::subject;
 
@@ -110,30 +113,55 @@ mod tests {
             xaeroflux_core::hash::sha_256_hash("cyan_workspace_123".as_bytes().to_vec());
         let subject =
             subject!("workspace/cyan_workspace_123/object/cyan_object_white_board_id_134");
+
+        // FIX: If macro sends to sink.tx, then we should receive from sink.rx
         let workspace_created_event = subject
             .control
-            .source
+            .sink  // Changed from source to sink
             .rx
             .recv()
             .expect("attempt_to_unwrap_failed")
             .evt;
+
         assert_eq!(
             workspace_created_event.event_type,
             EventType::SystemEvent(SystemEventKind::WorkspaceCreated)
         );
         assert_eq!(expected_sha256.as_ref(), subject.workspace_id.as_slice());
     }
-    #[ignore]
     #[test]
     fn test_segment_reader_replay_then_live() {
         initialize();
+        init_xaero_pool();
         let tmp = tempdir().expect("failed to create tempdir");
-        // write a segment file
+
+        let subject_hash = SubjectHash([0; 32]);
+        let config = SegmentConfig {
+            page_size: PAGE_SIZE,
+            pages_per_segment: 1,
+            prefix: "xaeroflux-actors".into(),
+            segment_dir: tmp.path().to_string_lossy().into(),
+            lmdb_env_path: tmp.path().to_string_lossy().into(),
+        };
+
+        // Create the correct directory structure that the actor expects
+        let data_path =
+            emit_data_path_with_subject_hash(&config.segment_dir, subject_hash.0, "segment_reader");
+        std::fs::create_dir_all(&data_path).expect("create dir");
+
+        let lmdb_path = emit_data_path_with_subject_hash(
+            &config.lmdb_env_path,
+            subject_hash.0,
+            "segment_reader",
+        );
+        std::fs::create_dir_all(&lmdb_path).expect("create lmdb dir");
+
+        // Write segment file in the correct location
         let ts = emit_secs();
         let idx = 0;
-        let seg_path = tmp
-            .path()
-            .join(format!("xaeroflux-actors-{}-{}.seg", ts, idx));
+        let seg_path =
+            Path::new(&data_path).join(format!("{}-{}-{:04}.seg", config.prefix, ts, idx));
+
         {
             let file = OpenOptions::new()
                 .create(true)
@@ -149,14 +177,13 @@ mod tests {
             mmap[..frame.len()].copy_from_slice(&frame);
             mmap.flush().expect("flush");
         }
-        // push meta into LMDB
+
+        // Create LMDB environment in the correct location
         let meta_env = Arc::new(Mutex::new(
-            LmdbEnv::new(
-                tmp.path().to_str().expect("failed_to_unwrap"),
-                BusKind::Data,
-            )
-            .expect("create lmdb"),
+            LmdbEnv::new(&lmdb_path, BusKind::Data).expect("create lmdb"),
         ));
+
+        // Push metadata
         let seg_meta = SegmentMeta {
             page_index: 0,
             segment_index: idx,
@@ -171,23 +198,24 @@ mod tests {
             EventType::MetaEvent(1).to_u8(),
         );
         push_event(&meta_env, &ev).expect("push_event");
-        // instantiate actor
-        let (_, rx) = unbounded::<XaeroEvent>();
-        let config = SegmentConfig {
-            page_size: PAGE_SIZE,
-            pages_per_segment: 1,
-            prefix: "xaeroflux-actors".into(),
-            segment_dir: tmp.path().to_string_lossy().into(),
-            lmdb_env_path: tmp.path().to_string_lossy().into(),
-        };
-        let subject_hash = SubjectHash([0; 32]);
+
+        // Create pipe and get receiver
         let pipe = Pipe::new(BusKind::Data, None);
+        let rx = pipe.source.rx.clone();
+
+        // Create actor
         let actor = SegmentReaderActor::new(subject_hash, pipe, config);
-        // send replay event
+
+        // Send replay event with proper scan window
+        let scan_window = ScanWindow {
+            start: ts - 1000, // Start a bit before our timestamp
+            end: ts + 1000,   // End a bit after
+        };
         let replay_evt = Event::new(
-            Vec::new(),
-            EventType::SystemEvent(xaeroflux_core::event::SystemEventKind::Replay).to_u8(),
+            bytes_of(&scan_window).to_vec(), // Include scan window data
+            EventType::SystemEvent(SystemEventKind::ReplayData).to_u8(),
         );
+
         actor
             .pipe
             .sink
@@ -197,11 +225,23 @@ mod tests {
                 merkle_proof: None,
             })
             .expect("send replay");
-        // receive and assert first (should be "hello")
-        let first = rx.recv_timeout(Duration::from_secs(1)).expect("recv first");
-        assert_eq!(first.evt.data, b"hello".to_vec());
-    }
 
+        // Give actor time to process
+        std::thread::sleep(Duration::from_millis(200));
+
+        // Receive and assert
+        let first = rx.recv_timeout(Duration::from_secs(2)).expect("recv first");
+        assert_eq!(first.evt.data, b"hello".to_vec());
+
+        drop(actor);
+        let res = shutdown_all_pools();
+        match res {
+            Ok(_) => {}
+            Err(e) => {
+                tracing::error!("Failed to shutdown: {:?}", e);
+            }
+        }
+    }
     #[test]
     fn test_subject_macro_object_event_and_hash() {
         initialize();
@@ -231,7 +271,7 @@ mod tests {
         // 1) First event was WorkspaceCreated; drain it
         let ws_evt = subject
             .control
-            .source
+            .sink
             .rx
             .recv()
             .expect("attempt_to_unwrap_failed")
@@ -249,7 +289,7 @@ mod tests {
         // 2) Second event should be ObjectCreated
         let obj_evt = subject
             .control
-            .source
+            .sink
             .rx
             .recv()
             .expect("attempt_to_unwrap_failed")

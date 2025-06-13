@@ -17,7 +17,11 @@ use std::{
 use crossbeam::channel::Sender;
 use threadpool::ThreadPool;
 
-use crate::{DISPATCHER_POOL, XaeroData, event::Event, init_global_dispatcher_pool};
+use crate::{
+    DISPATCHER_POOL, XaeroData,
+    event::{Event, EventType::SystemEvent, SystemEventKind::Shutdown},
+    init_global_dispatcher_pool,
+};
 
 /// An asynchronous event listener actor.
 ///
@@ -36,8 +40,6 @@ pub struct EventListener<T>
 where
     T: XaeroData + Send + Sync + 'static,
 {
-    pub id: [u8; 32], // auto-generated
-    pub address: Option<String>,
     pub inbox: Sender<Event<T>>,
     pub pool: ThreadPool,
     pub dispatcher: Option<JoinHandle<()>>,
@@ -75,22 +77,19 @@ where
         _event_buffer_size: Option<usize>,
         _pool_size_override: Option<usize>,
     ) -> Self {
-        let (tx, rx) = crossbeam::channel::unbounded();
+        let (tx, rx) = crossbeam::channel::unbounded::<Event<T>>();
         let id: [u8; 32] = crate::hash::sha_256::<String>(&name.to_string());
-        // let pool_size = match pool_size_override {
-        //     Some(size) => {
-        //         tracing::info!("Thread pool size: {}", size);
-        //         size
-        //     }
-        //     None => {
-        //         tracing::info!("Thread pool size: default");
-        //         let config = CONF.get_or_init(|| Config::default());
-        //         config.threads.num_worker_threads.max(1)
-        //     }
-        // };
-        // FIXME: This IGNORES the pool size override
-        // INTENTIONAL - REFACTOR ON M3.
-        init_global_dispatcher_pool();
+        // Choose pool:
+        let pool: ThreadPool = if let Some(size) = _pool_size_override {
+            ThreadPool::new(size)
+        } else {
+            init_global_dispatcher_pool();
+            DISPATCHER_POOL
+                .get()
+                .expect("Dispatcher pool not initialized")
+                .clone()
+        };
+        let poolc = pool.clone();
         let events_processed = Arc::new(AtomicUsize::new(0));
         let events_dropped = Arc::new(AtomicUsize::new(0));
         let meta = Arc::new(EventListenerMeta {
@@ -98,10 +97,6 @@ where
             events_dropped,
         });
         let f_meta_c = meta.clone();
-        let tp = DISPATCHER_POOL
-            .get()
-            .expect("dispatcher pool not initialized");
-        let moveable = tp.clone();
         let dispatcher = std::thread::Builder::new()
             .name(format!(
                 "xaeroflux-actors-event-listener-{}",
@@ -109,9 +104,13 @@ where
             ))
             .spawn(move || {
                 while let Ok(event) = rx.recv() {
+                    if event.event_type == SystemEvent(Shutdown) {
+                        // if handler is in a loop - they must clean themselves.
+                        break;
+                    }
                     let meta_c = meta.clone();
                     let h = Arc::clone(&handler);
-                    moveable.execute(move || {
+                    pool.execute(move || {
                         let res = panic::catch_unwind(AssertUnwindSafe(|| (h)(event)));
                         match res {
                             Ok(_) => {
@@ -132,10 +131,8 @@ where
             })
             .expect("failed to spawn dispatcher thread");
         EventListener {
-            id,
-            address: None,
             inbox: tx,
-            pool: tp.clone(),
+            pool: poolc,
             dispatcher: Some(dispatcher),
             meta: f_meta_c,
         }
@@ -175,11 +172,10 @@ mod tests {
             None,
             None,
         );
-        listener
+        let res = listener
             .inbox
-            .send(Event::<String>::new("test".to_string(), 0))
-            .expect("failed to send event");
-        assert_eq!(listener.id.len(), 32);
+            .send(Event::<String>::new("test".to_string(), 0));
+        assert!(res.is_ok());
         listener.shutdown();
     }
 

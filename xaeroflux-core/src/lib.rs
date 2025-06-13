@@ -61,6 +61,43 @@ pub static XAERO_DISPATCHER_POOL: OnceLock<ThreadPool> = OnceLock::new();
 /// Global runtime for peer-to-peer networking tasks.
 pub static P2P_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 
+pub fn shutdown_all_pools() -> Result<(), Box<dyn std::error::Error>> {
+    let dpo = DISPATCHER_POOL.get();
+    match dpo.as_ref() {
+        None => {
+            tracing::warn!("Dispatcher pool cannot be killed because it is unavailable!")
+        }
+        Some(dp) => {
+            dp.join();
+        }
+    }
+
+    let iopo = IO_POOL.get();
+    match iopo.as_ref() {
+        None => {
+            tracing::warn!("Dispatcher pool cannot be killed because it is unavailable!")
+        }
+        Some(iop) => {
+            iop.join();
+        }
+    }
+
+    let xdpo = XAERO_DISPATCHER_POOL.get();
+    match xdpo.as_ref() {
+        None => {
+            tracing::warn!("Dispatcher pool cannot be killed because it is unavailable!")
+        }
+        Some(xdp) => {
+            xdp.join();
+        }
+    }
+    if P2P_RUNTIME.get().is_some() {
+        tracing::info!("P2P runtime will shutdown automatically on process exit");
+    } else {
+        tracing::warn!("P2P runtime was not initialized");
+    }
+    Ok(())
+}
 /// Initializes the global P2P Tokio runtime.
 ///
 /// Uses the `threads.num_worker_threads` setting from configuration,
@@ -81,7 +118,7 @@ pub fn init_p2p_runtime() -> &'static tokio::runtime::Runtime {
 pub fn init_xaero_pool() {
     XAERO_DISPATCHER_POOL.get_or_init(|| {
         let conf = CONF.get_or_init(Config::default);
-        let no_of_worker_threads = conf.threads.num_worker_threads.max(1);
+        let no_of_worker_threads = conf.threads.num_worker_threads.max(2);
         ThreadPool::new(no_of_worker_threads)
     });
 }
@@ -93,8 +130,7 @@ pub fn init_xaero_pool() {
 pub fn init_global_dispatcher_pool() {
     DISPATCHER_POOL.get_or_init(|| {
         let conf = CONF.get_or_init(Config::default);
-        let no_of_worker_threads = conf.threads.num_worker_threads.max(1);
-
+        let no_of_worker_threads = conf.threads.num_worker_threads.max(2);
         ThreadPool::new(no_of_worker_threads)
     });
 }
@@ -133,6 +169,7 @@ pub fn initialize() {
     }
     init_global_dispatcher_pool();
     init_global_io_pool();
+    init_xaero_pool();
     init_logging(); // Initialize the logging system
     show_banner();
     info!("XaeroFlux initialized");
