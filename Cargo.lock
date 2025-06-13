@@ -5979,7 +5979,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "xaeroflux-core 0.5.0-m3 (registry+https://github.com/rust-lang/crates.io-index)",
- "xaeroflux-macros 0.5.0-m3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "xaeroflux-macros 0.5.0-m3",
 ]
 
 [[package]]

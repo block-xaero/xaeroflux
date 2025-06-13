@@ -46,9 +46,10 @@ pub fn derive_pipe_kind(input: TokenStream) -> TokenStream {
                 use crossbeam::channel::Sender;
                 use crossbeam::channel::Receiver;
                 use crossbeam::channel::bounded;
-                let (tx, rx) =  crossbeam::channel::bounded(bounds.unwrap_or(100));
-                let source = NetworkSource{rx};
-                let sink = NetworkSink{tx};
+                let (source_tx, source_rx) =  crossbeam::channel::bounded(bounds.unwrap_or(100));
+                let (sink_tx, sink_rx) =  crossbeam::channel::bounded(bounds.unwrap_or(100));
+                let source = NetworkSource{rx: source_rx, tx: source_tx};
+                let sink = NetworkSink{tx: sink_tx, rx: sink_rx};
                 #struct_name(Arc::new(crate::networking::p2p::NetworkPipe{source,
                     sink, bus_kind: #bus_variant,
                     bounds}))
