@@ -9,8 +9,11 @@ use std::{
 };
 
 use bytemuck::{Pod, Zeroable};
-use xaeroflux_core::hash::sha_256_hash;
-use xaeroflux_core::event::{ScanWindow, Operator,XaeroEvent};
+use xaeroflux_core::{
+    event::{Operator, ScanWindow, XaeroEvent},
+    hash::sha_256_hash,
+};
+
 use crate::{
     XFluxHandle,
     aof::actor::AOFActor,

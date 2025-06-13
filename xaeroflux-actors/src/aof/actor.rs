@@ -107,12 +107,11 @@ mod tests {
     use tempfile::tempdir;
     use xaeroflux_core::{
         config::Config,
-        event::{Event, EventType},
+        event::{Event, EventType, XaeroEvent},
     };
 
     use super::*;
     use crate::subject::SubjectHash;
-    use xaeroflux_core::event::XaeroEvent;
 
     /// Before each test, override CONF.aof.file_path to point at a temporary directory,
     /// so that `emit_control_path_with_subject_hash(...)` always has a valid base path.

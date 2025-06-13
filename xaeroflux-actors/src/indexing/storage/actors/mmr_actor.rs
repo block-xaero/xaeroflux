@@ -11,12 +11,14 @@ use std::sync::{Arc, Mutex};
 use xaeroflux_core::{
     IO_POOL, XAERO_DISPATCHER_POOL,
     date_time::emit_secs,
-    event::{Event, EventType, EventType::SystemEvent, SystemEventKind, SystemEventKind::Shutdown},
+    event::{
+        Event, EventType, EventType::SystemEvent, SystemEventKind, SystemEventKind::Shutdown,
+        XaeroEvent,
+    },
     hash::sha_256,
     listeners::EventListener,
     system_paths::*,
 };
-use xaeroflux_core::event::XaeroEvent;
 
 use super::segment_writer_actor::{SegmentConfig, SegmentWriterActor};
 use crate::{

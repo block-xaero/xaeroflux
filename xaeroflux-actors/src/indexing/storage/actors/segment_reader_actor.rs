@@ -19,13 +19,14 @@ use xaeroflux_core::{
     event::{
         Event, EventType,
         EventType::SystemEvent,
-        SystemEventKind,
+        ScanWindow, SystemEventKind,
         SystemEventKind::{ReplayControl, ReplayData, Shutdown},
+        XaeroEvent,
     },
     listeners::EventListener,
     system_paths::{emit_control_path_with_subject_hash, emit_data_path_with_subject_hash},
 };
-use xaeroflux_core::event::{ScanWindow,XaeroEvent};
+
 use crate::{
     BusKind, Pipe,
     aof::storage::{lmdb::LmdbEnv, meta::iterate_segment_meta_by_range},
@@ -299,11 +300,10 @@ mod tests {
     use tempfile::tempdir;
     use tokio::io::AsyncWriteExt;
     use xaeroflux_core::{
-        event::{Event, EventType, SystemEventKind},
+        event::{Event, EventType, ScanWindow, SystemEventKind, XaeroEvent},
         init_xaero_pool, shutdown_all_pools,
     };
 
-    use xaeroflux_core::event::{ScanWindow, XaeroEvent};
     use super::*;
     use crate::{
         BusKind, Pipe,

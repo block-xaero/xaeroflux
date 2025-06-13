@@ -6,8 +6,8 @@
 //! - Serialization support via `rkyv` for zero-copy archiving.
 //! - `EVENT_HEADER` magic and `META_BASE` offset for metadata event encoding.
 
-use std::fmt::Debug;
-use std::sync::Arc;
+use std::{fmt::Debug, sync::Arc};
+
 use bytemuck::{Pod, Zeroable};
 use rkyv::{Archive, Deserialize, Serialize};
 
@@ -253,7 +253,6 @@ pub enum Operator {
     /// Terminal op: drop all events.
     Blackhole,
 }
-
 
 /// Unit tests for event serialization and archiving via `rkyv`.
 #[cfg(test)]
