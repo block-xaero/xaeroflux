@@ -5888,59 +5888,21 @@ dependencies = [
 [[package]]
 name = "xaeroflux"
 version = "0.3.0-m3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b5d112993425ad8727f4d1b51333768c02dd555ca23fcae3029f57e23e5af74"
 dependencies = [
- "xaeroflux-actors 0.3.0-m3 (registry+https://github.com/rust-lang/crates.io-index)",
- "xaeroflux-core 0.3.0-m3 (registry+https://github.com/rust-lang/crates.io-index)",
- "xaeroflux-macros 0.3.0-m3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "xaeroflux-actors 0.3.0-m3",
+ "xaeroflux-core 0.3.0-m3",
+ "xaeroflux-macros 0.3.0-m3",
 ]
 
 [[package]]
 name = "xaeroflux"
-version = "0.3.0-m3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b5d112993425ad8727f4d1b51333768c02dd555ca23fcae3029f57e23e5af74"
+version = "0.5.0-m3"
 dependencies = [
- "xaeroflux-actors 0.3.0-m3 (registry+https://github.com/rust-lang/crates.io-index)",
- "xaeroflux-core 0.3.0-m3 (registry+https://github.com/rust-lang/crates.io-index)",
- "xaeroflux-macros 0.3.0-m3 (registry+https://github.com/rust-lang/crates.io-index)",
-]
-
-[[package]]
-name = "xaeroflux-actors"
-version = "0.3.0-m3"
-dependencies = [
- "anyhow",
- "async-trait",
- "bytemuck",
- "cid",
- "crdts",
- "crossbeam",
- "ed25519-dalek",
- "futures",
- "hex",
- "iroh",
- "iroh-blobs",
- "iroh-gossip",
- "libc",
- "liblmdb",
- "memmap2",
- "multihash",
- "rand 0.8.5",
- "rkyv 0.8.10",
- "rkyv_dyn",
- "rustfix",
- "serde",
- "serial_test",
- "sha2",
- "tempfile",
- "threadpool",
- "tokio",
- "tokio-stream",
- "toml",
- "tracing",
- "tracing-subscriber",
- "xaeroflux-core 0.3.0-m3",
- "xaeroflux-macros 0.3.0-m3",
+ "xaeroflux-actors 0.5.0-m3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "xaeroflux-core 0.5.0-m3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "xaeroflux-macros 0.5.0-m3 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -5978,24 +5940,70 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
- "xaeroflux-core 0.3.0-m3 (registry+https://github.com/rust-lang/crates.io-index)",
- "xaeroflux-macros 0.3.0-m3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "xaeroflux-core 0.3.0-m3",
+ "xaeroflux-macros 0.3.0-m3",
 ]
 
 [[package]]
-name = "xaeroflux-core"
-version = "0.2.0-m3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75109ad297a99f08fcb84cef4208c980264cd8246c93851ed68f370cbdb78e44"
+name = "xaeroflux-actors"
+version = "0.5.0-m3"
 dependencies = [
+ "anyhow",
+ "async-trait",
  "bytemuck",
+ "cid",
  "crdts",
  "crossbeam",
  "ed25519-dalek",
- "figlet-rs",
+ "futures",
  "hex",
+ "iroh",
+ "iroh-blobs",
+ "iroh-gossip",
  "libc",
+ "liblmdb",
  "memmap2",
+ "multihash",
+ "rand 0.8.5",
+ "rkyv 0.8.10",
+ "rkyv_dyn",
+ "rustfix",
+ "serde",
+ "serial_test",
+ "sha2",
+ "tempfile",
+ "threadpool",
+ "tokio",
+ "tokio-stream",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "xaeroflux-core 0.5.0-m3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "xaeroflux-macros 0.5.0-m3 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "xaeroflux-actors"
+version = "0.5.0-m3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f85dfb47fdab5f7870d72363618ac89a69515ffe59c7861f2b0b265dcd4c582"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytemuck",
+ "cid",
+ "crdts",
+ "crossbeam",
+ "ed25519-dalek",
+ "futures",
+ "hex",
+ "iroh",
+ "iroh-blobs",
+ "iroh-gossip",
+ "libc",
+ "liblmdb",
+ "memmap2",
+ "multihash",
  "rand 0.8.5",
  "rkyv 0.8.10",
  "rkyv_dyn",
@@ -6009,11 +6017,15 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "xaeroflux-core 0.5.0-m3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "xaeroflux-macros 0.5.0-m3 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
 name = "xaeroflux-core"
-version = "0.3.0-m3"
+version = "0.2.0-m3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75109ad297a99f08fcb84cef4208c980264cd8246c93851ed68f370cbdb78e44"
 dependencies = [
  "bytemuck",
  "crdts",
@@ -6068,16 +6080,74 @@ dependencies = [
 ]
 
 [[package]]
+name = "xaeroflux-core"
+version = "0.5.0-m3"
+dependencies = [
+ "bytemuck",
+ "crdts",
+ "crossbeam",
+ "ed25519-dalek",
+ "figlet-rs",
+ "hex",
+ "libc",
+ "memmap2",
+ "rand 0.8.5",
+ "rkyv 0.8.10",
+ "rkyv_dyn",
+ "rustfix",
+ "serde",
+ "sha2",
+ "tempfile",
+ "threadpool",
+ "tokio",
+ "tokio-stream",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "xaeroflux-core"
+version = "0.5.0-m3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbe968045416661b91658d54314f69cb13f1d0e6516ad50da127bd600ec19804"
+dependencies = [
+ "bytemuck",
+ "crdts",
+ "crossbeam",
+ "ed25519-dalek",
+ "figlet-rs",
+ "hex",
+ "libc",
+ "memmap2",
+ "rand 0.8.5",
+ "rkyv 0.8.10",
+ "rkyv_dyn",
+ "rustfix",
+ "serde",
+ "sha2",
+ "tempfile",
+ "threadpool",
+ "tokio",
+ "tokio-stream",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "xaeroflux-ffi"
 version = "0.3.0-m3"
 dependencies = [
  "blake3",
- "xaeroflux 0.3.0-m3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "xaeroflux 0.3.0-m3",
 ]
 
 [[package]]
 name = "xaeroflux-macros"
 version = "0.3.0-m3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d46c535cf286b0aba8eeffbf6eb468c63f68050fe3a00125da427bf6d88eca1"
 dependencies = [
  "blake3",
  "proc-macro2",
@@ -6089,9 +6159,21 @@ dependencies = [
 
 [[package]]
 name = "xaeroflux-macros"
-version = "0.3.0-m3"
+version = "0.5.0-m3"
+dependencies = [
+ "blake3",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.101",
+ "trybuild",
+ "xaeroflux-core 0.2.0-m3",
+]
+
+[[package]]
+name = "xaeroflux-macros"
+version = "0.5.0-m3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d46c535cf286b0aba8eeffbf6eb468c63f68050fe3a00125da427bf6d88eca1"
+checksum = "6fd4e4dfafd5728d78b641c58c58678e10057ee4a83441e6fb2defdde02b478d"
 dependencies = [
  "blake3",
  "proc-macro2",
