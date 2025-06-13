@@ -140,7 +140,7 @@ pub fn subject(input: TokenStream) -> TokenStream {
         {
             // Bring everything into scope from the current crate:
             use crate::subject::SubjectHash;
-            use crate::XaeroEvent;
+            use xaeroflux_core::event::{ScanWindow, XaeroEvent};
             use crate::subject::Subject;
             use xaeroflux_core::event::{Event, EventType, SystemEventKind};
             use crate::{BusKind, Pipe};

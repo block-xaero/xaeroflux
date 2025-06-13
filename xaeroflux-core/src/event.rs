@@ -7,7 +7,8 @@
 //! - `EVENT_HEADER` magic and `META_BASE` offset for metadata event encoding.
 
 use std::fmt::Debug;
-
+use std::sync::Arc;
+use bytemuck::{Pod, Zeroable};
 use rkyv::{Archive, Deserialize, Serialize};
 
 use crate::{CONF, XaeroData};
@@ -219,6 +220,40 @@ pub enum SystemErrorCode {
     SecondaryIndex = 5,
     Unknown = 0xFFFF,
 }
+
+/// Envelope wrapping an application or system `Event` payload
+/// along with an optional Merkle inclusion proof.
+#[derive(Debug, Clone)]
+pub struct XaeroEvent {
+    /// Core event data (e.g., domain event encoded as bytes).
+    pub evt: Event<Vec<u8>>,
+    /// Optional Merkle proof bytes (e.g., from MMR).
+    pub merkle_proof: Option<Vec<u8>>,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ScanWindow {
+    pub start: u64,
+    pub end: u64,
+}
+unsafe impl Pod for ScanWindow {}
+unsafe impl Zeroable for ScanWindow {}
+
+/// Defines per-event pipeline operations.
+#[derive(Clone)]
+pub enum Operator {
+    Scan(Arc<ScanWindow>),
+    /// Transform the event into another event.
+    Map(Arc<dyn Fn(XaeroEvent) -> XaeroEvent + Send + Sync>),
+    /// Keep only events matching the predicate.
+    Filter(Arc<dyn Fn(&XaeroEvent) -> bool + Send + Sync>),
+    /// Drop events without a Merkle proof.
+    FilterMerkleProofs,
+    /// Terminal op: drop all events.
+    Blackhole,
+}
+
 
 /// Unit tests for event serialization and archiving via `rkyv`.
 #[cfg(test)]

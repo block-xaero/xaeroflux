@@ -5902,6 +5902,7 @@ version = "0.5.0-m3"
 dependencies = [
  "xaeroflux-actors 0.5.0-m3 (registry+https://github.com/rust-lang/crates.io-index)",
  "xaeroflux-core 0.5.0-m3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "xaeroflux-crdts",
  "xaeroflux-macros 0.5.0-m3 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -5978,7 +5979,8 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
- "xaeroflux-core 0.5.0-m3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "xaeroflux-core 0.5.0-m3",
+ "xaeroflux-crdts",
  "xaeroflux-macros 0.5.0-m3",
 ]
 
@@ -6133,6 +6135,16 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "xaeroflux-crdts"
+version = "0.5.0-m3"
+dependencies = [
+ "bytemuck",
+ "crdts",
+ "rkyv 0.8.10",
+ "serde",
 ]
 
 [[package]]

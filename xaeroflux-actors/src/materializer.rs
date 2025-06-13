@@ -2,12 +2,12 @@ use std::sync::Arc;
 
 use crossbeam::channel::Receiver;
 use threadpool::ThreadPool;
-use xaeroflux_core::{DISPATCHER_POOL, event::Event};
-
-use crate::{
-    Operator, XaeroEvent,
-    subject::{Subject, Subscription},
+use xaeroflux_core::{
+    DISPATCHER_POOL,
+    event::{Event, Operator, XaeroEvent},
 };
+
+use crate::subject::{Subject, Subscription};
 
 /// Strategy for wiring `Subject` + pipeline into threads and invoking handlers.
 pub trait Materializer: Send + Sync {

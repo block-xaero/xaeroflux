@@ -12,12 +12,12 @@ use crate::{
 // TODO: Maybe in future make `Source` and `Sink` and `Pipe` generic.
 struct NetworkSource {
     pub(crate) rx: Receiver<NetworkPayload>,
-    pub(crate) tx: Receiver<NetworkPayload>,
+    pub(crate) tx: Sender<NetworkPayload>,
 }
 
 struct NetworkSink {
     pub(crate) tx: Sender<NetworkPayload>,
-    pub(crate) rx: Sender<NetworkPayload>,
+    pub(crate) rx: Receiver<NetworkPayload>,
 }
 
 struct NetworkPipe {
