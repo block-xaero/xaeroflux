@@ -78,7 +78,20 @@ impl Materializer for ThreadPoolForSubjectMaterializer {
                     .send(XaeroEvent {
                         evt: Event::new(
                             data.to_vec(),
-                            EventType::SystemEvent(SystemEventKind::Replay).to_u8(),
+                            EventType::SystemEvent(SystemEventKind::ReplayControl).to_u8(),
+                        ),
+                        merkle_proof: None,
+                    })
+                    .expect("failed_to_unwrap");
+
+                subject
+                    .data
+                    .sink
+                    .tx
+                    .send(XaeroEvent {
+                        evt: Event::new(
+                            data.to_vec(),
+                            EventType::SystemEvent(SystemEventKind::ReplayData).to_u8(),
                         ),
                         merkle_proof: None,
                     })

@@ -18,16 +18,18 @@ pub struct Source {
     pub id: u64,
     /// Underlying Crossbeam receiver.
     pub rx: Receiver<XaeroEvent>,
-
+    pub(crate) tx: Sender<XaeroEvent>,
     pub kind: BusKind,
 }
 
 impl Source {
     /// Constructs a new `Source` from the given receiver.
-    pub fn new(rx: Receiver<XaeroEvent>, bus_kind: BusKind) -> Self {
+    pub fn new(bounds: Option<usize>, bus_kind: BusKind) -> Self {
+        let (tx, rx) = crossbeam::channel::bounded(bounds.unwrap_or(100));
         Self {
             id: next_id(),
             rx,
+            tx,
             kind: bus_kind,
         }
     }
@@ -39,16 +41,18 @@ pub struct Sink {
     pub id: u64,
     /// Underlying Crossbeam sender.
     pub tx: Sender<XaeroEvent>,
-
+    pub(crate) rx: Receiver<XaeroEvent>,
     pub kind: BusKind,
 }
 
 impl Sink {
     /// Constructs a new `Sink` from the given sender.
-    pub fn new(tx: Sender<XaeroEvent>, bus_kind: BusKind) -> Self {
+    pub fn new(bounds: Option<usize>, bus_kind: BusKind) -> Self {
+        let (tx, rx) = crossbeam::channel::bounded(bounds.unwrap_or(100));
         Self {
             id: next_id(),
             tx,
+            rx,
             kind: bus_kind,
         }
     }
@@ -69,12 +73,9 @@ impl Pipe {
         //                 .get("application_event")
         //                 .expect("value_not_set")
         //                 .capacity as usize
-        let bsize = bounds.unwrap_or(100);
-        let k = kind;
-        let (tx, rx) = bounded(bsize);
         Arc::new(Self {
-            source: Arc::new(Source::new(rx, kind)),
-            sink: Arc::new(Sink::new(tx, k)),
+            source: Arc::new(Source::new(bounds, kind)),
+            sink: Arc::new(Sink::new(bounds, kind)),
         })
     }
 }
