@@ -9,7 +9,9 @@ use std::{
 };
 
 use bytemuck::{Pod, Zeroable};
+use sha2::digest::consts::U64;
 use xaeroflux_core::{
+    date_time::emit_secs,
     event::{Operator, ScanWindow, XaeroEvent},
     hash::sha_256_hash,
 };
@@ -55,6 +57,16 @@ pub struct TopicKey {
 unsafe impl Pod for TopicKey {}
 unsafe impl Zeroable for TopicKey {}
 
+/// Subject's batch mode context that helps buffer events
+/// and execute operations appropriately by remaining true to laziness.
+#[derive(Clone)]
+pub struct SubjectBatchContext {
+    pub init_time: u64,
+    pub duration: u64,
+    pub event_count_threshold: Option<usize>,
+    pub pipe: Arc<Pipe>,
+    pub pipeline: Vec<Operator>,
+}
 /// A multicast namespaced Event channel that houses:
 /// - A `Pipe` (tuple of `Source` and `Sink`).
 /// - A network `TopicKey` that is essentially a duplicate of `SubjectHash` but kept for evolution.
@@ -87,10 +99,44 @@ pub struct Subject {
     // /// Flag to indicate if `unsafe_run` has been called.
     /// 2-fold: 1. ensure unsafe run is called atleast once 2. do not double call.
     pub unsafe_run_called: Arc<AtomicBool>,
+    /// batch context holds buffer (`Pipe`) for events and operators that are applicable to batch
+    /// mode.
+    pub batch_context: Option<SubjectBatchContext>,
+    /// loads true if batch mode is set -- all events once this is set go to SubjectBatchContext
+    pub batch_mode: Arc<AtomicBool>,
 }
+pub trait SubjectBatchOps {
+    /// Buffers events in a duration window or `event_count_threshold` provided.
+    /// With a pipeline of operators passed in. These operators are usually:
+    /// Sort -> Fold or Reduce
+    /// This machinery helps with things like support of CRDT Ops naturally in `Subject`
+    /// type.
+    fn batch(
+        self: &Arc<Self>,
+        duration: Duration,
+        event_count_threshold: Option<usize>,
+        pipeline: Vec<Operator>,
+    ) -> Arc<Self>;
 
+    /// Sorts buffered events
+    fn sort<F>(self: &Arc<Self>, sorter: F) -> Arc<Self>
+    where
+        F: Fn(&XaeroEvent, &XaeroEvent) -> std::cmp::Ordering + Send + Sync + 'static;
+
+    /// folds a `Vector` buffer of `XaeroEvent` to a single `XaeroEvent` packed in as a buffer with
+    /// event header in archived form.
+    fn fold_left<F>(self: &Arc<Self>, fold_left: F) -> Arc<Self>
+    where
+        F: Fn(XaeroEvent, Vec<XaeroEvent>) -> XaeroEvent + Send + Sync + 'static;
+
+    /// Reduces vector of xaero events to pretty much anything you'd like (hence Vec<u8> without
+    /// type complexity).
+    fn reduce<F>(self: &Arc<Self>, reducer: F) -> Arc<Self>
+    where
+        F: Fn(Vec<XaeroEvent>) -> Vec<u8> + Send + Sync + 'static;
+}
 /// Chainable subject operators without executing them until subscription.
-pub trait SubjectOps {
+pub trait SubjectStreamingOps {
     fn scan<F>(self: &Arc<Self>, scan_window: ScanWindow) -> Arc<Self>
     where
         F: Fn(XaeroEvent) -> XaeroEvent + Send + Sync + 'static;
@@ -112,7 +158,7 @@ pub trait SubjectOps {
     fn blackhole(self: &Arc<Self>) -> Arc<Self>;
 }
 
-impl SubjectOps for Subject {
+impl SubjectStreamingOps for Subject {
     fn scan<F>(self: &Arc<Self>, scan_window: ScanWindow) -> Arc<Self>
     where
         F: Fn(XaeroEvent) -> XaeroEvent + Send + Sync + 'static,
@@ -149,6 +195,60 @@ impl SubjectOps for Subject {
     fn blackhole(self: &Arc<Self>) -> Arc<Self> {
         let mut new = (**self).clone();
         new.ops.push(Operator::Blackhole);
+        Arc::new(new)
+    }
+}
+
+impl SubjectBatchOps for Subject {
+    fn batch(
+        self: &Arc<Self>,
+        duration: Duration,
+        event_count_threshold: Option<usize>,
+        pipeline: Vec<Operator>,
+    ) -> Arc<Self> {
+        let mut new = (**self).clone();
+        new.batch_context = Some(SubjectBatchContext {
+            init_time: emit_secs(),
+            duration: duration.as_secs(),
+            event_count_threshold,
+            pipe: Pipe::new(BusKind::Data, None),
+            pipeline: pipeline.clone(),
+        });
+        new.ops.push(Operator::BatchMode(
+            duration,
+            event_count_threshold,
+            pipeline,
+        ));
+        Arc::new(new)
+    }
+
+    fn sort<F>(self: &Arc<Self>, sorter: F) -> Arc<Self>
+    where
+        F: Fn(&XaeroEvent, &XaeroEvent) -> std::cmp::Ordering + Send + Sync + 'static,
+    {
+        let mut new = (**self).clone();
+        /// still lazy ~~ woohoo! ~~~
+        new.ops.push(Operator::Sort(Arc::new(sorter)));
+        Arc::new(new)
+    }
+
+    fn fold_left<F>(self: &Arc<Self>, fold_left: F) -> Arc<Self>
+    where
+        F: Fn(XaeroEvent, Vec<XaeroEvent>) -> XaeroEvent + Send + Sync + 'static,
+    {
+        let mut new = (**self).clone();
+        /// still lazy ~~ woohoo! ~~~
+        new.ops.push(Operator::Fold(Arc::new(fold_left)));
+        Arc::new(new)
+    }
+
+    fn reduce<F>(self: &Arc<Self>, reducer: F) -> Arc<Self>
+    where
+        F: Fn(Vec<XaeroEvent>) -> Vec<u8> + Send + Sync + 'static,
+    {
+        let mut new = (**self).clone();
+        /// still lazy ~~ woohoo! ~~~
+        new.ops.push(Operator::Reduce(Arc::new(reducer)));
         Arc::new(new)
     }
 }
@@ -192,6 +292,8 @@ impl Subject {
             unsafe_run_called: Arc::new(AtomicBool::new(false)),
             workspace_id: sha_256_hash(workspace_id.as_bytes().to_vec()),
             object_id: sha_256_hash(object_id.as_bytes().to_vec()),
+            batch_mode: Arc::new(AtomicBool::new(false)), // by default its false.
+            batch_context: None,
         })
     }
 
