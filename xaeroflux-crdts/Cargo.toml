@@ -17,6 +17,8 @@ name = "xaeroflux_crdt"
 crate-type = ["rlib"]
 
 [dependencies]
+xaeroflux-core = {path = "../xaeroflux-core"}
+
 # Core CRDT algorithms
 crdts = "7.3.2"
 

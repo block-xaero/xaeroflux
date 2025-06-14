@@ -6,7 +6,7 @@
 //! - Serialization support via `rkyv` for zero-copy archiving.
 //! - `EVENT_HEADER` magic and `META_BASE` offset for metadata event encoding.
 
-use std::{fmt::Debug, sync::Arc};
+use std::{cmp::Ordering, fmt::Debug, sync::Arc, time::Duration};
 
 use bytemuck::{Pod, Zeroable};
 use rkyv::{Archive, Deserialize, Serialize};
@@ -240,9 +240,13 @@ pub struct ScanWindow {
 unsafe impl Pod for ScanWindow {}
 unsafe impl Zeroable for ScanWindow {}
 
+#[allow(clippy::type_complexity)] // FIXME  could be simple here Fn(XaeroEvent) -> XaeroEvent + Send + Sync>
 /// Defines per-event pipeline operations.
 #[derive(Clone)]
 pub enum Operator {
+    // Mode operators
+    StreamingMode, // ALWAYS ON, UNLESS IN BatchMode
+    // Stream Operators
     Scan(Arc<ScanWindow>),
     /// Transform the event into another event.
     Map(Arc<dyn Fn(XaeroEvent) -> XaeroEvent + Send + Sync>),
@@ -250,6 +254,19 @@ pub enum Operator {
     Filter(Arc<dyn Fn(&XaeroEvent) -> bool + Send + Sync>),
     /// Drop events without a Merkle proof.
     FilterMerkleProofs,
+
+    // Batch Mode operators
+    /// Buffer operator (encodes a pipeline of Operators that is added sequentially)
+    BatchMode(Duration, Option<usize>, Vec<Operator>),
+
+    /// Causal, temporal ordering for events for example or anything in between.
+    Sort(Arc<dyn Fn(&XaeroEvent, &XaeroEvent) -> Ordering + Send + Sync>),
+    /// Folds vector of xaero events to a single xaero event.
+    Fold(Arc<dyn Fn(XaeroEvent, Vec<XaeroEvent>) -> XaeroEvent + Send + Sync>),
+    /// Reduces a vector of xaero events to any form you like (Vec<u8> is pretty much for laxity)
+    Reduce(Arc<dyn Fn(Vec<XaeroEvent>) -> Vec<u8> + Send + Sync>),
+
+    // Systemic operators
     /// Terminal op: drop all events.
     Blackhole,
 }
@@ -257,7 +274,6 @@ pub enum Operator {
 /// Unit tests for event serialization and archiving via `rkyv`.
 #[cfg(test)]
 mod tests {
-
     use rkyv::{Archived, rancor::Failure};
 
     use crate::{event::Event, initialize};

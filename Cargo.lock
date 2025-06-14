@@ -6145,6 +6145,7 @@ dependencies = [
  "crdts",
  "rkyv 0.8.10",
  "serde",
+ "xaeroflux-core 0.5.0-m3",
 ]
 
 [[package]]
