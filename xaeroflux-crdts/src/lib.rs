@@ -32,7 +32,8 @@ impl VectorClock {
     pub fn new(latest_timestamp: u64, neighbor_clocks: HashMap<XaeroID, u64>) -> Self {
         VectorClock {
             latest_timestamp: latest_timestamp.max(
-                neighbor_clocks.values()
+                neighbor_clocks
+                    .values()
                     .max()
                     .unwrap_or(&latest_timestamp)
                     .wrapping_add(1),
@@ -50,7 +51,8 @@ impl VectorClock {
     pub fn resync(&mut self, neighbor_clocks: HashMap<XaeroID, u64>) -> Self {
         VectorClock {
             latest_timestamp: self.latest_timestamp.max(
-                neighbor_clocks.values()
+                neighbor_clocks
+                    .values()
                     .max()
                     .unwrap_or(&self.latest_timestamp)
                     .wrapping_add(1),

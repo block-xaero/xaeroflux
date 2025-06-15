@@ -129,6 +129,7 @@ impl From<SystemPayload> for NetworkPayload {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone)]
 pub enum DataEvent {
     Event { from: Peer, event: XaeroGossipEvent },
