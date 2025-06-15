@@ -172,6 +172,8 @@ mod tests {
             .send(XaeroEvent {
                 evt: Event::new(sample_data, EventType::ApplicationEvent(1).to_u8()),
                 merkle_proof: None,
+                author_id: None,
+                latest_ts: None,
             })
             .expect("Failed to send to AOFActor listener inbox");
 

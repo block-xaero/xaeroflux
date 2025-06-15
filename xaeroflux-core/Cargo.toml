@@ -17,6 +17,7 @@ diagnostics = []
 default = []
 
 [dependencies]
+xaeroid = {path = "../../xaeroID"}
 ed25519-dalek = { version = "2.1.1", features = ["rand_core"] }
 rand = "0.8"
 tokio = { version = "1.45.1", default-features = false, features = ["rt-multi-thread", "macros", "net", "sync"] }

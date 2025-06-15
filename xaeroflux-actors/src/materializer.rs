@@ -89,6 +89,8 @@ impl Materializer for ThreadPoolForSubjectMaterializer {
                             EventType::SystemEvent(SystemEventKind::ReplayControl).to_u8(),
                         ),
                         merkle_proof: None,
+                        author_id: None,
+                        latest_ts: None,
                     })
                     .expect("failed_to_unwrap");
 
@@ -102,6 +104,8 @@ impl Materializer for ThreadPoolForSubjectMaterializer {
                             EventType::SystemEvent(SystemEventKind::ReplayData).to_u8(),
                         ),
                         merkle_proof: None,
+                        author_id: None,
+                        latest_ts: None,
                     })
                     .expect("failed_to_unwrap");
             }
@@ -238,6 +242,8 @@ fn process_batch_mode_loop(subject: Arc<Subject>, bus_kind: BusKind) {
                 let acc = XaeroEvent {
                     evt: Default::default(),
                     merkle_proof: None,
+                    author_id: None,
+                    latest_ts: None,
                 };
                 let res = f(acc, buffer.clone());
                 f_result = Some(res);
@@ -248,6 +254,8 @@ fn process_batch_mode_loop(subject: Arc<Subject>, bus_kind: BusKind) {
                 let res = XaeroEvent {
                     evt: Event::new(res, EventType::ApplicationEvent(1).to_u8()),
                     merkle_proof: None,
+                    author_id: None,
+                    latest_ts: None,
                 };
                 f_result = Some(res);
             }

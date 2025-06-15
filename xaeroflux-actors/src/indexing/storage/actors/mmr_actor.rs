@@ -125,6 +125,8 @@ impl Drop for MmrIndexingActor {
         let res = self.pipe.sink.tx.send(XaeroEvent {
             evt: Event::new(vec![], SystemEvent(Shutdown).to_u8()),
             merkle_proof: None,
+            author_id: None,
+            latest_ts: None,
         });
         match res {
             Ok(_) => {
@@ -341,6 +343,8 @@ impl MmrIndexingActor {
                 EventType::SystemEvent(SystemEventKind::MmrAppended).to_u8(),
             ),
             merkle_proof: None,
+            author_id: None,
+            latest_ts: None,
         };
         let mmrc = mmr_event.clone();
         output_pipe.source.tx.send(mmr_event)?;
@@ -395,6 +399,8 @@ mod actor_tests {
         let xaero_evt = XaeroEvent {
             evt: e,
             merkle_proof: None,
+            author_id: None,
+            latest_ts: None,
         };
         pipe.sink.tx.send(xaero_evt).expect("failed to send event");
     }

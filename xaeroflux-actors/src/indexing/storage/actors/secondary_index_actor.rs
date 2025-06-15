@@ -60,6 +60,8 @@ impl SecondaryIndexActor {
                                 SystemEvent(SystemEventKind::MmrAppended).to_u8(),
                             ),
                             merkle_proof: None,
+                            author_id: None,
+                            latest_ts: None,
                         })
                         .expect("failed_to_unravel");
                     } else {
@@ -73,6 +75,8 @@ impl SecondaryIndexActor {
                                 SystemEvent(SystemEventKind::MmrAppendFailed).to_u8(),
                             ),
                             merkle_proof: None,
+                            author_id: None,
+                            latest_ts: None,
                         })
                         .expect("failed_to_unravel");
                     }
@@ -103,6 +107,8 @@ impl SecondaryIndexActor {
                                     SystemEvent(SystemEventKind::SecondaryIndexWritten).to_u8(),
                                 ),
                                 merkle_proof: None,
+                                author_id: None,
+                                latest_ts: None,
                             })
                             .expect("failed_to_unravel");
                     } else {
@@ -118,6 +124,8 @@ impl SecondaryIndexActor {
                                     SystemEvent(SystemEventKind::SecondaryIndexFailed).to_u8(),
                                 ),
                                 merkle_proof: None,
+                                author_id: None,
+                                latest_ts: None,
                             })
                             .expect("failed_to_unravel");
                     }
