@@ -259,6 +259,8 @@ impl Drop for SegmentWriterActor {
         let res = self.pipe.sink.tx.send(XaeroEvent {
             evt: Event::new(vec![], SystemEvent(Shutdown).to_u8()),
             merkle_proof: None,
+            author_id: None,
+            latest_ts: None,
         });
         match res {
             Ok(_) => {
@@ -452,6 +454,8 @@ impl SegmentWriterActor {
                 EventType::SystemEvent(SystemEventKind::PayloadWritten).to_u8(),
             ),
             merkle_proof: None,
+            author_id: None,
+            latest_ts: None,
         }) {
             tracing::error!("Failed to send PayloadWritten message: {}", e);
         } else {
@@ -492,6 +496,8 @@ mod tests {
         let xaero_evt = XaeroEvent {
             evt: e,
             merkle_proof: None,
+            author_id: None,
+            latest_ts: None,
         };
         pipe.sink.tx.send(xaero_evt).expect("failed to send event");
     }

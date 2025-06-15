@@ -162,6 +162,8 @@ pub fn subject(input: TokenStream) -> TokenStream {
                     ).to_u8()
                 ),
                 merkle_proof: None,
+                author_id: None,
+                latest_ts: None,
             };
             subject.control.sink.tx.send(wc_evt)
                 .expect("failed to bootstrap: WorkspaceCreated");
@@ -175,6 +177,8 @@ pub fn subject(input: TokenStream) -> TokenStream {
                     ).to_u8()
                 ),
                 merkle_proof: None,
+                author_id: None,
+                latest_ts: None,
             };
             subject.control.sink.tx.send(oc_evt)
                 .expect("failed to bootstrap: ObjectCreated");

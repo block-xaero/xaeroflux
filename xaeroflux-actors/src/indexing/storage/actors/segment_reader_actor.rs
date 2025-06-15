@@ -55,6 +55,8 @@ impl Drop for SegmentReaderActor {
         let res = self.pipe.sink.tx.send(XaeroEvent {
             evt: Event::new(vec![], SystemEvent(Shutdown).to_u8()),
             merkle_proof: None,
+            author_id: None,
+            latest_ts: None,
         });
         match res {
             Ok(_) => {
@@ -250,6 +252,8 @@ impl SegmentReaderActor {
                                 let xaero_event = XaeroEvent {
                                     evt: deserialized_event,
                                     merkle_proof: None,
+                                    author_id: None,
+                                    latest_ts: None,
                                 };
 
                                 if let Err(e) = pipe.source.tx.send(xaero_event) {
@@ -349,6 +353,8 @@ mod tests {
             .send(XaeroEvent {
                 evt: replay_evt,
                 merkle_proof: None,
+                author_id: None,
+                latest_ts: None,
             })
             .expect("failed_to_unravel");
 
@@ -410,6 +416,8 @@ mod tests {
             .send(XaeroEvent {
                 evt: replay_evt,
                 merkle_proof: None,
+                author_id: None,
+                latest_ts: None,
             })
             .expect("failed_to_unravel");
 
@@ -471,6 +479,8 @@ mod tests {
             .send(XaeroEvent {
                 evt: replay_evt,
                 merkle_proof: None,
+                author_id: None,
+                latest_ts: None,
             })
             .expect("failed_to_unravel");
 
@@ -526,6 +536,8 @@ mod tests {
             .send(XaeroEvent {
                 evt: replay_evt,
                 merkle_proof: None,
+                author_id: None,
+                latest_ts: None,
             })
             .expect("failed_to_unravel");
 

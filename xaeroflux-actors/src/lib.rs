@@ -191,6 +191,8 @@ mod tests {
             .send(XaeroEvent {
                 evt: replay_evt,
                 merkle_proof: None,
+                author_id: None,
+                latest_ts: None,
             })
             .expect("send replay");
 
