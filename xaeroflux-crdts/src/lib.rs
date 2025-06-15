@@ -4,9 +4,12 @@
 use std::{cmp::Ordering, collections::HashMap, sync::Arc};
 
 use bytemuck::{Pod, Zeroable};
-use rkyv::rancor::Failure;
-use rkyv::{Archive, Deserialize, Serialize};
-use xaeroflux_core::event::{Event, EventType, XaeroEvent, CRDT_COUNTER_DECREMENT, CRDT_COUNTER_INCREMENT, CRDT_COUNTER_STATE, CRDT_REGISTER_STATE, CRDT_REGISTER_WRITE, CRDT_SET_ADD, CRDT_SET_REMOVE, CRDT_SET_STATE};
+use rkyv::{Archive, Deserialize, Serialize, rancor::Failure};
+use xaeroflux_core::event::{
+    CRDT_COUNTER_DECREMENT, CRDT_COUNTER_INCREMENT, CRDT_COUNTER_STATE, CRDT_REGISTER_STATE,
+    CRDT_REGISTER_WRITE, CRDT_SET_ADD, CRDT_SET_REMOVE, CRDT_SET_STATE, Event, EventType,
+    XaeroEvent,
+};
 use xaeroid::XaeroID;
 
 #[repr(C)]
@@ -29,9 +32,7 @@ impl VectorClock {
     pub fn new(latest_timestamp: u64, neighbor_clocks: HashMap<XaeroID, u64>) -> Self {
         VectorClock {
             latest_timestamp: latest_timestamp.max(
-                neighbor_clocks
-                    .iter()
-                    .map(|(_k, v)| v)
+                neighbor_clocks.values()
                     .max()
                     .unwrap_or(&latest_timestamp)
                     .wrapping_add(1),
@@ -49,9 +50,7 @@ impl VectorClock {
     pub fn resync(&mut self, neighbor_clocks: HashMap<XaeroID, u64>) -> Self {
         VectorClock {
             latest_timestamp: self.latest_timestamp.max(
-                neighbor_clocks
-                    .iter()
-                    .map(|(_k, v)| v)
+                neighbor_clocks.values()
                     .max()
                     .unwrap_or(&self.latest_timestamp)
                     .wrapping_add(1),
@@ -75,11 +74,12 @@ impl Eq for VectorClock {}
 
 impl PartialEq<Self> for VectorClock {
     fn eq(&self, other: &Self) -> bool {
-        self.latest_timestamp == other.latest_timestamp &&
-            self.neighbor_clocks == other.neighbor_clocks
+        self.latest_timestamp == other.latest_timestamp
+            && self.neighbor_clocks == other.neighbor_clocks
     }
 }
 
+#[allow(clippy::non_canonical_partial_ord_impl)]
 impl PartialOrd<Self> for VectorClock {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         self.latest_timestamp.partial_cmp(&other.latest_timestamp)
@@ -102,9 +102,16 @@ pub enum Sort {
     LamportTimestamp,
 }
 
+#[allow(dead_code)]
 // Separate storage for vector clocks
 pub struct VectorClockStore {
     clocks: HashMap<XaeroID, VectorClock>,
+}
+
+impl Default for VectorClockStore {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl VectorClockStore {
@@ -114,6 +121,7 @@ impl VectorClockStore {
         }
     }
 
+    #[allow(unused_variables)]
     pub fn update_from_event(&mut self, e: &XaeroEvent) {
         // Extract author info from event (you'll need to add these fields to XaeroEvent)
         // For now, we'll use a placeholder approach
@@ -122,6 +130,7 @@ impl VectorClockStore {
     }
 }
 
+#[allow(clippy::type_complexity)]
 impl Sort {
     pub fn to_operator(
         self,
@@ -154,22 +163,28 @@ impl Fold {
         self,
     ) -> Arc<dyn Fn(XaeroEvent, Vec<XaeroEvent>) -> XaeroEvent + Send + Sync> {
         match self {
-            Fold::LWWRegister => Arc::new(|acc: XaeroEvent, events: Vec<XaeroEvent>| -> XaeroEvent {
-                // Find the latest write operation
-                let latest_write = events
-                    .into_iter()
-                    .filter(|e| matches!(e.evt.event_type, EventType::ApplicationEvent(CRDT_REGISTER_WRITE)))
-                    .max_by_key(|event| event.evt.ts)
-                    .unwrap_or(acc);
+            Fold::LWWRegister =>
+                Arc::new(|acc: XaeroEvent, events: Vec<XaeroEvent>| -> XaeroEvent {
+                    // Find the latest write operation
+                    let latest_write = events
+                        .into_iter()
+                        .filter(|e| {
+                            matches!(
+                                e.evt.event_type,
+                                EventType::ApplicationEvent(CRDT_REGISTER_WRITE)
+                            )
+                        })
+                        .max_by_key(|event| event.evt.ts)
+                        .unwrap_or(acc);
 
-                // Return the winning write as final register state
-                XaeroEvent {
-                    evt: Event::new(latest_write.evt.data, CRDT_REGISTER_STATE),
-                    merkle_proof: latest_write.merkle_proof,
-                    author_id: None,
-                    latest_ts: None,
-                }
-            }),
+                    // Return the winning write as final register state
+                    XaeroEvent {
+                        evt: Event::new(latest_write.evt.data, CRDT_REGISTER_STATE),
+                        merkle_proof: latest_write.merkle_proof,
+                        author_id: None,
+                        latest_ts: None,
+                    }
+                }),
 
             Fold::ORSet => Arc::new(|_acc: XaeroEvent, events: Vec<XaeroEvent>| -> XaeroEvent {
                 use std::collections::HashSet;
@@ -216,7 +231,8 @@ impl Fold {
                         EventType::ApplicationEvent(CRDT_COUNTER_INCREMENT) => {
                             // Simple: treat event data as raw i64 bytes
                             if event.evt.data.len() >= 8 {
-                                let bytes: [u8; 8] = event.evt.data[0..8].try_into().unwrap_or([0; 8]);
+                                let bytes: [u8; 8] =
+                                    event.evt.data[0..8].try_into().unwrap_or([0; 8]);
                                 counter_value += i64::from_le_bytes(bytes);
                             }
                         }
@@ -234,37 +250,40 @@ impl Fold {
                 }
             }),
 
-            Fold::PNCounter => Arc::new(|_acc: XaeroEvent, events: Vec<XaeroEvent>| -> XaeroEvent {
-                let mut counter_value: i64 = 0;
+            Fold::PNCounter =>
+                Arc::new(|_acc: XaeroEvent, events: Vec<XaeroEvent>| -> XaeroEvent {
+                    let mut counter_value: i64 = 0;
 
-                // Process increment and decrement operations
-                for event in events {
-                    match event.evt.event_type {
-                        EventType::ApplicationEvent(CRDT_COUNTER_INCREMENT) => {
-                            if event.evt.data.len() >= 8 {
-                                let bytes: [u8; 8] = event.evt.data[0..8].try_into().unwrap_or([0; 8]);
-                                counter_value += i64::from_le_bytes(bytes);
+                    // Process increment and decrement operations
+                    for event in events {
+                        match event.evt.event_type {
+                            EventType::ApplicationEvent(CRDT_COUNTER_INCREMENT) => {
+                                if event.evt.data.len() >= 8 {
+                                    let bytes: [u8; 8] =
+                                        event.evt.data[0..8].try_into().unwrap_or([0; 8]);
+                                    counter_value += i64::from_le_bytes(bytes);
+                                }
                             }
-                        }
-                        EventType::ApplicationEvent(CRDT_COUNTER_DECREMENT) => {
-                            if event.evt.data.len() >= 8 {
-                                let bytes: [u8; 8] = event.evt.data[0..8].try_into().unwrap_or([0; 8]);
-                                counter_value -= i64::from_le_bytes(bytes);
+                            EventType::ApplicationEvent(CRDT_COUNTER_DECREMENT) => {
+                                if event.evt.data.len() >= 8 {
+                                    let bytes: [u8; 8] =
+                                        event.evt.data[0..8].try_into().unwrap_or([0; 8]);
+                                    counter_value -= i64::from_le_bytes(bytes);
+                                }
                             }
+                            _ => {}
                         }
-                        _ => {}
                     }
-                }
 
-                // Store as raw i64 bytes
-                let serialized = counter_value.to_le_bytes().to_vec();
-                XaeroEvent {
-                    evt: Event::new(serialized, CRDT_COUNTER_STATE),
-                    merkle_proof: None,
-                    author_id: None,
-                    latest_ts: None,
-                }
-            }),
+                    // Store as raw i64 bytes
+                    let serialized = counter_value.to_le_bytes().to_vec();
+                    XaeroEvent {
+                        evt: Event::new(serialized, CRDT_COUNTER_STATE),
+                        merkle_proof: None,
+                        author_id: None,
+                        latest_ts: None,
+                    }
+                }),
         }
     }
 }
@@ -285,7 +304,10 @@ impl Reduce {
             Reduce::CounterValue => Arc::new(|events: Vec<XaeroEvent>| -> Vec<u8> {
                 // Extract the final counter value from the state event
                 for event in events {
-                    if matches!(event.evt.event_type, EventType::ApplicationEvent(CRDT_COUNTER_STATE)) {
+                    if matches!(
+                        event.evt.event_type,
+                        EventType::ApplicationEvent(CRDT_COUNTER_STATE)
+                    ) {
                         return event.evt.data;
                     }
                 }
@@ -296,19 +318,27 @@ impl Reduce {
             Reduce::SetContents => Arc::new(|events: Vec<XaeroEvent>| -> Vec<u8> {
                 // Extract the final set contents from the state event
                 for event in events {
-                    if matches!(event.evt.event_type, EventType::ApplicationEvent(CRDT_SET_STATE)) {
+                    if matches!(
+                        event.evt.event_type,
+                        EventType::ApplicationEvent(CRDT_SET_STATE)
+                    ) {
                         return event.evt.data;
                     }
                 }
                 // Default to empty set
                 let empty_set: Vec<Vec<u8>> = Vec::new();
-                rkyv::to_bytes::<Failure>(&empty_set).unwrap_or_default().to_vec()
+                rkyv::to_bytes::<Failure>(&empty_set)
+                    .unwrap_or_default()
+                    .to_vec()
             }),
 
             Reduce::RegisterValue => Arc::new(|events: Vec<XaeroEvent>| -> Vec<u8> {
                 // Extract the final register value from the state event
                 for event in events {
-                    if matches!(event.evt.event_type, EventType::ApplicationEvent(CRDT_REGISTER_STATE)) {
+                    if matches!(
+                        event.evt.event_type,
+                        EventType::ApplicationEvent(CRDT_REGISTER_STATE)
+                    ) {
                         return event.evt.data;
                     }
                 }

@@ -1,6 +1,6 @@
 [package]
 name = "xaeroflux-crdts"
-version = "0.5.0-m3"
+version = "0.5.0-m4"
 edition = "2024"
 description = "EXPERIMENTAL: CRDT layer for xaeroflux"
 categories = ["database", "database-implementations"]
@@ -17,8 +17,8 @@ name = "xaeroflux_crdt"
 crate-type = ["rlib"]
 
 [dependencies]
-xaeroid = { path = "../../xaeroID" }
-xaeroflux-core = { path = "../xaeroflux-core" }
+xaeroid = { version = "0.2.1-rc1" }
+xaeroflux-core = { version = "0.5.0-m4" }
 
 # Core CRDT algorithms
 crdts = "7.3.2"
