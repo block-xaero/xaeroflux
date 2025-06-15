@@ -275,7 +275,7 @@ pub enum SystemErrorCode {
 
 /// Envelope wrapping an application or system `Event` payload
 /// along with an optional Merkle inclusion proof.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct XaeroEvent {
     /// Core event data (e.g., domain event encoded as bytes).
     pub evt: Event<Vec<u8>>,
@@ -284,17 +284,6 @@ pub struct XaeroEvent {
 
     pub author_id: Option<XaeroID>,
     pub latest_ts: Option<u64>,
-}
-
-impl Default for XaeroEvent {
-    fn default() -> Self {
-        XaeroEvent {
-            evt: Default::default(),
-            merkle_proof: None,
-            author_id: None,
-            latest_ts: None,
-        }
-    }
 }
 
 #[repr(C)]
