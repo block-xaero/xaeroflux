@@ -18,7 +18,7 @@ crate-type = ["rlib"]
 
 [dependencies]
 xaeroid = { version = "0.2.1-rc1" }
-xaeroflux-core = { version = "0.7.0-m5" }
+xaeroflux-core = {version = "0.7.0-m5" }
 
 # Core CRDT algorithms
 crdts = "7.3.2"
