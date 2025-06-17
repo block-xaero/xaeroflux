@@ -135,11 +135,7 @@ impl XaeroMerkleTreeOps for XaeroMerkleTree {
         trace!("building tree now with {} leaves", leaves);
         for (i, data) in data_to_push.iter().enumerate() {
             nodes[leaf_start + i] = XaeroMerkleNode::new(*data, true);
-            trace!(
-                "Leaf node: {:#?} at index: {}",
-                hex::encode(data),
-                leaf_start + i
-            );
+            trace!("Leaf node: {:#?} at index: {}", hex::encode(data), leaf_start + i);
         }
         let mut tree = XaeroMerkleTree {
             root_hash: [0; 32],
@@ -162,10 +158,7 @@ impl XaeroMerkleTreeOps for XaeroMerkleTree {
         trace!("Total size: {}", tree.total_size);
         trace!("Nodes: {:#?}", tree.nodes);
         trace!("Leaves: {:#?}", tree.leaf_start);
-        trace!(
-            "Tree size (leaves + internal nodes) : {:#?}",
-            tree.nodes.len()
-        );
+        trace!("Tree size (leaves + internal nodes) : {:#?}", tree.nodes.len());
         tree
     }
 
@@ -256,10 +249,7 @@ impl XaeroMerkleTreeOps for XaeroMerkleTree {
                         proof.value.push(segment);
                     }
                     idx = (idx - 1) / 2; // move to parent
-                    trace!(
-                        "Moving to parent node: {:#?} at index: {}",
-                        self.nodes[idx], idx
-                    );
+                    trace!("Moving to parent node: {:#?} at index: {}", self.nodes[idx], idx);
                     if idx == 0 {
                         break;
                     }
@@ -357,9 +347,7 @@ mod tests {
         ];
         let xaer3_tree = XaeroMerkleTree::neo(data);
         trace!("XAER3: Tree initialized with leaves: {:#?}", tree.nodes);
-        assert!(
-            !xaer3_tree.verify_proof(proof.expect("Proof provided was invalid"), data_to_prove)
-        );
+        assert!(!xaer3_tree.verify_proof(proof.expect("Proof provided was invalid"), data_to_prove));
     }
 
     #[test]

@@ -56,12 +56,7 @@ pub trait XaeroMmrOps {
 
     /// Given a leaf's hash, its proof, and an expected root, verify
     /// that this leaf really is included under that root.
-    fn verify(
-        &self,
-        leaf_hash: [u8; 32],
-        proof: &XaeroMerkleProof,
-        expected_root: [u8; 32],
-    ) -> bool;
+    fn verify(&self, leaf_hash: [u8; 32], proof: &XaeroMerkleProof, expected_root: [u8; 32]) -> bool;
 
     /// Convenience: gets the leaf hash by its index.
     fn get_leaf_hash_by_index(&self, index: usize) -> Option<&[u8; 32]>;
@@ -157,10 +152,7 @@ impl XaeroMmrOps for XaeroMmr {
         let peak = &self.peaks[peak_idx];
 
         // 2) Compute the start index of that peak in leaf_hashes
-        let start = self.peaks[..peak_idx]
-            .iter()
-            .map(|p| 1 << p.height)
-            .sum::<usize>();
+        let start = self.peaks[..peak_idx].iter().map(|p| 1 << p.height).sum::<usize>();
 
         let mut proof = XaeroMerkleProof {
             leaf_index,
@@ -172,9 +164,7 @@ impl XaeroMmrOps for XaeroMmr {
             let slice = &self.leaf_hashes[start..start + (1 << peak.height)];
             let mut subtree = XaeroMerkleTree::neo(slice.to_vec());
             let leaf_val = slice[target];
-            let mut sub_proof = subtree
-                .generate_proof(leaf_val)
-                .expect("leaf must exist in its peak");
+            let mut sub_proof = subtree.generate_proof(leaf_val).expect("leaf must exist in its peak");
             proof.value.append(&mut sub_proof.value);
         }
 
@@ -188,12 +178,7 @@ impl XaeroMmrOps for XaeroMmr {
         Some(proof)
     }
 
-    fn verify(
-        &self,
-        leaf_hash: [u8; 32],
-        proof: &XaeroMerkleProof,
-        expected_root: [u8; 32],
-    ) -> bool {
+    fn verify(&self, leaf_hash: [u8; 32], proof: &XaeroMerkleProof, expected_root: [u8; 32]) -> bool {
         let mut running = leaf_hash;
         for seg in &proof.value {
             if seg.is_left {
@@ -236,10 +221,7 @@ mod tests {
         let mut mmr = XaeroMmr::new();
         let a = fill(0x01);
         let changed = mmr.append(a);
-        tracing::debug!(
-            "changed: {:?}",
-            changed.iter().map(|e| e.root).collect::<Vec<_>>()
-        );
+        tracing::debug!("changed: {:?}", changed.iter().map(|e| e.root).collect::<Vec<_>>());
         // leaf_count and peaks
         assert_eq!(mmr.leaf_count(), 1);
         assert_eq!(mmr.peaks().len(), 1);

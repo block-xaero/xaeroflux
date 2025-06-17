@@ -11,9 +11,7 @@ use bytemuck::from_bytes;
 use memmap2::Mmap;
 use xaeroflux_core::event::ArchivedEvent;
 
-use crate::indexing::storage::format::{
-    EVENT_HEADER_SIZE, PAGE_SIZE, XAERO_MAGIC, XaeroOnDiskEventHeader, unarchive,
-};
+use crate::indexing::storage::format::{EVENT_HEADER_SIZE, PAGE_SIZE, XAERO_MAGIC, XaeroOnDiskEventHeader, unarchive};
 
 /// Memory-map a segment file at the given path for read-only access.
 ///
@@ -59,8 +57,7 @@ impl<'a> Iterator for PageEventIterator<'a> {
             return None;
         }
         // 2) Read header
-        let hdr: &XaeroOnDiskEventHeader =
-            from_bytes(&self.page[self.offset..self.offset + EVENT_HEADER_SIZE]);
+        let hdr: &XaeroOnDiskEventHeader = from_bytes(&self.page[self.offset..self.offset + EVENT_HEADER_SIZE]);
         // 3) Stop on padding
         if hdr.marker != XAERO_MAGIC {
             return None;
@@ -84,8 +81,7 @@ impl<'a> Iterator for PageEventIterator<'a> {
 /// Splits the mapped memory into fixed-size pages and applies
 /// `PageEventIterator` to each, flattening into a single event stream.
 pub fn iter_all_events(mmap: &Mmap) -> impl Iterator<Item = &'_ ArchivedEvent<Vec<u8>>> + '_ {
-    mmap.chunks_exact(PAGE_SIZE)
-        .flat_map(PageEventIterator::new)
+    mmap.chunks_exact(PAGE_SIZE).flat_map(PageEventIterator::new)
 }
 
 #[cfg(test)]
@@ -94,10 +90,13 @@ mod tests {
 
     use memmap2::MmapMut;
     use tempfile::TempDir;
-    use xaeroflux_core::event::{Event, EventType};
+    use xaeroflux_core::{
+        event::{Event, EventType},
+        initialize,
+    };
 
     use super::*;
-    use crate::{core::initialize, indexing::storage::format};
+    use crate::indexing::storage::format;
 
     /// Create a temp dir + segment file of exactly n_pages*PAGE_SIZE bytes,
     /// and return (TempDir, path, mutable mmap).
@@ -111,8 +110,7 @@ mod tests {
             .truncate(true)
             .open(&path)
             .expect("open file");
-        file.set_len((n_pages * PAGE_SIZE) as u64)
-            .expect("failed_to_wrap");
+        file.set_len((n_pages * PAGE_SIZE) as u64).expect("failed_to_wrap");
         let mm = unsafe { MmapMut::map_mut(&file).expect("failed_to_wrap") };
         (tmp, path, mm)
     }
@@ -133,8 +131,7 @@ mod tests {
         mm[0..frame.len()].copy_from_slice(&frame);
         mm.flush().expect("failed_to_wrap");
 
-        let mmap =
-            read_segment_file(path.to_str().expect("failed_to_wrap")).expect("failed_to_wrap");
+        let mmap = read_segment_file(path.to_str().expect("failed_to_wrap")).expect("failed_to_wrap");
         let page = &mmap[..PAGE_SIZE];
         let mut iter = PageEventIterator::new(page);
 
@@ -156,8 +153,7 @@ mod tests {
         mm[PAGE_SIZE..PAGE_SIZE + f2.len()].copy_from_slice(&f2);
         mm.flush().expect("failed_to_wrap");
 
-        let mmap =
-            read_segment_file(path.to_str().expect("failed_to_wrap")).expect("failed_to_wrap");
+        let mmap = read_segment_file(path.to_str().expect("failed_to_wrap")).expect("failed_to_wrap");
         let all: Vec<&ArchivedEvent<Vec<u8>>> = iter_all_events(&mmap).collect();
         assert_eq!(all.len(), 2);
         assert_eq!(all[0].data.as_slice(), &[4]);
@@ -176,8 +172,7 @@ mod tests {
         mm[f1.len()..f1.len() + f2.len()].copy_from_slice(&f2);
         mm.flush().expect("failed_to_wrap");
 
-        let mmap =
-            read_segment_file(path.to_str().expect("failed_to_wrap")).expect("failed_to_wrap");
+        let mmap = read_segment_file(path.to_str().expect("failed_to_wrap")).expect("failed_to_wrap");
         let all: Vec<&ArchivedEvent<Vec<u8>>> = iter_all_events(&mmap).collect();
         assert_eq!(all.len(), 2);
         assert_eq!(all[0].data.as_slice(), &[7]);

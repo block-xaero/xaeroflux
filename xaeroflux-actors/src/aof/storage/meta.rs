@@ -7,8 +7,8 @@ use std::{
 // use rkyv::rancor::Failure;
 // use rkyv::api::high::access;
 use liblmdb::{
-    MDB_RDONLY, MDB_txn, MDB_val, mdb_cursor_close, mdb_cursor_get, mdb_cursor_open, mdb_get,
-    mdb_txn_abort, mdb_txn_begin,
+    MDB_RDONLY, MDB_txn, MDB_val, mdb_cursor_close, mdb_cursor_get, mdb_cursor_open, mdb_get, mdb_txn_abort,
+    mdb_txn_begin,
 };
 use rkyv::util::AlignedVec;
 
@@ -46,8 +46,7 @@ pub unsafe fn get_meta_val(env: &Arc<Mutex<LmdbEnv>>, key: &[u8]) -> AlignedVec 
         panic!("failed to get meta value: {}", rc);
     }
     // copy into aligned vec
-    let slice =
-        unsafe { std::slice::from_raw_parts(data_val.mv_data as *const u8, data_val.mv_size) };
+    let slice = unsafe { std::slice::from_raw_parts(data_val.mv_data as *const u8, data_val.mv_size) };
     let mut av = AlignedVec::new();
     av.extend_from_slice(slice);
     // abort txn
@@ -118,8 +117,7 @@ pub fn iterate_segment_meta_by_range(
             // skip static or non-composite keys (we only want 16-byte ts_start‖segment_index keys)
             if key_val.mv_size != 16 {
                 // advance cursor and continue
-                let rc_skip =
-                    mdb_cursor_get(cursor, &mut key_val, &mut data_val, MDB_cursor_op_MDB_NEXT);
+                let rc_skip = mdb_cursor_get(cursor, &mut key_val, &mut data_val, MDB_cursor_op_MDB_NEXT);
                 if rc_skip != 0 {
                     break; // no more entries
                 }
@@ -137,8 +135,7 @@ pub fn iterate_segment_meta_by_range(
             }
 
             // 6) Directly parse raw SegmentMeta bytes (packed struct allows unaligned)
-            let data_slice =
-                std::slice::from_raw_parts(data_val.mv_data as *const u8, data_val.mv_size);
+            let data_slice = std::slice::from_raw_parts(data_val.mv_data as *const u8, data_val.mv_size);
             let sm: &SegmentMeta = bytemuck::from_bytes(data_slice);
             results.push(*sm);
 
@@ -165,10 +162,11 @@ mod meta_tests {
     use xaeroflux_core::{
         date_time::emit_secs,
         event::{Event, EventType},
+        initialize,
     };
 
     use super::*;
-    use crate::{BusKind, aof::storage::lmdb::push_event, core::initialize};
+    use crate::{BusKind, aof::storage::lmdb::push_event};
 
     /// Helper to build a SegmentMeta with predictable fields.
     fn make_meta(ts_start: u64, ts_end: u64, idx: usize) -> SegmentMeta {
@@ -188,11 +186,7 @@ mod meta_tests {
         initialize();
         let dir = tempdir().expect("failed_to_unravel");
         let env = Arc::new(Mutex::new(
-            LmdbEnv::new(
-                dir.path().to_str().expect("failed_to_unravel"),
-                BusKind::Data,
-            )
-            .expect("failed_to_unravel"),
+            LmdbEnv::new(dir.path().to_str().expect("failed_to_unravel"), BusKind::Data).expect("failed_to_unravel"),
         ));
 
         let all = iterate_segment_meta_by_range(&env, 0, None).expect("failed_to_unravel");
@@ -204,11 +198,7 @@ mod meta_tests {
         initialize();
         let dir = tempdir().expect("failed_to_unravel");
         let env = Arc::new(Mutex::new(
-            LmdbEnv::new(
-                dir.path().to_str().expect("failed_to_unravel"),
-                BusKind::Data,
-            )
-            .expect("failed_to_unravel"),
+            LmdbEnv::new(dir.path().to_str().expect("failed_to_unravel"), BusKind::Data).expect("failed_to_unravel"),
         ));
 
         let ts = emit_secs();
@@ -232,19 +222,11 @@ mod meta_tests {
         initialize();
         let dir = tempdir().expect("failed_to_unravel");
         let env = Arc::new(Mutex::new(
-            LmdbEnv::new(
-                dir.path().to_str().expect("failed_to_unravel"),
-                BusKind::Control,
-            )
-            .expect("failed_to_unravel"),
+            LmdbEnv::new(dir.path().to_str().expect("failed_to_unravel"), BusKind::Control).expect("failed_to_unravel"),
         ));
 
         // create three metas at t=10,20,30
-        let metas = [
-            make_meta(10, 15, 0),
-            make_meta(20, 25, 1),
-            make_meta(30, 35, 2),
-        ];
+        let metas = [make_meta(10, 15, 0), make_meta(20, 25, 1), make_meta(30, 35, 2)];
         for meta in metas.iter() {
             let ev = Event::new(bytes_of(meta).to_vec(), EventType::MetaEvent(1).to_u8());
             push_event(&env, &ev).expect("failed_to_unravel");
@@ -253,9 +235,7 @@ mod meta_tests {
         // scan entire range → all three, in order
         let all = iterate_segment_meta_by_range(&env, 0, None).expect("failed_to_unravel");
         assert_eq!(all.len(), 3);
-        assert_eq!(all.iter().map(|m| m.ts_start).collect::<Vec<_>>(), vec![
-            10, 20, 30
-        ]);
+        assert_eq!(all.iter().map(|m| m.ts_start).collect::<Vec<_>>(), vec![10, 20, 30]);
 
         // scan [15..30) → only the one at ts_start=20
         let mid = iterate_segment_meta_by_range(&env, 15, Some(30)).expect("failed_to_unravel");
