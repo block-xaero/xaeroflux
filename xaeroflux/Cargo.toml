@@ -1,6 +1,6 @@
 [package]
 name = "xaeroflux"
-version = "0.5.0-m4"
+version = "0.7.0-m5"
 edition     = "2024"
 description = "EXPERIMENTAL: actor layer for xaeroflux"
 categories = ["database", "database-implementations"]
@@ -13,7 +13,7 @@ homepage = "https://blockxaero.io"
 readme = "README.md"
 
 [dependencies]
-xaeroflux-core = "0.7.0-m5"
-xaeroflux-actors =  "0.7.0-m5"
-xaeroflux-macros =  "0.7.0-m5"
-xaeroflux-crdts = "0.7.0-m5"
+xaeroflux-core = {version = "0.7.0-m5"}
+xaeroflux-actors =  {version = "0.7.0-m5"}
+xaeroflux-macros =  {version = "0.7.0-m5"}
+xaeroflux-crdts = {version = "0.7.0-m5"}
