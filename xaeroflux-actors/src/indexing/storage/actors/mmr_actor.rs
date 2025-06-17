@@ -11,10 +11,7 @@ use std::sync::{Arc, Mutex};
 use xaeroflux_core::{
     IO_POOL, XAERO_DISPATCHER_POOL,
     date_time::emit_secs,
-    event::{
-        Event, EventType, EventType::SystemEvent, SystemEventKind, SystemEventKind::Shutdown,
-        XaeroEvent,
-    },
+    event::{Event, EventType, EventType::SystemEvent, SystemEventKind, SystemEventKind::Shutdown, XaeroEvent},
     hash::sha_256,
     listeners::EventListener,
     system_paths::*,
@@ -77,10 +74,7 @@ impl MmrState {
         self.initialized = true;
     }
 
-    fn update_metadata(
-        &mut self,
-        meta_db: &Arc<Mutex<LmdbEnv>>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn update_metadata(&mut self, meta_db: &Arc<Mutex<LmdbEnv>>) -> Result<(), Box<dyn std::error::Error>> {
         let mmr_meta = MmrMeta {
             mmr_size: self.mmr_size,
             last_leaf_hash: self.last_leaf_hash,
@@ -152,11 +146,7 @@ impl Drop for MmrIndexingActor {
 
 impl MmrIndexingActor {
     /// Create a new `MmrIndexingActor` with optional segment configuration.
-    pub fn new(
-        name: SubjectHash,
-        pipe: Arc<Pipe>,
-        segment_config_opt: Option<SegmentConfig>,
-    ) -> Self {
+    pub fn new(name: SubjectHash, pipe: Arc<Pipe>, segment_config_opt: Option<SegmentConfig>) -> Self {
         let encoded_hash = hex::encode(name.0);
         // Setup segment configuration
         let segment_config = segment_config_opt.unwrap_or(SegmentConfig {
@@ -177,12 +167,7 @@ impl MmrIndexingActor {
         // Setup LMDB environment for raw event storage
         let meta_db = Arc::new(Mutex::new(
             LmdbEnv::new(
-                emit_data_path_with_subject_hash(
-                    &segment_config.lmdb_env_path,
-                    name.0,
-                    NAME_PREFIX,
-                )
-                .as_str(),
+                emit_data_path_with_subject_hash(&segment_config.lmdb_env_path, name.0, NAME_PREFIX).as_str(),
                 BusKind::Data,
             )
             .expect("failed to create LmdbEnv"),
@@ -226,10 +211,7 @@ impl MmrIndexingActor {
         meta_db: Arc<Mutex<LmdbEnv>>,
         mmr: Arc<Mutex<XaeroMmr>>,
         mmr_state: Arc<Mutex<MmrState>>,
-    ) -> (
-        Option<std::thread::JoinHandle<()>>,
-        Option<std::thread::JoinHandle<()>>,
-    ) {
+    ) -> (Option<std::thread::JoinHandle<()>>, Option<std::thread::JoinHandle<()>>) {
         use hex;
         let _segment_writer_pipe = segment_writer_pipe.clone();
         let pipe_clone = pipe.clone();
@@ -316,9 +298,7 @@ impl MmrIndexingActor {
 
         // Step 4: Update persistent state and MMR
         let new_mmr_size = {
-            let mut state_guard = mmr_state
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut state_guard = mmr_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             state_guard.initialize_from_metadata(meta_db);
 
             let mut mmr_guard = mmr.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -384,16 +364,13 @@ mod actor_tests {
     use xaeroflux_core::{
         event::{Event, EventType, SystemEventKind},
         hash::sha_256,
-        init_xaero_pool, shutdown_all_pools,
+        init_xaero_pool, initialize, shutdown_all_pools,
     };
 
     use super::*;
-    use crate::{
-        core::initialize,
-        indexing::storage::{actors::segment_writer_actor::SegmentConfig, format::archive},
-    };
+    use crate::indexing::storage::{actors::segment_writer_actor::SegmentConfig, format::archive};
 
-    /// Helper to wrap an Event<Vec<u8>> into a XaeroEvent and send it via pipe.
+    // Helper to wrap an Event<Vec<u8>> into a XaeroEvent and send it via pipe.
     fn send_app_event(pipe: &Arc<Pipe>, data: Vec<u8>) {
         let e = Event::new(data, EventType::ApplicationEvent(1).to_u8());
         let xaero_evt = XaeroEvent {
@@ -462,10 +439,7 @@ mod actor_tests {
             }
         }
 
-        assert!(
-            received_mmr_appended,
-            "Expected to receive MmrAppended event"
-        );
+        assert!(received_mmr_appended, "Expected to receive MmrAppended event");
 
         // Instead of trying to recompute the hash, just verify we got a 32-byte hash
         if let Some(actual_leaf_hash) = received_leaf_hash {
@@ -534,8 +508,7 @@ mod actor_tests {
 
         // Optionally verify the content contains the leaf hash
         if let Some(file_entry) = segment_files.first() {
-            let file_content =
-                std::fs::read(file_entry.path()).expect("failed to read segment file");
+            let file_content = std::fs::read(file_entry.path()).expect("failed to read segment file");
             assert!(!file_content.is_empty(), "Segment file should contain data");
         }
         drop(_actor);
@@ -721,10 +694,7 @@ mod actor_tests {
             // Verify MMR state
             {
                 let mmr_guard = actor1.mmr().lock().expect("failed_to_unravel");
-                assert_eq!(
-                    mmr_guard.leaf_count, 3,
-                    "First actor should have processed 3 events"
-                );
+                assert_eq!(mmr_guard.leaf_count, 3, "First actor should have processed 3 events");
             }
 
             // Simulate crash by dropping the actor
@@ -737,8 +707,7 @@ mod actor_tests {
         // Second actor - should recover state
         {
             let pipe2 = Pipe::new(BusKind::Data, None);
-            let actor2 =
-                MmrIndexingActor::new_with_config(subject_hash, pipe2.clone(), cfg.clone());
+            let actor2 = MmrIndexingActor::new_with_config(subject_hash, pipe2.clone(), cfg.clone());
 
             // Send more events
             for i in 3..5 {
@@ -754,10 +723,7 @@ mod actor_tests {
                 let mmr_guard = actor2.mmr().lock().expect("failed_to_unravel");
                 // Note: Currently starts fresh, but metadata is preserved in LMDB
                 // In a full implementation, the MMR would be reconstructed from LMDB
-                assert_eq!(
-                    mmr_guard.leaf_count, 2,
-                    "Second actor processed 2 new events"
-                );
+                assert_eq!(mmr_guard.leaf_count, 2, "Second actor processed 2 new events");
             }
             drop(actor2);
         }

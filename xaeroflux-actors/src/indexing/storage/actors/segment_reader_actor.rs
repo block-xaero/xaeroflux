@@ -94,16 +94,14 @@ impl SegmentReaderActor {
         let meta_db = match pipe.sink.kind {
             BusKind::Control => Arc::new(Mutex::new(
                 LmdbEnv::new(
-                    emit_control_path_with_subject_hash(&config.lmdb_env_path, name.0, NAME_PREFIX)
-                        .as_str(),
+                    emit_control_path_with_subject_hash(&config.lmdb_env_path, name.0, NAME_PREFIX).as_str(),
                     BusKind::Control,
                 )
                 .expect("failed to create Control LmdbEnv"),
             )),
             BusKind::Data => Arc::new(Mutex::new(
                 LmdbEnv::new(
-                    emit_data_path_with_subject_hash(&config.lmdb_env_path, name.0, NAME_PREFIX)
-                        .as_str(),
+                    emit_data_path_with_subject_hash(&config.lmdb_env_path, name.0, NAME_PREFIX).as_str(),
                     BusKind::Data,
                 )
                 .expect("failed to create Data LmdbEnv"),
@@ -117,13 +115,8 @@ impl SegmentReaderActor {
         let listener = EventListener::new(
             "segment_reader_actor_listener",
             Arc::new(move |event: Event<Vec<u8>>| {
-                if let Err(e) = Self::handle_replay_event(
-                    &event,
-                    &pipe_clone,
-                    &meta_db_clone,
-                    &config_clone,
-                    bus_kind,
-                ) {
+                if let Err(e) = Self::handle_replay_event(&event, &pipe_clone, &meta_db_clone, &config_clone, bus_kind)
+                {
                     tracing::error!("Failed to handle replay event: {}", e);
                 }
             }),
@@ -216,11 +209,7 @@ impl SegmentReaderActor {
             let ts_start = segment_meta.ts_start;
             let seg_idx = segment_meta.segment_index;
 
-            tracing::debug!(
-                "Processing segment: ts_start={}, seg_idx={}",
-                ts_start,
-                seg_idx
-            );
+            tracing::debug!("Processing segment: ts_start={}, seg_idx={}", ts_start, seg_idx);
 
             // Build segment file path
             let segment_dir = match bus_kind {
@@ -237,8 +226,7 @@ impl SegmentReaderActor {
                 ),
             };
 
-            let file_path = Path::new(&segment_dir)
-                .join(format!("{}-{}-{:04}.seg", config.prefix, ts_start, seg_idx));
+            let file_path = Path::new(&segment_dir).join(format!("{}-{}-{:04}.seg", config.prefix, ts_start, seg_idx));
 
             // Read and process segment file
             match io::read_segment_file(file_path.to_str().unwrap_or("invalid_path")) {
@@ -305,13 +293,12 @@ mod tests {
     use tokio::io::AsyncWriteExt;
     use xaeroflux_core::{
         event::{Event, EventType, ScanWindow, SystemEventKind, XaeroEvent},
-        init_xaero_pool, shutdown_all_pools,
+        init_xaero_pool, initialize, shutdown_all_pools,
     };
 
     use super::*;
     use crate::{
         BusKind, Pipe,
-        core::initialize,
         indexing::storage::{actors::segment_writer_actor::SegmentConfig, format::PAGE_SIZE},
         subject::SubjectHash,
     };
@@ -363,10 +350,7 @@ mod tests {
 
         // Expect no event (timeout) because Control actor should ignore ReplayData
         assert!(
-            pipe.source
-                .rx
-                .recv_timeout(Duration::from_millis(100))
-                .is_err(),
+            pipe.source.rx.recv_timeout(Duration::from_millis(100)).is_err(),
             "Control actor should ignore ReplayData events"
         );
         drop(_actor);
@@ -426,10 +410,7 @@ mod tests {
 
         // Expect no event (timeout) because Data actor should ignore ReplayControl
         assert!(
-            pipe.source
-                .rx
-                .recv_timeout(Duration::from_millis(100))
-                .is_err(),
+            pipe.source.rx.recv_timeout(Duration::from_millis(100)).is_err(),
             "Data actor should ignore ReplayControl events"
         );
         drop(_actor);

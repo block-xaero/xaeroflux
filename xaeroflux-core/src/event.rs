@@ -6,11 +6,16 @@
 //! - Serialization support via `rkyv` for zero-copy archiving.
 //! - `EVENT_HEADER` magic and `META_BASE` offset for metadata event encoding.
 
-use std::{cmp::Ordering, fmt::Debug, sync::Arc, time::Duration};
+use std::{
+    cmp::Ordering,
+    fmt::{Debug, Formatter},
+    sync::{Arc, LazyLock},
+    time::Duration,
+};
 
 use bytemuck::{Pod, Zeroable};
+use crossbeam::queue::SegQueue;
 use rkyv::{Archive, Deserialize, Serialize};
-use xaeroid::XaeroID;
 
 use crate::{CONF, XaeroData};
 
@@ -282,12 +287,18 @@ pub struct XaeroEvent {
     /// Optional Merkle proof bytes (e.g., from MMR).
     pub merkle_proof: Option<Vec<u8>>,
 
-    pub author_id: Option<XaeroID>,
+    pub author_id: Option<xaeroid::XaeroID>,
     pub latest_ts: Option<u64>,
 }
 
+impl XaeroEvent {
+    pub fn reset(&mut self) {
+        *self = XaeroEvent::default();
+    }
+}
+
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct ScanWindow {
     pub start: u64,
     pub end: u64,
@@ -295,6 +306,11 @@ pub struct ScanWindow {
 unsafe impl Pod for ScanWindow {}
 unsafe impl Zeroable for ScanWindow {}
 
+#[derive(Clone, Debug)]
+pub enum SubjectExecutionMode {
+    Streaming,
+    Buffer,
+}
 #[allow(clippy::type_complexity)]
 /// Defines per-event pipeline operations.
 #[derive(Clone)]
@@ -312,8 +328,12 @@ pub enum Operator {
 
     // Batch Mode operators
     /// Buffer operator (encodes a pipeline of Operators that is added sequentially)
-    BatchMode(Duration, Option<usize>, Vec<Operator>),
-
+    BufferMode(
+        Duration,
+        Option<usize>,
+        Vec<Operator>,
+        Arc<dyn Fn(&XaeroEvent) -> bool + Send + Sync + 'static>,
+    ),
     /// Causal, temporal ordering for events for example or anything in between.
     Sort(Arc<dyn Fn(&XaeroEvent, &XaeroEvent) -> Ordering + Send + Sync>),
     /// Folds vector of xaero events to a single xaero event.
@@ -322,8 +342,87 @@ pub enum Operator {
     Reduce(Arc<dyn Fn(Vec<XaeroEvent>) -> Vec<u8> + Send + Sync>),
 
     // Systemic operators
+    /// Initializes and calls `unsafe_run` that subscribes all system actors to current pipeline
+    /// or workspace/object namespace to write segments and maintain indexes appropriately!
+    SystemActors,
     /// Terminal op: drop all events.
     Blackhole,
+
+    /// Transition To from allows to switch from buffer to streaming mode
+    TransitionTo(SubjectExecutionMode, SubjectExecutionMode),
+}
+
+impl Debug for Operator {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Operator::StreamingMode => write!(f, "StreamingMode"),
+            Operator::Scan(window) =>
+                write!(f, "Scan(start: {}, end: {})", window.start, window.end),
+            Operator::Map(_) => write!(f, "Map(<function>)"),
+            Operator::Filter(_) => write!(f, "Filter(<predicate>)"),
+            Operator::FilterMerkleProofs => write!(f, "FilterMerkleProofs"),
+            Operator::BufferMode(duration, count, pipeline, _) => {
+                write!(
+                    f,
+                    "BatchMode(duration: {:?}, count: {:?}, pipeline: {:?} with route_filter)",
+                    duration, count, pipeline
+                )
+            }
+            Operator::Sort(_) => write!(f, "Sort(<comparator>)"),
+            Operator::Fold(_) => write!(f, "Fold(<folder>)"),
+            Operator::Reduce(_) => write!(f, "Reduce(<reducer>)"),
+            Operator::SystemActors => write!(f, "SystemActors"),
+            Operator::Blackhole => write!(f, "Blackhole"),
+            Operator::TransitionTo(current, to) => {
+                write!(f, "TransitionTo({current:?}, {to:?})")
+            }
+        }
+    }
+}
+
+// Global event pool
+pub static DATA_EVENT_POOL: LazyLock<SegQueue<XaeroEvent>> = LazyLock::new(|| {
+    let pool = SegQueue::new();
+    // Pre-populate if needed
+    for _ in 0..1024 {
+        pool.push(XaeroEvent::default());
+    }
+    pool
+});
+
+pub static CONTROL_EVENT_POOL: LazyLock<SegQueue<XaeroEvent>> = LazyLock::new(|| {
+    let pool = SegQueue::new();
+    // Pre-populate if needed
+    for _ in 0..2048 {
+        pool.push(XaeroEvent::default());
+    }
+    pool
+});
+
+pub enum EventKind {
+    Control,
+    Data,
+}
+
+#[warn(clippy::unwrap_or_default)]
+// Replace your EventPool usage with:
+pub fn acquire_event(kind: EventKind) -> XaeroEvent {
+    match kind {
+        EventKind::Control => CONTROL_EVENT_POOL.pop().unwrap_or_default(),
+        EventKind::Data => DATA_EVENT_POOL.pop().unwrap_or_default(),
+    }
+}
+
+pub fn release_event(mut event: XaeroEvent, kind: EventKind) {
+    event.reset();
+    match kind {
+        EventKind::Control => {
+            CONTROL_EVENT_POOL.push(event);
+        }
+        EventKind::Data => {
+            DATA_EVENT_POOL.push(event);
+        }
+    }
 }
 
 /// Unit tests for event serialization and archiving via `rkyv`.

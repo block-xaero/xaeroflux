@@ -13,7 +13,7 @@ homepage = "https://blockxaero.io"
 readme = "README.md"
 
 [dependencies]
-xaeroflux-core = "0.5.0-m4"
-xaeroflux-actors =  "0.5.0-m4"
-xaeroflux-macros =  "0.5.0-m4"
-xaeroflux-crdts = "0.5.0-m4"
+xaeroflux-core = "0.7.0-m5"
+xaeroflux-actors =  "0.7.0-m5"
+xaeroflux-macros =  "0.7.0-m5"
+xaeroflux-crdts = "0.7.0-m5"

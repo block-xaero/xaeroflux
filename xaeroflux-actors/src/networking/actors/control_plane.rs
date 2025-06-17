@@ -26,10 +26,7 @@ mod tests {
     use xaeroflux_core::{init_p2p_runtime, initialize};
 
     use crate::{
-        networking::{
-            actors::control_plane::ControlPlaneActor, control_plane::ControlPlane,
-            p2p::ControlNetworkPipe,
-        },
+        networking::{actors::control_plane::ControlPlaneActor, control_plane::ControlPlane, p2p::ControlNetworkPipe},
         pipe::{BusKind, Pipe},
     };
 

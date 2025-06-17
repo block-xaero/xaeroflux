@@ -55,8 +55,7 @@ impl SecondaryIndexActor {
                     if res.is_ok() {
                         tx.send(XaeroEvent {
                             evt: Event::new(
-                                bytemuck::bytes_of(&SystemPayload::MMRLeafAppended { leaf_hash })
-                                    .to_vec(),
+                                bytemuck::bytes_of(&SystemPayload::MMRLeafAppended { leaf_hash }).to_vec(),
                                 SystemEvent(SystemEventKind::MmrAppended).to_u8(),
                             ),
                             merkle_proof: None,
@@ -100,10 +99,7 @@ impl SecondaryIndexActor {
                             .tx
                             .send(XaeroEvent {
                                 evt: Event::new(
-                                    bytemuck::bytes_of(&SystemPayload::SecondaryIndexWritten {
-                                        leaf_hash,
-                                    })
-                                    .to_vec(),
+                                    bytemuck::bytes_of(&SystemPayload::SecondaryIndexWritten { leaf_hash }).to_vec(),
                                     SystemEvent(SystemEventKind::SecondaryIndexWritten).to_u8(),
                                 ),
                                 merkle_proof: None,
@@ -147,9 +143,7 @@ impl SecondaryIndexActor {
         let h = actor.clone();
         std::thread::spawn(move || {
             while let Ok(evt) = rxc.recv() {
-                h.handle_event(*bytemuck::from_bytes::<SystemPayload>(
-                    evt.evt.data.as_slice(),
-                ));
+                h.handle_event(*bytemuck::from_bytes::<SystemPayload>(evt.evt.data.as_slice()));
             }
         });
 
@@ -183,11 +177,7 @@ mod tests {
         // Setup LMDB env and actor
         let dir = tempdir().expect("failed_to_unravel");
         let env = Arc::new(Mutex::new(
-            LmdbEnv::new(
-                dir.path().to_str().expect("failed_to_unravel"),
-                BusKind::Data,
-            )
-            .expect("failed_to_unravel"),
+            LmdbEnv::new(dir.path().to_str().expect("failed_to_unravel"), BusKind::Data).expect("failed_to_unravel"),
         ));
         let pipe = Pipe::new(BusKind::Data, None);
         let actor = SecondaryIndexActor::new(pipe.clone(), env.clone(), Duration::from_secs(60));
@@ -220,11 +210,7 @@ mod tests {
         initialize();
         let dir = tempdir().expect("failed_to_unravel");
         let env = Arc::new(Mutex::new(
-            LmdbEnv::new(
-                dir.path().to_str().expect("failed_to_unravel"),
-                BusKind::Data,
-            )
-            .expect("failed_to_unravel"),
+            LmdbEnv::new(dir.path().to_str().expect("failed_to_unravel"), BusKind::Data).expect("failed_to_unravel"),
         ));
         let pipe = Pipe::new(BusKind::Data, None);
         let actor = SecondaryIndexActor::new(pipe.clone(), env.clone(), Duration::from_secs(60));

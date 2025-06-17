@@ -20,8 +20,7 @@ use xaeroflux_core::{
     XAERO_DISPATCHER_POOL,
     date_time::{day_bounds_from_epoch_ms, emit_secs},
     event::{
-        Event, EventType, EventType::SystemEvent, ScanWindow, SystemEventKind,
-        SystemEventKind::Shutdown, XaeroEvent,
+        Event, EventType, EventType::SystemEvent, ScanWindow, SystemEventKind, SystemEventKind::Shutdown, XaeroEvent,
     },
     hash::sha_256_hash_b,
     listeners::EventListener,
@@ -111,13 +110,8 @@ impl WriterState {
         }
 
         let (start_of_day, end_of_day) = day_bounds_from_epoch_ms(emit_secs());
-        if let Ok(segment_meta_iter) =
-            iterate_segment_meta_by_range(meta_db, start_of_day, Some(end_of_day))
-        {
-            if let Some(latest) = segment_meta_iter
-                .iter()
-                .max_by_key(|seg_meta| seg_meta.ts_start)
-            {
+        if let Ok(segment_meta_iter) = iterate_segment_meta_by_range(meta_db, start_of_day, Some(end_of_day)) {
+            if let Some(latest) = segment_meta_iter.iter().max_by_key(|seg_meta| seg_meta.ts_start) {
                 self.page_index = latest.page_index;
                 self.write_pos = latest.write_pos;
                 self.ts_start = latest.ts_start;
@@ -129,20 +123,15 @@ impl WriterState {
         self.initialized = true;
     }
 
-    fn ensure_file_open(
-        &mut self,
-        config: &SegmentConfig,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn ensure_file_open(&mut self, config: &SegmentConfig) -> Result<(), Box<dyn std::error::Error>> {
         if self.current_file.is_some() {
             return Ok(());
         }
 
         std::fs::create_dir_all(&config.segment_dir)?;
 
-        self.filename = Path::new(&config.segment_dir).join(format!(
-            "{}-{}-{:04}.seg",
-            config.prefix, self.ts_start, self.seg_id
-        ));
+        self.filename =
+            Path::new(&config.segment_dir).join(format!("{}-{}-{:04}.seg", config.prefix, self.ts_start, self.seg_id));
 
         let segment_bytes = (config.pages_per_segment * config.page_size) as u64;
 
@@ -166,20 +155,14 @@ impl WriterState {
         Ok(())
     }
 
-    fn flush_current_page(
-        &mut self,
-        config: &SegmentConfig,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn flush_current_page(&mut self, config: &SegmentConfig) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(ref mut mm) = self.memory_map {
             mm.flush_range(self.byte_offset, config.page_size)?;
         }
         Ok(())
     }
 
-    fn update_metadata(
-        &mut self,
-        meta_db: &Arc<Mutex<LmdbEnv>>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn update_metadata(&mut self, meta_db: &Arc<Mutex<LmdbEnv>>) -> Result<(), Box<dyn std::error::Error>> {
         let seg_meta = SegmentMeta {
             page_index: self.page_index,
             segment_index: self.seg_id,
@@ -193,10 +176,7 @@ impl WriterState {
         let data_b_segment_meta = bytemuck::bytes_of(&seg_meta);
         push_event(
             meta_db,
-            &Event::new(
-                data_b_segment_meta.to_vec(),
-                EventType::MetaEvent(1).to_u8(),
-            ),
+            &Event::new(data_b_segment_meta.to_vec(), EventType::MetaEvent(1).to_u8()),
         )?;
 
         Ok(())
@@ -298,24 +278,14 @@ impl SegmentWriterActor {
         let meta_db = match pipe.sink.kind {
             BusKind::Control => Arc::new(Mutex::new(
                 LmdbEnv::new(
-                    emit_control_path_with_subject_hash(
-                        config.lmdb_env_path.as_str(),
-                        name.0,
-                        NAME_PREFIX,
-                    )
-                    .as_str(),
+                    emit_control_path_with_subject_hash(config.lmdb_env_path.as_str(), name.0, NAME_PREFIX).as_str(),
                     BusKind::Data,
                 )
                 .expect("failed_to_create_lmdb_env"),
             )),
             BusKind::Data => Arc::new(Mutex::new(
                 LmdbEnv::new(
-                    emit_data_path_with_subject_hash(
-                        config.lmdb_env_path.as_str(),
-                        name.0,
-                        NAME_PREFIX,
-                    )
-                    .as_str(),
+                    emit_data_path_with_subject_hash(config.lmdb_env_path.as_str(), name.0, NAME_PREFIX).as_str(),
                     BusKind::Data,
                 )
                 .expect("failed_to_create_lmdb_env"),
@@ -346,10 +316,7 @@ impl SegmentWriterActor {
 
         let pipe_clone0 = pc_c1.clone();
         let xeh = thread::Builder::new()
-            .name(format!(
-                "xaeroflux-seg-writer-actor-{}",
-                hex::encode(name.0)
-            ))
+            .name(format!("xaeroflux-seg-writer-actor-{}", hex::encode(name.0)))
             .spawn(move || {
                 while let Ok(framed) = pipe_clone0.sink.rx.recv() {
                     if (framed.evt.event_type == SystemEvent(Shutdown)) {
@@ -370,9 +337,7 @@ impl SegmentWriterActor {
         let _event_loop_handle = thread::Builder::new()
             .spawn(move || {
                 while let Ok(event) = buffer_rx.recv() {
-                    if let Err(e) =
-                        Self::handle_event(&event, &config, &metadb_clone, &pipe, &state_clone)
-                    {
+                    if let Err(e) = Self::handle_event(&event, &config, &metadb_clone, &pipe, &state_clone) {
                         tracing::error!("Failed to handle event: {}", e);
                     }
                 }
@@ -400,9 +365,7 @@ impl SegmentWriterActor {
         let write_len = data.len();
         let leaf_hash = sha_256_hash_b(&data);
 
-        let mut state = writer_state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut state = writer_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
 
         // Initialize state from metadata if this is the first event
         state.initialize_from_metadata(meta_db, config);
@@ -441,12 +404,11 @@ impl SegmentWriterActor {
         }
 
         // Send PayloadWritten event
-        let bytes_of_payload_written =
-            bytemuck::bytes_of::<SystemPayload>(&SystemPayload::PayloadWritten {
-                leaf_hash,
-                meta: state.current_segment_meta(),
-            })
-            .to_vec();
+        let bytes_of_payload_written = bytemuck::bytes_of::<SystemPayload>(&SystemPayload::PayloadWritten {
+            leaf_hash,
+            meta: state.current_segment_meta(),
+        })
+        .to_vec();
 
         if let Err(e) = pipe.source.tx.send(XaeroEvent {
             evt: Event::new(
@@ -485,12 +447,12 @@ mod tests {
 
     use serial_test::serial;
     use tempfile::tempdir;
-    use xaeroflux_core::{event::EventType, init_xaero_pool, shutdown_all_pools};
+    use xaeroflux_core::{event::EventType, init_xaero_pool, initialize, shutdown_all_pools};
 
     use super::*;
-    use crate::{core::initialize, indexing::storage::format::archive};
+    use crate::indexing::storage::format::archive;
 
-    /// Helper to wrap an Event<Vec<u8>> into a XaeroEvent and send it via pipe.
+    // Helper to wrap an Event<Vec<u8>> into a XaeroEvent and send it via pipe.
     fn send_app_event(pipe: &Arc<Pipe>, data: Vec<u8>) {
         let e = Event::new(data, EventType::ApplicationEvent(1).to_u8());
         let xaero_evt = XaeroEvent {
@@ -508,11 +470,7 @@ mod tests {
         initialize();
         let dir = tempdir().expect("failed to unpack tempdir");
         let arc_env = Arc::new(std::sync::Mutex::new(
-            LmdbEnv::new(
-                dir.path().to_str().expect("failed_to_unwrap"),
-                BusKind::Data,
-            )
-            .expect("failed_to_unwrap"),
+            LmdbEnv::new(dir.path().to_str().expect("failed_to_unwrap"), BusKind::Data).expect("failed_to_unwrap"),
         ));
 
         let seg_meta = SegmentMeta {
@@ -679,10 +637,7 @@ mod tests {
 
         // Create small pages and segments to force rollover
         let payload_size = 20;
-        let event = Event::new(
-            vec![42; payload_size],
-            EventType::ApplicationEvent(1).to_u8(),
-        );
+        let event = Event::new(vec![42; payload_size], EventType::ApplicationEvent(1).to_u8());
         let framed = archive(&event);
 
         let cfg = SegmentConfig {
@@ -760,14 +715,11 @@ mod tests {
 
         while start.elapsed() < timeout {
             match rx_out.try_recv() {
-                Ok(event) => {
-                    if event.evt.event_type
-                        == EventType::SystemEvent(SystemEventKind::PayloadWritten)
-                    {
+                Ok(event) =>
+                    if event.evt.event_type == EventType::SystemEvent(SystemEventKind::PayloadWritten) {
                         received_payload_written = true;
                         break;
-                    }
-                }
+                    },
                 Err(crossbeam::channel::TryRecvError::Empty) => {
                     sleep(Duration::from_millis(10));
                 }
@@ -777,10 +729,7 @@ mod tests {
             }
         }
 
-        assert!(
-            received_payload_written,
-            "Expected to receive PayloadWritten event"
-        );
+        assert!(received_payload_written, "Expected to receive PayloadWritten event");
         drop(_actor);
         let res = shutdown_all_pools();
         match res {

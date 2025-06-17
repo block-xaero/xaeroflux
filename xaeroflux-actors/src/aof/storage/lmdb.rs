@@ -9,10 +9,10 @@ use std::{
 // use rkyv::rancor::Failure;
 // use rkyv::api::high::access;
 use liblmdb::{
-    MDB_CREATE, MDB_NOTFOUND, MDB_RDONLY, MDB_RESERVE, MDB_SUCCESS, MDB_cursor_op_MDB_NEXT,
-    MDB_dbi, MDB_env, MDB_txn, MDB_val, mdb_cursor_close, mdb_cursor_get, mdb_cursor_open,
-    mdb_dbi_close, mdb_dbi_open, mdb_env_create, mdb_env_open, mdb_env_set_mapsize,
-    mdb_env_set_maxdbs, mdb_put, mdb_strerror, mdb_txn_abort, mdb_txn_begin, mdb_txn_commit,
+    MDB_CREATE, MDB_NOTFOUND, MDB_RDONLY, MDB_RESERVE, MDB_SUCCESS, MDB_cursor_op_MDB_NEXT, MDB_dbi, MDB_env, MDB_txn,
+    MDB_val, mdb_cursor_close, mdb_cursor_get, mdb_cursor_open, mdb_dbi_close, mdb_dbi_open, mdb_env_create,
+    mdb_env_open, mdb_env_set_mapsize, mdb_env_set_maxdbs, mdb_put, mdb_strerror, mdb_txn_abort, mdb_txn_begin,
+    mdb_txn_commit,
 };
 use rkyv::{rancor::Failure, util::AlignedVec};
 use xaeroflux_core::{
@@ -104,10 +104,7 @@ impl LmdbEnv {
 /// # Safety
 /// Assumes `env` is a valid pointer to an open LMDB environment, and `name_ptr` is a valid C
 /// string.
-unsafe fn open_named_db(
-    env: *mut MDB_env,
-    name_ptr: *const i8,
-) -> Result<MDB_dbi, Box<dyn std::error::Error>> {
+unsafe fn open_named_db(env: *mut MDB_env, name_ptr: *const i8) -> Result<MDB_dbi, Box<dyn std::error::Error>> {
     let mut txn = std::ptr::null_mut();
     // Phase 1: Try open without MDB_CREATE
     let rc = unsafe { mdb_txn_begin(env, std::ptr::null_mut(), 0, &mut txn) };
@@ -149,9 +146,7 @@ unsafe fn open_named_db(
 
 pub fn from_lmdb_err(code: i32) -> Box<dyn std::error::Error> {
     let cstr = unsafe { mdb_strerror(code) };
-    let msg = unsafe { std::ffi::CStr::from_ptr(cstr) }
-        .to_string_lossy()
-        .into_owned();
+    let msg = unsafe { std::ffi::CStr::from_ptr(cstr) }.to_string_lossy().into_owned();
     Box::<dyn std::error::Error>::from(msg)
 }
 
@@ -176,11 +171,7 @@ impl Drop for LmdbEnv {
 /// # Safety
 /// This function interacts directly with the LMDB C API and assumes the
 /// environment and database are open and valid.
-pub unsafe fn scan_range(
-    env: &Arc<Mutex<LmdbEnv>>,
-    start_ms: u64,
-    end_ms: u64,
-) -> anyhow::Result<Vec<AlignedVec>> {
+pub unsafe fn scan_range(env: &Arc<Mutex<LmdbEnv>>, start_ms: u64, end_ms: u64) -> anyhow::Result<Vec<AlignedVec>> {
     let mut results = Vec::<AlignedVec>::new();
     let g = env.lock().expect("failed to lock env");
     let env = g.env;
@@ -233,10 +224,8 @@ pub unsafe fn scan_range(
                 break;
             }
 
-            // 6) `data_val` now contains your archived bytes, you can do rkyv::archived_root on
-            //    them here ...
-            let data_slice =
-                std::slice::from_raw_parts(data_val.mv_data as *const u8, data_val.mv_size);
+            // 6) `data_val` now contains your archived bytes, you can do rkyv::archived_root on them here ...
+            let data_slice = std::slice::from_raw_parts(data_val.mv_data as *const u8, data_val.mv_size);
             let mut av: AlignedVec = AlignedVec::new();
             av.extend_from_slice(data_slice);
             results.push(av);
@@ -263,10 +252,7 @@ pub unsafe fn scan_range(
 ///
 /// # Errors
 /// Returns an error if any LMDB operation fails.
-pub fn push_event(
-    arc_env: &Arc<Mutex<LmdbEnv>>,
-    event: &Event<Vec<u8>>,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub fn push_event(arc_env: &Arc<Mutex<LmdbEnv>>, event: &Event<Vec<u8>>) -> Result<(), Box<dyn std::error::Error>> {
     unsafe {
         let env = arc_env.lock().expect("failed to lock env");
         let mut txn = ptr::null_mut();
@@ -300,11 +286,7 @@ pub fn push_event(
             if sc != 0 {
                 return Err(Box::new(std::io::Error::from_raw_os_error(sc)));
             }
-            std::ptr::copy_nonoverlapping(
-                raw_bytes.as_ptr(),
-                data_val.mv_data.cast(),
-                raw_bytes.len(),
-            );
+            std::ptr::copy_nonoverlapping(raw_bytes.as_ptr(), data_val.mv_data.cast(), raw_bytes.len());
 
             // 2) Static entry: raw SegmentMeta bytes under "segment_meta"
             let static_key = b"segment_meta";
@@ -326,11 +308,7 @@ pub fn push_event(
             if sc2 != 0 {
                 return Err(Box::new(std::io::Error::from_raw_os_error(sc2)));
             }
-            std::ptr::copy_nonoverlapping(
-                raw_bytes.as_ptr(),
-                static_val.mv_data.cast(),
-                raw_bytes.len(),
-            );
+            std::ptr::copy_nonoverlapping(raw_bytes.as_ptr(), static_val.mv_data.cast(), raw_bytes.len());
         } else if let EventType::MetaEvent(2) = event.event_type {
             // Static entry: raw MMRMeta bytes under "mmr_meta"
             let static_key = b"mmr_meta";
@@ -353,11 +331,7 @@ pub fn push_event(
             if sc != 0 {
                 return Err(Box::new(std::io::Error::from_raw_os_error(sc)));
             }
-            std::ptr::copy_nonoverlapping(
-                raw_bytes.as_ptr(),
-                data_val.mv_data.cast(),
-                raw_bytes.len(),
-            );
+            std::ptr::copy_nonoverlapping(raw_bytes.as_ptr(), data_val.mv_data.cast(), raw_bytes.len());
         } else {
             // application event: existing path
             let key = generate_key(event)?;
@@ -492,16 +466,14 @@ mod tests {
     use xaeroflux_core::{
         date_time::{MS_PER_DAY, day_bounds_from_epoch_ms, emit_secs},
         event::{ArchivedEvent, EventType},
+        initialize,
     };
 
     use super::*;
-    use crate::{
-        aof::storage::{
-            format::MMRMeta,
-            lmdb::{LmdbEnv, get_secondary_index, put_secondary_index},
-            meta::{get_meta_val, iterate_segment_meta_by_range},
-        },
-        core::initialize,
+    use crate::aof::storage::{
+        format::MMRMeta,
+        lmdb::{LmdbEnv, get_secondary_index, put_secondary_index},
+        meta::{get_meta_val, iterate_segment_meta_by_range},
     };
 
     #[repr(C)]
@@ -518,11 +490,7 @@ mod tests {
         initialize();
         let dir = tempdir().expect("failed_to_unravel");
         let arc_env = Arc::new(Mutex::new(
-            LmdbEnv::new(
-                dir.path().to_str().expect("failed_to_unravel"),
-                BusKind::Data,
-            )
-            .expect("failed_to_unravel"),
+            LmdbEnv::new(dir.path().to_str().expect("failed_to_unravel"), BusKind::Data).expect("failed_to_unravel"),
         ));
         let data = b"payload".to_vec();
         let leaf_hash = sha_256(&data);
@@ -549,11 +517,7 @@ mod tests {
         initialize();
         let dir = tempdir().expect("failed_to_unravel");
         let arc_env = Arc::new(Mutex::new(
-            LmdbEnv::new(
-                dir.path().to_str().expect("failed_to_unravel"),
-                BusKind::Data,
-            )
-            .expect("failed_to_unravel"),
+            LmdbEnv::new(dir.path().to_str().expect("failed_to_unravel"), BusKind::Data).expect("failed_to_unravel"),
         ));
         let leaf_hash = [0u8; 32];
         let got = get_secondary_index(&arc_env, &leaf_hash).expect("get_secondary_index");
@@ -565,11 +529,8 @@ mod tests {
     fn test_env_creation_and_dbi_handles() {
         initialize();
         let dir = tempdir().expect("failed to unravel");
-        let env = LmdbEnv::new(
-            dir.path().to_str().expect("failed to unravel"),
-            BusKind::Control,
-        )
-        .expect("failed to unravel");
+        let env =
+            LmdbEnv::new(dir.path().to_str().expect("failed to unravel"), BusKind::Control).expect("failed to unravel");
         // env.env should be non-null and dbis > 0
         assert!(!env.env.is_null());
         assert!(env.dbis[0] > 0);
@@ -605,8 +566,7 @@ mod tests {
         let payload = b"abc123".to_vec();
         let event = Event::new(payload.clone(), 1);
         let buf = generate_value(&event).expect("failed to unravel");
-        let event2 = rkyv::api::high::access::<ArchivedEvent<Vec<u8>>, Failure>(&buf)
-            .expect("failed to access");
+        let event2 = rkyv::api::high::access::<ArchivedEvent<Vec<u8>>, Failure>(&buf).expect("failed to access");
         assert_eq!(event2.data, payload);
         assert_eq!(event2.ts, event.ts);
     }
@@ -616,11 +576,7 @@ mod tests {
         initialize();
         let dir = tempdir().expect("failed to unravel");
         let arc_env = Arc::new(Mutex::new(
-            LmdbEnv::new(
-                dir.path().to_str().expect("failed to unravel"),
-                BusKind::Data,
-            )
-            .expect("failed to unravel"),
+            LmdbEnv::new(dir.path().to_str().expect("failed to unravel"), BusKind::Data).expect("failed to unravel"),
         ));
         // push two events
         let e1 = Event::new(b"one".to_vec(), 1);
@@ -636,10 +592,7 @@ mod tests {
         // roundtrip them
         let events: Vec<&ArchivedEvent<Vec<u8>>> = bufs
             .iter()
-            .map(|b| {
-                rkyv::api::high::access::<ArchivedEvent<Vec<u8>>, Failure>(b)
-                    .expect("failed to access")
-            })
+            .map(|b| rkyv::api::high::access::<ArchivedEvent<Vec<u8>>, Failure>(b).expect("failed to access"))
             .collect();
         assert!(events.iter().any(|e| e.data == b"one".to_vec()));
         assert!(events.iter().any(|e| e.data == b"two".to_vec()));
@@ -647,9 +600,7 @@ mod tests {
         // scan next day: should be empty
         let tomorrow_start = end;
         let tomorrow_end = tomorrow_start + MS_PER_DAY;
-        let bufs2 = unsafe {
-            scan_range(&arc_env, tomorrow_start, tomorrow_end).expect("failed to unravel")
-        };
+        let bufs2 = unsafe { scan_range(&arc_env, tomorrow_start, tomorrow_end).expect("failed to unravel") };
         assert_eq!(bufs2.len(), 0, "expected 0 events, got {}", bufs2.len());
     }
 
@@ -659,11 +610,8 @@ mod tests {
         let dir = tempdir().expect("failed to unravel");
         let prefix = dir.path().to_str();
         let prefix = dir.path().to_str();
-        let env = LmdbEnv::new(
-            dir.path().to_str().expect("failed to unravel"),
-            BusKind::Control,
-        )
-        .expect("failed to unravel");
+        let env =
+            LmdbEnv::new(dir.path().to_str().expect("failed to unravel"), BusKind::Control).expect("failed to unravel");
         // opening again should give same handle values
         let a1 = unsafe { open_named_db(env.env, c"/aof".as_ptr()).expect("failed to unravel") };
         let m1 = unsafe { open_named_db(env.env, c"/meta".as_ptr()).expect("failed to unravel") };
@@ -676,11 +624,7 @@ mod tests {
         initialize();
         let dir = tempdir().expect("failed_to_unwrap");
         let arc_env = Arc::new(Mutex::new(
-            LmdbEnv::new(
-                dir.path().to_str().expect("failed_to_unwrap"),
-                BusKind::Control,
-            )
-            .expect("failed_to_unwrap"),
+            LmdbEnv::new(dir.path().to_str().expect("failed_to_unwrap"), BusKind::Control).expect("failed_to_unwrap"),
         ));
         // two different metas
         let meta1 = SegmentMeta {
@@ -752,11 +696,7 @@ mod tests {
         initialize();
         let dir = tempdir().expect("failed_to_unwrap");
         let arc_env = Arc::new(Mutex::new(
-            LmdbEnv::new(
-                dir.path().to_str().expect("failed_to_unwrap"),
-                BusKind::Data,
-            )
-            .expect("failed_to_unwrap"),
+            LmdbEnv::new(dir.path().to_str().expect("failed_to_unwrap"), BusKind::Data).expect("failed_to_unwrap"),
         ));
         let seg_meta = SegmentMeta {
             page_index: 8,
@@ -809,11 +749,7 @@ mod tests {
         initialize();
         let dir = tempdir().expect("failed_to_unwrap");
         let env = Arc::new(Mutex::new(
-            LmdbEnv::new(
-                dir.path().to_str().expect("failed_to_unwrap"),
-                BusKind::Control,
-            )
-            .expect("failed_to_unwrap"),
+            LmdbEnv::new(dir.path().to_str().expect("failed_to_unwrap"), BusKind::Control).expect("failed_to_unwrap"),
         ));
 
         // no metas inserted yet
@@ -826,11 +762,7 @@ mod tests {
         initialize();
         let dir = tempdir().expect("failed_to_unwrap");
         let env = Arc::new(Mutex::new(
-            LmdbEnv::new(
-                dir.path().to_str().expect("failed_to_unwrap"),
-                BusKind::Control,
-            )
-            .expect("failed_to_unwrap"),
+            LmdbEnv::new(dir.path().to_str().expect("failed_to_unwrap"), BusKind::Control).expect("failed_to_unwrap"),
         ));
 
         // push one meta at ts = now
@@ -856,11 +788,7 @@ mod tests {
         initialize();
         let dir = tempdir().expect("failed_to_unwrap");
         let env = Arc::new(Mutex::new(
-            LmdbEnv::new(
-                dir.path().to_str().expect("failed_to_unwrap"),
-                BusKind::Control,
-            )
-            .expect("failed_to_unwrap"),
+            LmdbEnv::new(dir.path().to_str().expect("failed_to_unwrap"), BusKind::Control).expect("failed_to_unwrap"),
         ));
 
         // create three metas at t=10,20,30
@@ -877,9 +805,7 @@ mod tests {
         // scan [0..] returns all three, in timestamp order
         let all = iterate_segment_meta_by_range(&env, 0, None).expect("failed_to_unwrap");
         assert_eq!(all.len(), 3);
-        assert_eq!(all.iter().map(|m| m.ts_start).collect::<Vec<_>>(), vec![
-            10, 20, 30
-        ]);
+        assert_eq!(all.iter().map(|m| m.ts_start).collect::<Vec<_>>(), vec![10, 20, 30]);
 
         // scan [15..30] should return m1 only (m0 ends at 15 but we filter on start >15)
         let mid = iterate_segment_meta_by_range(&env, 15, Some(30)).expect("failed_to_unwrap");
@@ -890,9 +816,6 @@ mod tests {
         // scan [0..20] should include m0 and m1 (m1 starts exactly at 20)
         let upto = iterate_segment_meta_by_range(&env, 0, Some(20)).expect("failed_to_unwrap");
         assert_eq!(upto.len(), 2);
-        assert_eq!(
-            upto.iter().map(|m| m.segment_index).collect::<Vec<_>>(),
-            vec![0, 1]
-        );
+        assert_eq!(upto.iter().map(|m| m.segment_index).collect::<Vec<_>>(), vec![0, 1]);
     }
 }

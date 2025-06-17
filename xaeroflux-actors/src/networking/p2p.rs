@@ -5,8 +5,7 @@ use crossbeam::channel::{Receiver, Sender};
 use xaeroflux_macros::PipeKind;
 
 use crate::{
-    aof::storage::format::SegmentMeta, indexing::storage::mmr::Peak, pipe::BusKind,
-    system_payload::SystemPayload,
+    aof::storage::format::SegmentMeta, indexing::storage::mmr::Peak, pipe::BusKind, system_payload::SystemPayload,
 };
 
 // TODO: Maybe in future make `Source` and `Sink` and `Pipe` generic.
@@ -53,25 +52,17 @@ unsafe impl Zeroable for NetworkPayload {}
 impl From<NetworkPayload> for SystemPayload {
     fn from(event: NetworkPayload) -> Self {
         match event {
-            NetworkPayload::PeerDiscovered(peer_id, address) =>
-                SystemPayload::PeerDiscovered { peer_id, address },
-            NetworkPayload::PeerLost(peer_id, address) =>
-                SystemPayload::PeerLost { peer_id, address },
-            NetworkPayload::Peaks(peak_count, root_hash) => SystemPayload::PeaksWritten {
-                root_hash,
-                peak_count,
-            },
-            NetworkPayload::SegmentRolledOver(seg_meta) =>
-                SystemPayload::SegmentMetaChanged { meta: seg_meta },
+            NetworkPayload::PeerDiscovered(peer_id, address) => SystemPayload::PeerDiscovered { peer_id, address },
+            NetworkPayload::PeerLost(peer_id, address) => SystemPayload::PeerLost { peer_id, address },
+            NetworkPayload::Peaks(peak_count, root_hash) => SystemPayload::PeaksWritten { root_hash, peak_count },
+            NetworkPayload::SegmentRolledOver(seg_meta) => SystemPayload::SegmentMetaChanged { meta: seg_meta },
             NetworkPayload::JoinedTopic(topic_id) => SystemPayload::JoinedTopic { topic_id },
             NetworkPayload::LeftTopic(topic) => SystemPayload::LeftTopic { topic_id: topic },
-            NetworkPayload::MMRLeafAppended(leaf_hash) =>
-                SystemPayload::MMRLeafAppended { leaf_hash },
-            NetworkPayload::SegmentRolledOverFailed(segment_meta, error_code) =>
-                SystemPayload::SegmentRollOverFailed {
-                    meta: segment_meta,
-                    error_code,
-                },
+            NetworkPayload::MMRLeafAppended(leaf_hash) => SystemPayload::MMRLeafAppended { leaf_hash },
+            NetworkPayload::SegmentRolledOverFailed(segment_meta, error_code) => SystemPayload::SegmentRollOverFailed {
+                meta: segment_meta,
+                error_code,
+            },
         }
     }
 }
@@ -79,24 +70,17 @@ impl From<NetworkPayload> for SystemPayload {
 impl From<SystemPayload> for NetworkPayload {
     fn from(payload: SystemPayload) -> Self {
         match payload {
-            SystemPayload::PeerDiscovered { peer_id, address } =>
-                NetworkPayload::PeerDiscovered(peer_id, address),
-            SystemPayload::PeerLost { peer_id, address } =>
-                NetworkPayload::PeerLost(peer_id, address),
-            SystemPayload::PeaksWritten {
-                peak_count,
-                root_hash,
-            } => NetworkPayload::Peaks(peak_count, root_hash),
+            SystemPayload::PeerDiscovered { peer_id, address } => NetworkPayload::PeerDiscovered(peer_id, address),
+            SystemPayload::PeerLost { peer_id, address } => NetworkPayload::PeerLost(peer_id, address),
+            SystemPayload::PeaksWritten { peak_count, root_hash } => NetworkPayload::Peaks(peak_count, root_hash),
             SystemPayload::SegmentRollOverFailed {
                 meta: seg_meta,
                 error_code,
             } => NetworkPayload::SegmentRolledOverFailed(seg_meta, error_code),
             SystemPayload::JoinedTopic { topic_id } => NetworkPayload::JoinedTopic(topic_id),
             SystemPayload::LeftTopic { topic_id } => NetworkPayload::LeftTopic(topic_id),
-            SystemPayload::MMRLeafAppended { leaf_hash } =>
-                NetworkPayload::MMRLeafAppended(leaf_hash),
-            SystemPayload::PayloadWritten { leaf_hash, .. } =>
-                NetworkPayload::MMRLeafAppended(leaf_hash),
+            SystemPayload::MMRLeafAppended { leaf_hash } => NetworkPayload::MMRLeafAppended(leaf_hash),
+            SystemPayload::PayloadWritten { leaf_hash, .. } => NetworkPayload::MMRLeafAppended(leaf_hash),
             SystemPayload::SegmentRolledOver { meta } => NetworkPayload::SegmentRolledOver(meta),
             SystemPayload::PageFlushed { .. } => {
                 // No direct NetworkPayload variant, so fallback to a default or skip
@@ -205,11 +189,7 @@ pub trait XaeroPlane {
 pub trait XaeroControlPlane {
     fn announce_peaks(&self, peaks: Vec<Peak>, root_hash: [u8; 32]) -> Result<(), XaeroP2PError>;
     fn publish_segment_rolled_over(&self, seg_meta: SegmentMeta) -> Result<(), XaeroP2PError>;
-    fn publish_segment_rolled_over_failed(
-        &self,
-        seg_meta: SegmentMeta,
-        error_code: u16,
-    ) -> Result<(), XaeroP2PError>;
+    fn publish_segment_rolled_over_failed(&self, seg_meta: SegmentMeta, error_code: u16) -> Result<(), XaeroP2PError>;
     fn subscribe_control(&self) -> Receiver<NetworkPayload>;
 }
 

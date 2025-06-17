@@ -8,9 +8,9 @@
 use std::sync::{Arc, Mutex};
 
 use xaeroflux_core::{
-    XAERO_DISPATCHER_POOL,
+    CONF, XAERO_DISPATCHER_POOL,
     event::Event,
-    init_xaero_pool,
+    init_xaero_pool, initialize,
     listeners::EventListener,
     system_paths::{emit_control_path_with_subject_hash, emit_data_path_with_subject_hash},
 };
@@ -20,7 +20,6 @@ use crate::{
     BusKind,
     BusKind::{Control, Data},
     Pipe,
-    core::{CONF, initialize},
     subject::SubjectHash,
 };
 
@@ -47,11 +46,8 @@ impl AOFActor {
             NAME_PREFIX,
         );
         let cpc = control_path.clone();
-        let data_path = emit_data_path_with_subject_hash(
-            fpc.to_str().expect("path_invalid_for_aof"),
-            subject_hash.0,
-            NAME_PREFIX,
-        );
+        let data_path =
+            emit_data_path_with_subject_hash(fpc.to_str().expect("path_invalid_for_aof"), subject_hash.0, NAME_PREFIX);
         let data_path_clone = data_path.clone();
         let (path, env) = if pipe.sink.kind == Control {
             (

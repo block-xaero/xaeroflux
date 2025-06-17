@@ -56,10 +56,7 @@ impl XaeroControlPlane for IrohControlPlane {
         todo!()
     }
 
-    fn publish_segment_rolled_over(
-        &self,
-        _seg_meta: SegmentMeta,
-    ) -> Result<(), super::p2p::XaeroP2PError> {
+    fn publish_segment_rolled_over(&self, _seg_meta: SegmentMeta) -> Result<(), super::p2p::XaeroP2PError> {
         todo!()
     }
 

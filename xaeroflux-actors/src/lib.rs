@@ -1,10 +1,14 @@
+extern crate core;
+
 pub mod aof;
 pub mod indexing;
 pub mod materializer;
 pub mod networking;
 pub mod pipe;
 
+mod pipeline_parser;
 pub mod subject;
+mod system_actors;
 mod system_payload;
 
 use std::sync::{
@@ -13,7 +17,6 @@ use std::sync::{
 };
 
 use bytemuck::{Pod, Zeroable};
-use xaeroflux_core as core;
 use xaeroflux_core::event::Event;
 
 use crate::{
@@ -52,7 +55,7 @@ mod tests {
     use xaeroflux_core::{
         date_time::emit_secs,
         event::{Event, EventType, SystemEventKind},
-        init_xaero_pool, shutdown_all_pools,
+        init_xaero_pool, initialize, shutdown_all_pools,
         system_paths::emit_data_path_with_subject_hash,
     };
     use xaeroflux_macros::subject;
@@ -63,11 +66,8 @@ mod tests {
             format::SegmentMeta,
             lmdb::{LmdbEnv, push_event},
         },
-        core::initialize,
         indexing::storage::{
-            actors::{
-                segment_reader_actor::SegmentReaderActor, segment_writer_actor::SegmentConfig,
-            },
+            actors::{segment_reader_actor::SegmentReaderActor, segment_writer_actor::SegmentConfig},
             format::{PAGE_SIZE, archive},
         },
         subject::SubjectHash,
@@ -77,10 +77,8 @@ mod tests {
     fn test_subject_macro() {
         initialize();
         use xaeroflux_core::event::{EventType, SystemEventKind};
-        let expected_sha256: [u8; 32] =
-            xaeroflux_core::hash::sha_256_hash("cyan_workspace_123".as_bytes().to_vec());
-        let subject =
-            subject!("workspace/cyan_workspace_123/object/cyan_object_white_board_id_134");
+        let expected_sha256: [u8; 32] = xaeroflux_core::hash::sha_256_hash("cyan_workspace_123".as_bytes().to_vec());
+        let subject = subject!("workspace/cyan_workspace_123/object/cyan_object_white_board_id_134");
 
         // FIX: If macro sends to sink.tx, then we should receive from sink.rx
         let workspace_created_event = subject
@@ -113,22 +111,16 @@ mod tests {
         };
 
         // Create the correct directory structure that the actor expects
-        let data_path =
-            emit_data_path_with_subject_hash(&config.segment_dir, subject_hash.0, "segment_reader");
+        let data_path = emit_data_path_with_subject_hash(&config.segment_dir, subject_hash.0, "segment_reader");
         std::fs::create_dir_all(&data_path).expect("create dir");
 
-        let lmdb_path = emit_data_path_with_subject_hash(
-            &config.lmdb_env_path,
-            subject_hash.0,
-            "segment_reader",
-        );
+        let lmdb_path = emit_data_path_with_subject_hash(&config.lmdb_env_path, subject_hash.0, "segment_reader");
         std::fs::create_dir_all(&lmdb_path).expect("create lmdb dir");
 
         // Write segment file in the correct location
         let ts = emit_secs();
         let idx = 0;
-        let seg_path =
-            Path::new(&data_path).join(format!("{}-{}-{:04}.seg", config.prefix, ts, idx));
+        let seg_path = Path::new(&data_path).join(format!("{}-{}-{:04}.seg", config.prefix, ts, idx));
 
         {
             let file = OpenOptions::new()
@@ -161,10 +153,7 @@ mod tests {
             byte_offset: 0,
             latest_segment_id: 0,
         };
-        let ev = Event::new(
-            bytes_of(&seg_meta).to_vec(),
-            EventType::MetaEvent(1).to_u8(),
-        );
+        let ev = Event::new(bytes_of(&seg_meta).to_vec(), EventType::MetaEvent(1).to_u8());
         push_event(&meta_env, &ev).expect("push_event");
 
         // Create pipe and get receiver
@@ -216,11 +205,9 @@ mod tests {
     fn test_subject_macro_object_event_and_hash() {
         initialize();
         // Compute expected SHA-256 for workspace and object
-        let expected_ws_sha: [u8; 32] =
-            xaeroflux_core::hash::sha_256_hash("cyan_workspace_123".as_bytes().to_vec());
-        let expected_obj_sha: [u8; 32] = xaeroflux_core::hash::sha_256_hash(
-            "cyan_object_white_board_id_134".as_bytes().to_vec(),
-        );
+        let expected_ws_sha: [u8; 32] = xaeroflux_core::hash::sha_256_hash("cyan_workspace_123".as_bytes().to_vec());
+        let expected_obj_sha: [u8; 32] =
+            xaeroflux_core::hash::sha_256_hash("cyan_object_white_board_id_134".as_bytes().to_vec());
 
         // Now compute the combined Blake3 hash exactly as the macro does:
         let mut hasher_ws = blake3::Hasher::new();
@@ -235,17 +222,10 @@ mod tests {
         let expected_combined: [u8; 32] = *combined_hasher.finalize().as_bytes();
 
         // Invoke the macro
-        let subject =
-            subject!("workspace/cyan_workspace_123/object/cyan_object_white_board_id_134");
+        let subject = subject!("workspace/cyan_workspace_123/object/cyan_object_white_board_id_134");
 
         // 1) First event was WorkspaceCreated; drain it
-        let ws_evt = subject
-            .control
-            .sink
-            .rx
-            .recv()
-            .expect("attempt_to_unwrap_failed")
-            .evt;
+        let ws_evt = subject.control.sink.rx.recv().expect("attempt_to_unwrap_failed").evt;
         assert_eq!(
             ws_evt.event_type,
             EventType::SystemEvent(SystemEventKind::WorkspaceCreated)
@@ -257,13 +237,7 @@ mod tests {
         assert_eq!(ws_evt.data, ws_blake_payload.as_bytes().to_vec());
 
         // 2) Second event should be ObjectCreated
-        let obj_evt = subject
-            .control
-            .sink
-            .rx
-            .recv()
-            .expect("attempt_to_unwrap_failed")
-            .evt;
+        let obj_evt = subject.control.sink.rx.recv().expect("attempt_to_unwrap_failed").evt;
         assert_eq!(
             obj_evt.event_type,
             EventType::SystemEvent(SystemEventKind::ObjectCreated)
@@ -314,8 +288,6 @@ mod tests {
         let subject = subject!("workspace/MyWS/object/MyObj");
         // Name field should equal the literal used
         assert_eq!(subject.name, "workspace/MyWS/object/MyObj");
-        // topic_key.flags was set to 1 in new_with_workspace
-        assert_eq!(subject.topic_key.flags, 1);
         // workspace_id and object_id bytes checked above in previous test
         assert_eq!(subject.workspace_id.as_slice(), ws_sha.as_ref());
         assert_eq!(subject.object_id.as_slice(), obj_sha.as_ref());

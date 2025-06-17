@@ -126,11 +126,7 @@ pub fn unarchive<'a>(bytes: &'a [u8]) -> (&'a XaeroOnDiskEventHeader, &'a Archiv
     let end = start + header.len as usize;
 
     if bytes.len() < end {
-        panic!(
-            "buffer too small: need {} bytes but got {}",
-            end,
-            bytes.len()
-        );
+        panic!("buffer too small: need {} bytes but got {}", end, bytes.len());
     }
     let payload = &bytes[start..end];
     match rkyv::api::high::access::<ArchivedEvent<Vec<u8>>, Failure>(payload) {
