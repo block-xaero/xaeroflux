@@ -33,10 +33,11 @@ serial_test = "0.10.0"
 libc = "0.2.172"
 
 [dependencies]
-xaeroid = {version = "0.2.1-rc1"}
-xaeroflux-core = {version = "0.7.0-m5"}
-xaeroflux-macros = {version = "0.7.0-m5"}
-xaeroflux-crdts = {version = "0.7.0-m5"}
+rusted-ring = "0.3.0"
+xaeroid = { workspace = true }
+xaeroflux-core = {path = "../xaeroflux-core"}
+xaeroflux-macros = {path = "../xaeroflux-macros"}
+xaeroflux-crdts = {path = "../xaeroflux-crdts"}
 ed25519-dalek = { version = "2.1.1", features = ["rand_core"] }
 rand = "0.8"
 iroh = {version = "0.35.0", "default-features" = true, features = ["discovery-local-network", "discovery-pkarr-dht"] }

@@ -17,11 +17,10 @@ use xaeroflux_core::{
 
 use super::storage::lmdb::{LmdbEnv, push_event};
 use crate::{
-    BusKind,
-    BusKind::{Control, Data},
-    Pipe,
     subject::SubjectHash,
 };
+use xaeroflux_core::pipe::*;
+use xaeroflux_core::pipe::BusKind::{Control, Data};
 
 pub static NAME_PREFIX: &str = "aof";
 /// An append-only file (AOF) actor that persists events into LMDB.
@@ -167,9 +166,7 @@ mod tests {
             .tx
             .send(XaeroEvent {
                 evt: Event::new(sample_data, EventType::ApplicationEvent(1).to_u8()),
-                merkle_proof: None,
-                author_id: None,
-                latest_ts: None,
+                ..Default::default()
             })
             .expect("Failed to send to AOFActor listener inbox");
 

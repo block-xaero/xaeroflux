@@ -4,33 +4,23 @@ pub mod aof;
 pub mod indexing;
 pub mod materializer;
 pub mod networking;
-pub mod pipe;
 
 mod pipeline_parser;
 pub mod subject;
 mod system_actors;
 mod system_payload;
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
-};
+use std::sync::{Arc, OnceLock};
 
 use bytemuck::{Pod, Zeroable};
-use xaeroflux_core::event::Event;
-
-use crate::{
+use xaeroflux_core::{
+    event::{Event, ScanWindow, XaeroEvent},
     pipe::{BusKind, Pipe},
-    subject::Subscription,
 };
 
-static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+use crate::subject::Subscription;
 
-/// Returns a unique, thread-safe `u64` ID.
-fn next_id() -> u64 {
-    NEXT_ID.fetch_add(1, Ordering::SeqCst)
-}
-use xaeroflux_core::event::{ScanWindow, XaeroEvent};
+
 /// Holds your system actors and subscription to keep them alive.
 pub struct XFluxHandle {
     /// Composite subscription for core events.
@@ -179,9 +169,7 @@ mod tests {
             .tx
             .send(XaeroEvent {
                 evt: replay_evt,
-                merkle_proof: None,
-                author_id: None,
-                latest_ts: None,
+                ..Default::default()
             })
             .expect("send replay");
 

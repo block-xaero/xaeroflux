@@ -1,3 +1,5 @@
 [workspace]
 resolver = "3"
 members = ["xaeroflux", "xaeroflux-actors", "xaeroflux-core", "xaeroflux-crdts", "xaeroflux-ffi", "xaeroflux-macros"]
+[workspace.dependencies]
+xaeroid = {path = "../xaeroID"}

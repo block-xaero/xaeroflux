@@ -1,7 +1,7 @@
 use rkyv::Archive;
 use xaeroflux_core::hash::sha_256_concat_hash;
 
-use crate::indexing::merkle_tree::{XaeroMerkleProof, XaeroMerkleTree, XaeroMerkleTreeOps};
+use xaeroflux_core::merkle_tree::{XaeroMerkleProof, XaeroMerkleTree, XaeroMerkleTreeOps};
 
 /// Peak represents a peak in the Merkle Mountain Range (MMR).
 #[repr(C)]

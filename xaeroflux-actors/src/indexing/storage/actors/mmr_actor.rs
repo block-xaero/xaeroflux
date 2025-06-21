@@ -14,12 +14,12 @@ use xaeroflux_core::{
     event::{Event, EventType, EventType::SystemEvent, SystemEventKind, SystemEventKind::Shutdown, XaeroEvent},
     hash::sha_256,
     listeners::EventListener,
+    pipe::{BusKind, Pipe},
     system_paths::*,
 };
 
 use super::segment_writer_actor::{SegmentConfig, SegmentWriterActor};
 use crate::{
-    BusKind, Pipe,
     aof::storage::lmdb::{LmdbEnv, push_event},
     indexing::storage::{
         actors::ExecutionState,
@@ -28,7 +28,6 @@ use crate::{
     },
     subject::SubjectHash,
 };
-
 pub static NAME_PREFIX: &str = "mmr_actor";
 
 /// Metadata structure for MMR state persistence
@@ -116,12 +115,10 @@ pub struct MmrIndexingActor {
 
 impl Drop for MmrIndexingActor {
     fn drop(&mut self) {
-        let res = self.pipe.sink.tx.send(XaeroEvent {
-            evt: Event::new(vec![], SystemEvent(Shutdown).to_u8()),
-            merkle_proof: None,
-            author_id: None,
-            latest_ts: None,
-        });
+        let res = self.pipe.sink.tx.send(Arc::new(XaeroEvent {
+            evt: Arc::new(Event::new(Vec::new(), SystemEvent(Shutdown).to_u8())),
+            ..Default::default()
+        }));
         match res {
             Ok(_) => {
                 tracing::debug!("MmrIndexingActor :: Shutdown initiated");
@@ -221,7 +218,7 @@ impl MmrIndexingActor {
         let (buffer_tx, buffer_rx) = crossbeam::channel::unbounded();
         let listener = EventListener::new(
             "mmr_indexing_actor",
-            Arc::new(move |event: Event<Vec<u8>>| {
+            Arc::new(move |event: Arc<Event<Vec<u8>>>| {
                 let res = buffer_tx.send(event);
                 match res {
                     Ok(_) => {}
@@ -243,13 +240,14 @@ impl MmrIndexingActor {
                 while let Ok(xaero_event) = pipe_loop.sink.rx.recv() {
                     if (xaero_event.evt.event_type == SystemEvent(Shutdown)) {
                         // send one last time and break out.
-                        if let Err(e) = listener.inbox.send(xaero_event.evt) {
+                        let evt = xaero_event.evt.clone();
+                        if let Err(e) = listener.inbox.send(evt) {
                             tracing::error!("Failed to send Shutdown event to listener: {}", e);
                         }
                         break;
                     }
                     // TODO: XAEROFLUX DISPATCH POOL To be used for merkle index unveiling.
-                    if let Err(e) = listener.inbox.send(xaero_event.evt) {
+                    if let Err(e) = listener.inbox.send(xaero_event.evt.clone()) {
                         tracing::error!("Failed to send MMR event to listener: {}", e);
                     }
                 }
@@ -317,15 +315,13 @@ impl MmrIndexingActor {
 
         // Step 5: Send MmrAppended event to the SAME pipe
         // The segment writer will consume this from the same pipe to buffer leaf hashes
-        let mmr_event = XaeroEvent {
-            evt: Event::new(
+        let mmr_event = Arc::new(XaeroEvent {
+            evt: Arc::new(Event::new(
                 leaf_hash.to_vec(),
                 EventType::SystemEvent(SystemEventKind::MmrAppended).to_u8(),
-            ),
-            merkle_proof: None,
-            author_id: None,
-            latest_ts: None,
-        };
+            )),
+            ..Default::default()
+        });
         let mmrc = mmr_event.clone();
         output_pipe.source.tx.send(mmr_event)?;
         segment_writer_pipe.sink.tx.send(mmrc)?;
@@ -373,12 +369,10 @@ mod actor_tests {
     // Helper to wrap an Event<Vec<u8>> into a XaeroEvent and send it via pipe.
     fn send_app_event(pipe: &Arc<Pipe>, data: Vec<u8>) {
         let e = Event::new(data, EventType::ApplicationEvent(1).to_u8());
-        let xaero_evt = XaeroEvent {
-            evt: e,
-            merkle_proof: None,
-            author_id: None,
-            latest_ts: None,
-        };
+        let xaero_evt = Arc::new(XaeroEvent {
+            evt: Arc::new(e),
+            ..Default::default()
+        });
         pipe.sink.tx.send(xaero_evt).expect("failed to send event");
     }
 
@@ -389,7 +383,7 @@ mod actor_tests {
         init_xaero_pool();
 
         let pipe = Pipe::new(BusKind::Data, None);
-        let rx_out: Receiver<XaeroEvent> = pipe.source.rx.clone();
+        let rx_out: Receiver<Arc<XaeroEvent>> = pipe.source.rx.clone();
 
         let mut hasher = blake3::Hasher::new();
         hasher.update("mmr-actor".as_bytes());

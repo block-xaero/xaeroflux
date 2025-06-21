@@ -5,18 +5,32 @@
 //! - Initialization of global thread pools for dispatch and I/O.
 //! - Serialization and deserialization helpers for rkyv.
 //! - Application startup (`initialize`) with logging and banner.
+#![feature(trivial_bounds)]
 pub mod config;
 pub mod date_time;
 pub mod event;
 pub mod hash;
 pub mod keys;
-pub mod listeners;
 pub mod logs;
+pub mod merkle_tree;
+mod network;
+pub mod pipe;
 pub mod size;
 pub mod sys;
 pub mod system_paths;
+pub mod vector_clock;
+mod workspace;
+mod pool;
 
-use std::{any::Any, env, fmt::Debug, sync::OnceLock};
+use std::{
+    any::Any,
+    env,
+    fmt::Debug,
+    sync::{
+        LazyLock, OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 use figlet_rs::FIGfont;
 use rkyv::{
@@ -27,12 +41,25 @@ use rkyv::{
     util::AlignedVec,
     validation::{Validator, archive::ArchiveValidator, shared::SharedValidator},
 };
+use rusted_ring::{
+    allocator::EventAllocator,
+    pool::EventPools,
+    ring::{PooledEvent, RingBuffer},
+};
 use threadpool::ThreadPool;
 use tracing::info;
 
 use crate as xaeroflux_core;
-use crate::{config::Config, logs::init_logging};
+use crate::{config::Config, logs::init_logging, pool::XaeroPoolManager};
 
+pub static EVENT_ALLOCATOR: OnceLock<EventAllocator> = OnceLock::new();
+
+pub static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Returns a unique, thread-safe `u64` ID.
+pub fn next_id() -> u64 {
+    NEXT_ID.fetch_add(1, Ordering::SeqCst)
+}
 /// Marker trait for types that can be stored as xaeroflux events.
 ///
 /// Requirements:
@@ -61,6 +88,11 @@ pub static XAERO_DISPATCHER_POOL: OnceLock<ThreadPool> = OnceLock::new();
 /// Global runtime for peer-to-peer networking tasks.
 pub static P2P_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 
+pub static XEPM: LazyLock<()> = LazyLock::new(|| {
+    XaeroPoolManager::init();
+});
+
+// Automatically initializes on first access
 pub fn shutdown_all_pools() -> Result<(), Box<dyn std::error::Error>> {
     let dpo = DISPATCHER_POOL.get();
     match dpo.as_ref() {
@@ -288,16 +320,5 @@ mod tests {
         let e = event::EventType::SystemEvent(event::SystemEventKind::Start);
         let event = event::EventType::from_u8(1);
         assert_eq!(event, e);
-    }
-    #[test]
-    fn test_event() {
-        initialize();
-        let data = event::EventType::from_u8(0);
-        let event = event::Event::<event::EventType>::new(data.clone(), 0);
-        assert_eq!(event.event_type, data);
-        assert_eq!(
-            event.version,
-            CONF.get().expect("failed to load config").version
-        );
     }
 }
