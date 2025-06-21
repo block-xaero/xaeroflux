@@ -2,4 +2,4 @@
 resolver = "3"
 members = ["xaeroflux", "xaeroflux-actors", "xaeroflux-core", "xaeroflux-crdts", "xaeroflux-ffi", "xaeroflux-macros"]
 [workspace.dependencies]
-xaeroid = {path = "../xaeroID"}
+xaeroid = {version = "0.3.1-rc3"}

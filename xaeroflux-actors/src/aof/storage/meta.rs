@@ -8,7 +8,7 @@ use liblmdb::{
     mdb_txn_begin,
 };
 use rkyv::util::AlignedVec;
-use xaeroflux_core::{event::EventType, XaeroPoolManager};
+use xaeroflux_core::{XaeroPoolManager, event::EventType};
 
 use super::{format::SegmentMeta, lmdb::LmdbEnv};
 
@@ -165,11 +165,7 @@ mod meta_tests {
 
     use bytemuck::bytes_of;
     use tempfile::tempdir;
-    use xaeroflux_core::{
-        date_time::emit_secs,
-        event::EventType,
-        initialize, XaeroPoolManager,
-    };
+    use xaeroflux_core::{XaeroPoolManager, date_time::emit_secs, event::EventType, initialize};
 
     use super::*;
     use crate::{BusKind, aof::storage::lmdb::push_xaero_event};
@@ -194,8 +190,7 @@ mod meta_tests {
 
         let dir = tempdir().expect("failed_to_unravel");
         let env = Arc::new(Mutex::new(
-            LmdbEnv::new(dir.path().to_str().expect("failed_to_unravel"), BusKind::Data)
-                .expect("failed_to_unravel"),
+            LmdbEnv::new(dir.path().to_str().expect("failed_to_unravel"), BusKind::Data).expect("failed_to_unravel"),
         ));
 
         let all = iterate_segment_meta_by_range(&env, 0, None).expect("failed_to_unravel");
@@ -209,8 +204,7 @@ mod meta_tests {
 
         let dir = tempdir().expect("failed_to_unravel");
         let env = Arc::new(Mutex::new(
-            LmdbEnv::new(dir.path().to_str().expect("failed_to_unravel"), BusKind::Data)
-                .expect("failed_to_unravel"),
+            LmdbEnv::new(dir.path().to_str().expect("failed_to_unravel"), BusKind::Data).expect("failed_to_unravel"),
         ));
 
         let ts = emit_secs();
@@ -224,7 +218,8 @@ mod meta_tests {
             None,
             None,
             ts,
-        ).expect("Failed to create meta event");
+        )
+        .expect("Failed to create meta event");
 
         push_xaero_event(&env, &xaero_event).expect("failed to push meta");
 
@@ -246,8 +241,7 @@ mod meta_tests {
 
         let dir = tempdir().expect("failed_to_unravel");
         let env = Arc::new(Mutex::new(
-            LmdbEnv::new(dir.path().to_str().expect("failed_to_unravel"), BusKind::Control)
-                .expect("failed_to_unravel"),
+            LmdbEnv::new(dir.path().to_str().expect("failed_to_unravel"), BusKind::Control).expect("failed_to_unravel"),
         ));
 
         // create three metas at t=10,20,30
@@ -260,7 +254,8 @@ mod meta_tests {
                 None,
                 None,
                 meta.ts_start,
-            ).expect("Failed to create meta event");
+            )
+            .expect("Failed to create meta event");
 
             push_xaero_event(&env, &xaero_event).expect("failed to push meta");
         }

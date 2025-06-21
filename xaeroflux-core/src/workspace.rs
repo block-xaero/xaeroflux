@@ -1,20 +1,12 @@
 use std::{
     collections::HashMap,
-    error::Error,
-    fmt::{Debug, Formatter},
+    fmt::Debug,
     sync::{Arc, Mutex},
 };
 
-use bytemuck::{Pod, Zeroable};
-use rkyv::Archive;
-use xaeroid::{XaeroID, zk_proofs::XaeroProofs};
+use xaeroid::XaeroID;
 
-use crate::{
-    hash::blake_hash,
-    merkle_tree::XaeroMerkleProof,
-    pipe::{BusKind, Pipe, SignalPipe},
-    vector_clock::VectorClock,
-};
+use crate::pipe::{BusKind, Pipe, SignalPipe};
 
 #[derive(Debug)]
 pub struct Conduit {
@@ -61,6 +53,3 @@ pub struct Object {
     pub id: [u8; 32],
     pub conduit: Conduit,
 }
-
-
-

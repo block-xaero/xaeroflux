@@ -5,7 +5,7 @@
 //! - `SegmentWriterActor`: an actor that listens for archived event blobs and writes them into
 //!   fixed-size pages within segment files.
 //! - Unit tests verifying segment math, flush behavior, and rollover/resume logic.
-
+#[allow(deprecated)]
 use std::{
     cell::RefCell,
     fs::{File, OpenOptions},
@@ -19,9 +19,7 @@ use memmap2::MmapMut;
 use xaeroflux_core::{
     XAERO_DISPATCHER_POOL, XaeroPoolManager,
     date_time::{day_bounds_from_epoch_ms, emit_secs},
-    event::{
-        EventType, EventType::SystemEvent, ScanWindow, SystemEventKind, SystemEventKind::Shutdown, XaeroEvent,
-    },
+    event::{EventType, EventType::SystemEvent, ScanWindow, SystemEventKind, SystemEventKind::Shutdown, XaeroEvent},
     hash::sha_256_hash_b,
     pipe::{BusKind, Pipe},
     size::PAGE_SIZE,
@@ -29,11 +27,7 @@ use xaeroflux_core::{
 };
 
 use crate::{
-    aof::storage::{
-        format::SegmentMeta,
-        lmdb::{LmdbEnv},
-        meta::iterate_segment_meta_by_range,
-    },
+    aof::storage::{format::SegmentMeta, lmdb::LmdbEnv, meta::iterate_segment_meta_by_range},
     indexing::storage::format::archive_xaero_event, // Updated import
     subject::SubjectHash,
     system_payload::SystemPayload,
@@ -173,7 +167,8 @@ impl WriterState {
             None,
             None,
             emit_secs(),
-        ).unwrap_or_else(|pool_error| {
+        )
+        .unwrap_or_else(|pool_error| {
             tracing::error!("Pool allocation failed for metadata: {:?}", pool_error);
             panic!("Failed to create metadata event: {:?}", pool_error);
         });
@@ -240,19 +235,14 @@ pub struct SegmentWriterActor {
 impl Drop for SegmentWriterActor {
     fn drop(&mut self) {
         // Send shutdown event using XaeroPoolManager
-        let shutdown_event = XaeroPoolManager::create_xaero_event(
-            &[],
-            SystemEvent(Shutdown).to_u8(),
-            None,
-            None,
-            None,
-            emit_secs(),
-        ).unwrap_or_else(|pool_error| {
-            tracing::error!("Pool allocation failed: {:?}", pool_error);
-            // TODO: Update rusted_ring::AllocationError::EventCreation to accept String instead of &str
-            // TODO: Eliminate this fallback once all Event::new usage is removed
-            panic!("Failed to allocate Xaero pool due to: {:?}", pool_error);
-        });
+        let shutdown_event =
+            XaeroPoolManager::create_xaero_event(&[], SystemEvent(Shutdown).to_u8(), None, None, None, emit_secs())
+                .unwrap_or_else(|pool_error| {
+                    tracing::error!("Pool allocation failed: {:?}", pool_error);
+                    // TODO: Update rusted_ring::AllocationError::EventCreation to accept String instead of &str
+                    // TODO: Eliminate this fallback once all Event::new usage is removed
+                    panic!("Failed to allocate Xaero pool due to: {:?}", pool_error);
+                });
 
         let res = self.pipe.sink.tx.send(shutdown_event);
         match res {
@@ -289,14 +279,14 @@ impl SegmentWriterActor {
                     emit_control_path_with_subject_hash(config.lmdb_env_path.as_str(), name.0, NAME_PREFIX).as_str(),
                     BusKind::Data,
                 )
-                    .expect("failed_to_create_lmdb_env"),
+                .expect("failed_to_create_lmdb_env"),
             )),
             BusKind::Data => Arc::new(Mutex::new(
                 LmdbEnv::new(
                     emit_data_path_with_subject_hash(config.lmdb_env_path.as_str(), name.0, NAME_PREFIX).as_str(),
                     BusKind::Data,
                 )
-                    .expect("failed_to_create_lmdb_env"),
+                .expect("failed_to_create_lmdb_env"),
             )),
         };
 
@@ -319,7 +309,9 @@ impl SegmentWriterActor {
                     }
 
                     // Handle the event directly - no intermediate channel
-                    if let Err(e) = Self::handle_xaero_event(&xaero_event, &config_clone, &metadb_clone, &pipe_clone, &state_clone) {
+                    if let Err(e) =
+                        Self::handle_xaero_event(&xaero_event, &config_clone, &metadb_clone, &pipe_clone, &state_clone)
+                    {
                         tracing::error!("Failed to handle XaeroEvent: {}", e);
                     }
                 }
@@ -393,7 +385,8 @@ impl SegmentWriterActor {
         let bytes_of_payload_written = bytemuck::bytes_of::<SystemPayload>(&SystemPayload::PayloadWritten {
             leaf_hash,
             meta: state.current_segment_meta(),
-        }).to_vec();
+        })
+        .to_vec();
 
         let payload_written_event = XaeroPoolManager::create_xaero_event(
             &bytes_of_payload_written,
@@ -402,7 +395,8 @@ impl SegmentWriterActor {
             None,
             None,
             emit_secs(),
-        ).unwrap_or_else(|pool_error| {
+        )
+        .unwrap_or_else(|pool_error| {
             tracing::error!("Pool allocation failed: {:?}", pool_error);
             // TODO: Update rusted_ring::AllocationError::EventCreation to accept String instead of &str
             // TODO: Eliminate this fallback once all Event::new usage is removed
@@ -438,7 +432,7 @@ mod tests {
 
     use serial_test::serial;
     use tempfile::tempdir;
-    use xaeroflux_core::{event::EventType, init_xaero_pool, initialize, shutdown_all_pools, XaeroPoolManager};
+    use xaeroflux_core::{XaeroPoolManager, event::EventType, init_xaero_pool, initialize, shutdown_all_pools};
 
     use super::*;
     use crate::indexing::storage::format::archive_xaero_event; // Updated import
@@ -452,7 +446,8 @@ mod tests {
             None,
             None,
             emit_secs(),
-        ).unwrap_or_else(|pool_error| {
+        )
+        .unwrap_or_else(|pool_error| {
             tracing::error!("Pool allocation failed: {:?}", pool_error);
             // TODO: Update rusted_ring::AllocationError::EventCreation to accept String instead of &str
             // TODO: Eliminate this fallback once all Event::new usage is removed
@@ -491,7 +486,8 @@ mod tests {
             None,
             None,
             emit_secs(),
-        ).unwrap_or_else(|pool_error| {
+        )
+        .unwrap_or_else(|pool_error| {
             tracing::error!("Pool allocation failed in test: {:?}", pool_error);
             panic!("Failed to create test metadata event: {:?}", pool_error);
         });
@@ -609,13 +605,14 @@ mod tests {
 
         // Test with new archive format - create test events to get size
         let test_event = XaeroPoolManager::create_xaero_event(
-            &vec![1; 50],
+            &[1; 50],
             EventType::ApplicationEvent(1).to_u8(),
             None,
             None,
             None,
             emit_secs(),
-        ).expect("Failed to create test event");
+        )
+        .expect("Failed to create test event");
 
         let archived_size = archive_xaero_event(&test_event).len();
 
@@ -674,7 +671,8 @@ mod tests {
             None,
             None,
             emit_secs(),
-        ).expect("Failed to create test event");
+        )
+        .expect("Failed to create test event");
 
         let archived_size = archive_xaero_event(&test_event).len();
 
@@ -817,7 +815,10 @@ mod tests {
             .filter(|entry| entry.path().extension().and_then(|s| s.to_str()) == Some("seg"))
             .collect();
 
-        assert!(!files.is_empty(), "No segment files were created with zero-copy archival");
+        assert!(
+            !files.is_empty(),
+            "No segment files were created with zero-copy archival"
+        );
         drop(_actor);
 
         let res = shutdown_all_pools();

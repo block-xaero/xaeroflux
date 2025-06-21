@@ -1,7 +1,9 @@
 use std::sync::{Arc, OnceLock};
+
 use bytemuck::Zeroable;
-use rusted_ring::{EventAllocator, EventSize, PooledEvent, RingPtr};
-use rusted_ring::pooled_event_ptr::PooledEventPtr;
+use rusted_ring::{
+    EventAllocator, EventSize, PooledEvent, RingPtr, pooled_event_ptr::PooledEventPtr,
+};
 use xaeroid::XaeroID;
 
 use crate::event::VectorClock;
@@ -55,7 +57,7 @@ pub enum PoolError {
 #[derive(Debug, Clone, Copy)]
 pub struct FixedMerkleProof {
     pub proof_len: u16,
-    pub _pad: [u8; 6],         // Alignment padding
+    pub _pad: [u8; 6],          // Alignment padding
     pub proof_data: [u8; 1016], // Fits in M pool (1024 - 8 bytes for header)
 }
 
@@ -135,6 +137,12 @@ pub struct MerkleProofAllocator {
     allocator: EventAllocator,
 }
 
+impl Default for MerkleProofAllocator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MerkleProofAllocator {
     pub fn new() -> Self {
         Self {
@@ -164,6 +172,12 @@ impl MerkleProofAllocator {
 /// Stack-based allocator for vector clocks
 pub struct VectorClockAllocator {
     allocator: EventAllocator,
+}
+
+impl Default for VectorClockAllocator {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl VectorClockAllocator {
@@ -217,10 +231,14 @@ impl XaeroEvent {
     pub fn len(&self) -> u32 {
         self.evt.len()
     }
+    
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 
     /// Get author ID with zero-copy access (since XaeroID is Pod)
     pub fn author_id(&self) -> Option<&XaeroID> {
-        self.author_id.as_ref().map(|ptr| &**ptr)
+        self.author_id.as_deref()
     }
 
     /// Get merkle proof with zero-copy access
@@ -237,7 +255,7 @@ impl XaeroEvent {
 
     /// Get raw fixed vector clock for zero-copy operations
     pub fn get_fixed_vector_clock(&self) -> Option<&FixedVectorClock> {
-        self.vector_clock.as_ref().map(|ptr| &**ptr)
+        self.vector_clock.as_deref()
     }
 
     /// Get slot indices for operator pipeline access
@@ -306,10 +324,10 @@ impl XaeroPoolManager {
     /// Initialize all pools once at startup - ALL ON STACK
     pub fn init() {
         // Stack-based pools for all data
-        EVENT_DATA_ALLOCATOR.get_or_init(|| EventAllocator::new());
-        XAERO_ID_ALLOCATOR.get_or_init(|| EventAllocator::new());
-        MERKLE_PROOF_ALLOCATOR.get_or_init(|| MerkleProofAllocator::new());
-        VECTOR_CLOCK_ALLOCATOR.get_or_init(|| VectorClockAllocator::new());
+        EVENT_DATA_ALLOCATOR.get_or_init(EventAllocator::new);
+        XAERO_ID_ALLOCATOR.get_or_init(EventAllocator::new);
+        MERKLE_PROOF_ALLOCATOR.get_or_init(MerkleProofAllocator::new);
+        VECTOR_CLOCK_ALLOCATOR.get_or_init(VectorClockAllocator::new);
 
         // Log platform configuration
         #[cfg(any(target_os = "ios", target_os = "android"))]
@@ -489,13 +507,13 @@ impl XaeroPoolManager {
         // ALL stack ring buffer allocations
         let evt = Self::allocate_event_data(data, event_type)?;
         let author_id = author_id
-            .map(|id| Self::allocate_xaero_id(id))
+            .map(Self::allocate_xaero_id)
             .transpose()?;
         let merkle_proof = merkle_proof
-            .map(|proof| Self::allocate_merkle_proof(proof))
+            .map(Self::allocate_merkle_proof)
             .transpose()?;
         let vector_clock = vector_clock
-            .map(|vc| Self::allocate_vector_clock(vc))
+            .map(Self::allocate_vector_clock)
             .transpose()?;
 
         // Single heap allocation for the event container (just pointers + u64)
@@ -567,7 +585,7 @@ mod tests {
             Some(&vc),
             1234567890,
         )
-            .unwrap();
+        .expect("failed_to_unravel");
 
         // Verify ALL data is zero-copy accessible
         assert_eq!(event.data(), b"small test");
@@ -599,13 +617,13 @@ mod tests {
         // Drawing stroke event (common)
         let stroke_event = XaeroPoolManager::create_xaero_event(
             b"stroke_data", // Smaller stroke data
-            1, // STROKE_EVENT
+            1,              // STROKE_EVENT
             Some(XaeroID::zeroed()),
             None, // No merkle proof for simple strokes
             None, // No vector clock for simple strokes
             1234567890,
         )
-            .unwrap();
+        .expect("failed_to_unravel");
 
         // Collaborative edit with minimal vector clock (less common)
         let mut vc = VectorClock {
@@ -616,13 +634,13 @@ mod tests {
 
         let collab_event = XaeroPoolManager::create_xaero_event(
             b"edit_op", // Smaller collaborative edit data
-            2, // COLLABORATIVE_EDIT
+            2,          // COLLABORATIVE_EDIT
             Some(XaeroID::zeroed()),
             Some(b"proof"), // Smaller merkle proof
             Some(&vc),
             1234567891,
         )
-            .unwrap();
+        .expect("failed_to_unravel");
 
         events.push(stroke_event);
         events.push(collab_event);

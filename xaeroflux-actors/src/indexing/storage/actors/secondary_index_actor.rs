@@ -5,10 +5,10 @@ use std::{
 };
 
 use xaeroflux_core::{
+    XaeroPoolManager,
+    date_time::emit_secs,
     event::{EventType::SystemEvent, SystemErrorCode, SystemEventKind, XaeroEvent},
     pipe::{BusKind, Pipe},
-    date_time::emit_secs,
-    XaeroPoolManager,
 };
 
 use crate::{
@@ -61,9 +61,12 @@ impl SecondaryIndexActor {
                         let success_event = XaeroPoolManager::create_xaero_event(
                             bytemuck::bytes_of(&SystemPayload::MMRLeafAppended { leaf_hash }),
                             SystemEvent(SystemEventKind::MmrAppended).to_u8(),
-                            None, None, None,
+                            None,
+                            None,
+                            None,
                             emit_secs(),
-                        ).unwrap_or_else(|pool_error| {
+                        )
+                        .unwrap_or_else(|pool_error| {
                             tracing::error!("Pool allocation failed for MMRLeafAppended: {:?}", pool_error);
                             panic!("Cannot create MMRLeafAppended event - ring buffer pool exhausted");
                         });
@@ -76,9 +79,12 @@ impl SecondaryIndexActor {
                                 error_code: SystemErrorCode::MmrAppend as u16,
                             }),
                             SystemEvent(SystemEventKind::MmrAppendFailed).to_u8(),
-                            None, None, None,
+                            None,
+                            None,
+                            None,
                             emit_secs(),
-                        ).unwrap_or_else(|pool_error| {
+                        )
+                        .unwrap_or_else(|pool_error| {
                             tracing::error!("Pool allocation failed for MmrAppendFailed: {:?}", pool_error);
                             panic!("Cannot create MmrAppendFailed event - ring buffer pool exhausted");
                         });
@@ -105,14 +111,18 @@ impl SecondaryIndexActor {
                         let success_event = XaeroPoolManager::create_xaero_event(
                             bytemuck::bytes_of(&SystemPayload::SecondaryIndexWritten { leaf_hash }),
                             SystemEvent(SystemEventKind::SecondaryIndexWritten).to_u8(),
-                            None, None, None,
+                            None,
+                            None,
+                            None,
                             emit_secs(),
-                        ).unwrap_or_else(|pool_error| {
+                        )
+                        .unwrap_or_else(|pool_error| {
                             tracing::error!("Pool allocation failed for SecondaryIndexWritten: {:?}", pool_error);
                             panic!("Cannot create SecondaryIndexWritten event - ring buffer pool exhausted");
                         });
 
-                        tx.send(success_event).expect("failed to send SecondaryIndexWritten event");
+                        tx.send(success_event)
+                            .expect("failed to send SecondaryIndexWritten event");
                     } else {
                         let failure_event = XaeroPoolManager::create_xaero_event(
                             bytemuck::bytes_of(&SystemPayload::SecondaryIndexFailed {
@@ -120,14 +130,18 @@ impl SecondaryIndexActor {
                                 error_code: SystemErrorCode::SecondaryIndex as u16,
                             }),
                             SystemEvent(SystemEventKind::SecondaryIndexFailed).to_u8(),
-                            None, None, None,
+                            None,
+                            None,
+                            None,
                             emit_secs(),
-                        ).unwrap_or_else(|pool_error| {
+                        )
+                        .unwrap_or_else(|pool_error| {
                             tracing::error!("Pool allocation failed for SecondaryIndexFailed: {:?}", pool_error);
                             panic!("Cannot create SecondaryIndexFailed event - ring buffer pool exhausted");
                         });
 
-                        tx.send(failure_event).expect("failed to send SecondaryIndexFailed event");
+                        tx.send(failure_event)
+                            .expect("failed to send SecondaryIndexFailed event");
                     }
                 }
             }
@@ -207,12 +221,12 @@ impl Drop for SecondaryIndexActor {
 mod tests {
     use std::{
         sync::{Arc, Mutex},
-        time::Duration,
         thread::sleep,
+        time::Duration,
     };
 
     use tempfile::tempdir;
-    use xaeroflux_core::{initialize, XaeroPoolManager, date_time::emit_secs};
+    use xaeroflux_core::{XaeroPoolManager, date_time::emit_secs, initialize};
 
     use super::SecondaryIndexActor;
     use crate::{
@@ -232,8 +246,7 @@ mod tests {
         // Setup LMDB env and actor
         let dir = tempdir().expect("failed_to_unravel");
         let env = Arc::new(Mutex::new(
-            LmdbEnv::new(dir.path().to_str().expect("failed_to_unravel"), BusKind::Data)
-                .expect("failed_to_unravel"),
+            LmdbEnv::new(dir.path().to_str().expect("failed_to_unravel"), BusKind::Data).expect("failed_to_unravel"),
         ));
         let pipe = Pipe::new(BusKind::Data, None);
         let actor = SecondaryIndexActor::new(pipe.clone(), env.clone(), Duration::from_secs(60));
@@ -255,28 +268,40 @@ mod tests {
         let payload_written_event = XaeroPoolManager::create_xaero_event(
             bytemuck::bytes_of(&payload_written),
             0, // Using 0 as placeholder event type
-            None, None, None,
+            None,
+            None,
+            None,
             emit_secs(),
-        ).unwrap_or_else(|pool_error| {
+        )
+        .unwrap_or_else(|pool_error| {
             tracing::error!("Pool allocation failed: {:?}", pool_error);
             panic!("Cannot create test event - ring buffer pool exhausted");
         });
 
-        pipe.source.tx.send(payload_written_event).expect("failed to send PayloadWritten");
+        pipe.source
+            .tx
+            .send(payload_written_event)
+            .expect("failed to send PayloadWritten");
 
         // Send MmrAppended event
         let mmr_appended = SystemPayload::MmrAppended { leaf_hash };
         let mmr_appended_event = XaeroPoolManager::create_xaero_event(
             bytemuck::bytes_of(&mmr_appended),
             0, // Using 0 as placeholder event type
-            None, None, None,
+            None,
+            None,
+            None,
             emit_secs(),
-        ).unwrap_or_else(|pool_error| {
+        )
+        .unwrap_or_else(|pool_error| {
             tracing::error!("Pool allocation failed: {:?}", pool_error);
             panic!("Cannot create test event - ring buffer pool exhausted");
         });
 
-        pipe.source.tx.send(mmr_appended_event).expect("failed to send MmrAppended");
+        pipe.source
+            .tx
+            .send(mmr_appended_event)
+            .expect("failed to send MmrAppended");
 
         // Allow processing time
         sleep(Duration::from_millis(100));
@@ -299,8 +324,7 @@ mod tests {
 
         let dir = tempdir().expect("failed_to_unravel");
         let env = Arc::new(Mutex::new(
-            LmdbEnv::new(dir.path().to_str().expect("failed_to_unravel"), BusKind::Data)
-                .expect("failed_to_unravel"),
+            LmdbEnv::new(dir.path().to_str().expect("failed_to_unravel"), BusKind::Data).expect("failed_to_unravel"),
         ));
         let pipe = Pipe::new(BusKind::Data, None);
         let actor = SecondaryIndexActor::new(pipe.clone(), env.clone(), Duration::from_secs(60));
@@ -321,28 +345,40 @@ mod tests {
         let mmr_appended_event = XaeroPoolManager::create_xaero_event(
             bytemuck::bytes_of(&mmr_appended),
             0, // Using 0 as placeholder event type
-            None, None, None,
+            None,
+            None,
+            None,
             emit_secs(),
-        ).unwrap_or_else(|pool_error| {
+        )
+        .unwrap_or_else(|pool_error| {
             tracing::error!("Pool allocation failed: {:?}", pool_error);
             panic!("Cannot create test event - ring buffer pool exhausted");
         });
 
-        pipe.source.tx.send(mmr_appended_event).expect("failed to send MmrAppended");
+        pipe.source
+            .tx
+            .send(mmr_appended_event)
+            .expect("failed to send MmrAppended");
 
         // Then send PayloadWritten
         let payload_written = SystemPayload::PayloadWritten { leaf_hash, meta };
         let payload_written_event = XaeroPoolManager::create_xaero_event(
             bytemuck::bytes_of(&payload_written),
             0, // Using 0 as placeholder event type
-            None, None, None,
+            None,
+            None,
+            None,
             emit_secs(),
-        ).unwrap_or_else(|pool_error| {
+        )
+        .unwrap_or_else(|pool_error| {
             tracing::error!("Pool allocation failed: {:?}", pool_error);
             panic!("Cannot create test event - ring buffer pool exhausted");
         });
 
-        pipe.source.tx.send(payload_written_event).expect("failed to send PayloadWritten");
+        pipe.source
+            .tx
+            .send(payload_written_event)
+            .expect("failed to send PayloadWritten");
 
         // Allow processing time
         sleep(Duration::from_millis(100));
@@ -364,8 +400,7 @@ mod tests {
 
         let dir = tempdir().expect("failed_to_unravel");
         let env = Arc::new(Mutex::new(
-            LmdbEnv::new(dir.path().to_str().expect("failed_to_unravel"), BusKind::Data)
-                .expect("failed_to_unravel"),
+            LmdbEnv::new(dir.path().to_str().expect("failed_to_unravel"), BusKind::Data).expect("failed_to_unravel"),
         ));
         let pipe = Pipe::new(BusKind::Data, None);
         let _actor = SecondaryIndexActor::new(pipe.clone(), env.clone(), Duration::from_secs(60));
@@ -387,9 +422,12 @@ mod tests {
         let test_event = XaeroPoolManager::create_xaero_event(
             expected_data,
             0, // Using 0 as placeholder event type
-            None, None, None,
+            None,
+            None,
+            None,
             emit_secs(),
-        ).unwrap_or_else(|pool_error| {
+        )
+        .unwrap_or_else(|pool_error| {
             tracing::error!("Pool allocation failed: {:?}", pool_error);
             panic!("Cannot create test event - ring buffer pool exhausted");
         });

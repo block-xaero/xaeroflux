@@ -70,8 +70,12 @@ impl<'a> Iterator for PageEventIterator<'a> {
         let frame_len = EVENT_HEADER_SIZE + hdr.len as usize;
         if self.offset + frame_len > self.page.len() {
             // Invalid frame - extends beyond page boundary
-            tracing::warn!("Event frame extends beyond page boundary: offset={}, frame_len={}, page_len={}",
-                          self.offset, frame_len, self.page.len());
+            tracing::warn!(
+                "Event frame extends beyond page boundary: offset={}, frame_len={}, page_len={}",
+                self.offset,
+                frame_len,
+                self.page.len()
+            );
             return None;
         }
 
@@ -132,10 +136,10 @@ mod tests {
     use memmap2::MmapMut;
     use tempfile::TempDir;
     use xaeroflux_core::{
-        initialize,
         XaeroPoolManager,
-        event::{EventType, XaeroEvent},
         date_time::emit_secs,
+        event::{EventType, XaeroEvent},
+        initialize,
     };
 
     use super::*;
@@ -176,9 +180,12 @@ mod tests {
         let xaero_event = XaeroPoolManager::create_xaero_event(
             &payload,
             EventType::ApplicationEvent(1).to_u8(),
-            None, None, None,
+            None,
+            None,
+            None,
             emit_secs(),
-        ).unwrap_or_else(|pool_error| {
+        )
+        .unwrap_or_else(|pool_error| {
             tracing::error!("Pool allocation failed: {:?}", pool_error);
             panic!("Cannot create test event - ring buffer pool exhausted");
         });
@@ -216,18 +223,24 @@ mod tests {
         let e1 = XaeroPoolManager::create_xaero_event(
             &[4],
             EventType::ApplicationEvent(1).to_u8(),
-            None, None, None,
+            None,
+            None,
+            None,
             emit_secs(),
-        ).unwrap_or_else(|pool_error| {
+        )
+        .unwrap_or_else(|pool_error| {
             panic!("Cannot create test event 1: {:?}", pool_error);
         });
 
         let e2 = XaeroPoolManager::create_xaero_event(
             &[5, 6],
             EventType::ApplicationEvent(2).to_u8(),
-            None, None, None,
+            None,
+            None,
+            None,
             emit_secs(),
-        ).unwrap_or_else(|pool_error| {
+        )
+        .unwrap_or_else(|pool_error| {
             panic!("Cannot create test event 2: {:?}", pool_error);
         });
 
@@ -266,18 +279,24 @@ mod tests {
         let e1 = XaeroPoolManager::create_xaero_event(
             &[7],
             EventType::ApplicationEvent(1).to_u8(),
-            None, None, None,
+            None,
+            None,
+            None,
             emit_secs(),
-        ).unwrap_or_else(|pool_error| {
+        )
+        .unwrap_or_else(|pool_error| {
             panic!("Cannot create test event 1: {:?}", pool_error);
         });
 
         let e2 = XaeroPoolManager::create_xaero_event(
             &[8, 9],
             EventType::ApplicationEvent(2).to_u8(),
-            None, None, None,
+            None,
+            None,
+            None,
             emit_secs(),
-        ).unwrap_or_else(|pool_error| {
+        )
+        .unwrap_or_else(|pool_error| {
             panic!("Cannot create test event 2: {:?}", pool_error);
         });
 
@@ -313,9 +332,12 @@ mod tests {
         let xaero_event = XaeroPoolManager::create_xaero_event(
             &[1, 2, 3],
             EventType::ApplicationEvent(1).to_u8(),
-            None, None, None,
+            None,
+            None,
+            None,
             emit_secs(),
-        ).unwrap_or_else(|pool_error| {
+        )
+        .unwrap_or_else(|pool_error| {
             panic!("Cannot create test event: {:?}", pool_error);
         });
 
@@ -346,9 +368,12 @@ mod tests {
         let original_event = XaeroPoolManager::create_xaero_event(
             original_data,
             EventType::ApplicationEvent(42).to_u8(),
-            None, None, None,
+            None,
+            None,
+            None,
             emit_secs(),
-        ).unwrap_or_else(|pool_error| {
+        )
+        .unwrap_or_else(|pool_error| {
             panic!("Cannot create test event: {:?}", pool_error);
         });
 
@@ -356,12 +381,14 @@ mod tests {
         let archived_frame = archive_xaero_event(&original_event);
 
         // Unarchive to new XaeroEvent
-        let reconstructed_event = unarchive_to_xaero_event(&archived_frame)
-            .expect("should reconstruct event");
+        let reconstructed_event = unarchive_to_xaero_event(&archived_frame).expect("should reconstruct event");
 
         // Verify roundtrip integrity
         assert_eq!(reconstructed_event.data(), original_data);
-        assert_eq!(reconstructed_event.event_type(), EventType::ApplicationEvent(42).to_u8());
+        assert_eq!(
+            reconstructed_event.event_type(),
+            EventType::ApplicationEvent(42).to_u8()
+        );
 
         // Verify raw data access also works
         let (header, raw_data) = unarchive_to_raw_data(&archived_frame);

@@ -49,6 +49,7 @@ pub enum Fold {
     PNCounter,
 }
 
+#[allow(clippy::type_complexity)]
 impl Fold {
     pub fn to_operator(
         self,
@@ -123,7 +124,7 @@ impl Fold {
 
                     // Use rkyv for serialization
                     let serialized = rkyv::to_bytes::<rkyv::rancor::Failure>(&final_elements)
-                        .map_err(|e| AllocationError::EventCreation("Serialization failed"))?;
+                        .map_err(|_| AllocationError::EventCreation("Serialization failed"))?;
 
                     // Allocate in ring buffer using new API
                     let allocated_event = ea.allocate_event(&serialized, CRDT_SET_STATE as u32)?;
@@ -231,6 +232,7 @@ pub enum Reduce {
     RegisterValue,
 }
 
+#[allow(clippy::type_complexity)]
 impl Reduce {
     pub fn to_operator(
         self,

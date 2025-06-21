@@ -95,7 +95,7 @@ impl Materializer for ThreadPoolForSubjectMaterializer {
                     None,
                     xaeroflux_core::date_time::emit_secs(),
                 )
-                    .expect("Failed to create control event");
+                .expect("Failed to create control event");
 
                 let data_event = XaeroPoolManager::create_xaero_event(
                     data,
@@ -105,7 +105,7 @@ impl Materializer for ThreadPoolForSubjectMaterializer {
                     None,
                     xaeroflux_core::date_time::emit_secs(),
                 )
-                    .expect("Failed to create data event");
+                .expect("Failed to create data event");
 
                 subject.control.sink.tx.send(control_event).expect("failed_to_unwrap");
 
@@ -997,8 +997,8 @@ fn apply_batch_ops(
     }
 }
 
+#[allow(deprecated)]
 #[cfg(test)]
-#[ignore]
 mod materializer_tests {
     use std::{
         sync::{Arc, Mutex},
@@ -1030,12 +1030,13 @@ mod materializer_tests {
             None,
             xaeroflux_core::date_time::emit_secs(),
         )
-            .expect("Failed to create test event")
+        .expect("Failed to create test event")
     }
 
+    #[allow(clippy::type_complexity)]
     // Example updated CRDT fold operation for testing
     fn create_test_fold_op()
-        -> Arc<dyn Fn(Arc<XaeroEvent>, Vec<Arc<XaeroEvent>>) -> Result<Arc<XaeroEvent>, AllocationError> + Send + Sync>
+    -> Arc<dyn Fn(Arc<XaeroEvent>, Vec<Arc<XaeroEvent>>) -> Result<Arc<XaeroEvent>, AllocationError> + Send + Sync>
     {
         Arc::new(|_acc, events| {
             let count = events.len() as u32;
@@ -1047,13 +1048,14 @@ mod materializer_tests {
                 None,
                 xaeroflux_core::date_time::emit_secs(),
             )
-                .map_err(|e| AllocationError::EventCreation("failed to create test event"))
+            .map_err(|e| AllocationError::EventCreation("failed to create test event"))
         })
     }
 
+    #[allow(clippy::type_complexity)]
     // Example updated CRDT reduce operation for testing
     fn create_test_reduce_op()
-        -> Arc<dyn Fn(Vec<Arc<XaeroEvent>>) -> Result<Arc<XaeroEvent>, AllocationError> + Send + Sync> {
+    -> Arc<dyn Fn(Vec<Arc<XaeroEvent>>) -> Result<Arc<XaeroEvent>, AllocationError> + Send + Sync> {
         Arc::new(|events| {
             let total_size: usize = events.iter().map(|e| e.data().len()).sum();
             XaeroPoolManager::create_xaero_event(
@@ -1063,7 +1065,8 @@ mod materializer_tests {
                 None,
                 None,
                 xaeroflux_core::date_time::emit_secs(),
-            ).map_err(|e| AllocationError::EventCreation("failed to create test event"))
+            )
+            .map_err(|e| AllocationError::EventCreation("failed to create test event"))
         })
     }
 
@@ -1085,7 +1088,7 @@ mod materializer_tests {
         let _sub = subject.subscribe(move |event| {
             // Test zero-copy data access
             let data = event.data(); // This should be zero-copy access via PooledEventPtr
-            data_clone.lock().unwrap().push(data.to_vec());
+            data_clone.lock().expect("failed_to_unravel").push(data.to_vec());
             event
         });
 
@@ -1098,7 +1101,7 @@ mod materializer_tests {
 
         thread::sleep(Duration::from_millis(50));
 
-        let final_data = processed_data.lock().unwrap();
+        let final_data = processed_data.lock().expect("failed_to_unravel");
         assert_eq!(final_data.len(), 1);
         assert_eq!(final_data[0], test_data);
     }
@@ -1113,8 +1116,7 @@ mod materializer_tests {
 
         // Create a fold operation that might fail
         let fold_op = Arc::new(
-            |_acc: Arc<Option<XaeroEvent>>, events: Vec<Arc<XaeroEvent>>| ->
-            Result<Arc<XaeroEvent>, AllocationError> {
+            |_acc: Arc<Option<XaeroEvent>>, events: Vec<Arc<XaeroEvent>>| -> Result<Arc<XaeroEvent>, AllocationError> {
                 if events.len() > 5 {
                     // Simulate allocation failure for large batches
                     Err(AllocationError::PoolFull(PoolId::L))
@@ -1126,7 +1128,8 @@ mod materializer_tests {
                         None,
                         None,
                         xaeroflux_core::date_time::emit_secs(),
-                    ).map_err(|e| AllocationError::EventCreation("failed to create test event"))
+                    )
+                    .map_err(|e| AllocationError::EventCreation("failed to create test event"))
                 }
             },
         );
@@ -1140,7 +1143,7 @@ mod materializer_tests {
 
         let results_clone = results.clone();
         let _sub = buffered.subscribe(move |event| {
-            results_clone.lock().unwrap().push(event.clone());
+            results_clone.lock().expect("failed_to_unravel").push(event.clone());
             event
         });
 
@@ -1154,12 +1157,10 @@ mod materializer_tests {
 
         thread::sleep(Duration::from_millis(150));
 
-        let final_results = results.lock().unwrap();
+        let final_results = results.lock().expect("failed_to_unravel");
         assert_eq!(final_results.len(), 1); // Should have one successful batch result
     }
 
     #[test]
-    pub fn test_a(){
-    }
-
+    pub fn test_a() {}
 }

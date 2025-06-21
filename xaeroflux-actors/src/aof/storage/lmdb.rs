@@ -1,3 +1,4 @@
+#[allow(deprecated)]
 use std::{
     ffi::CString,
     io::{Error, ErrorKind},
@@ -13,11 +14,11 @@ use liblmdb::{
 };
 use rkyv::{rancor::Failure, util::AlignedVec};
 use xaeroflux_core::{
-    event::{EventType, XaeroEvent},
-    hash::sha_256,
     XaeroPoolManager,
+    event::{EventType, XaeroEvent},
+    hash::{sha_256, sha_256_slice},
 };
-use xaeroflux_core::hash::sha_256_slice;
+
 use super::format::{EventKey, SegmentMeta};
 use crate::{BusKind, indexing::storage::format::archive_xaero_event};
 
@@ -163,6 +164,7 @@ impl Drop for LmdbEnv {
     }
 }
 
+#[allow(clippy::missing_safety_doc)]
 /// Scans archived XaeroEvents in the AOF database for a given timestamp range.
 ///
 /// Returns a `Vec<Arc<XaeroEvent>>` where each element is a reconstructed XaeroEvent
@@ -170,7 +172,7 @@ impl Drop for LmdbEnv {
 pub unsafe fn scan_xaero_range(
     env: &Arc<Mutex<LmdbEnv>>,
     start_ms: u64,
-    end_ms: u64
+    end_ms: u64,
 ) -> anyhow::Result<Vec<Arc<XaeroEvent>>> {
     let mut results = Vec::<Arc<XaeroEvent>>::new();
     let g = env.lock().expect("failed to lock env");
@@ -260,7 +262,7 @@ pub unsafe fn scan_xaero_range(
 /// - Application events: stored in the AOF database with a composite key.
 pub fn push_xaero_event(
     arc_env: &Arc<Mutex<LmdbEnv>>,
-    xaero_event: &Arc<XaeroEvent>
+    xaero_event: &Arc<XaeroEvent>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     unsafe {
         let env = arc_env.lock().expect("failed to lock env");
@@ -323,7 +325,6 @@ pub fn push_xaero_event(
                 return Err(Box::new(std::io::Error::from_raw_os_error(sc2)));
             }
             std::ptr::copy_nonoverlapping(event_data.as_ptr(), static_val.mv_data.cast(), event_data.len());
-
         } else if let EventType::MetaEvent(2) = event_type {
             // Static entry: raw MMRMeta bytes under "mmr_meta"
             let static_key = b"mmr_meta";
@@ -348,7 +349,6 @@ pub fn push_xaero_event(
                 return Err(Box::new(std::io::Error::from_raw_os_error(sc)));
             }
             std::ptr::copy_nonoverlapping(event_data.as_ptr(), data_val.mv_data.cast(), event_data.len());
-
         } else {
             // Application event: store using new archive format
             let key = generate_xaero_key(xaero_event)?;
@@ -479,7 +479,7 @@ pub fn get_secondary_index(
     }
 }
 
-
+#[allow(deprecated)]
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
@@ -487,9 +487,10 @@ mod tests {
     use bytemuck::bytes_of;
     use tempfile::tempdir;
     use xaeroflux_core::{
+        XaeroPoolManager,
         date_time::{MS_PER_DAY, day_bounds_from_epoch_ms, emit_secs},
         event::{EventType, XaeroEvent},
-        initialize, XaeroPoolManager,
+        initialize,
     };
 
     use super::*;
@@ -527,7 +528,7 @@ mod tests {
             .expect("get_secondary_index")
             .expect("meta missing");
         let unaligned_g_pidx = got.page_index;
-        assert_eq!(unaligned_m_pid,unaligned_g_pidx , "page_index mismatch");
+        assert_eq!(unaligned_m_pid, unaligned_g_pidx, "page_index mismatch");
     }
 
     #[test]
@@ -551,8 +552,8 @@ mod tests {
         XaeroPoolManager::init();
 
         let dir = tempdir().expect("failed to unravel");
-        let env = LmdbEnv::new(dir.path().to_str().expect("failed to unravel"), BusKind::Control)
-            .expect("failed to unravel");
+        let env =
+            LmdbEnv::new(dir.path().to_str().expect("failed to unravel"), BusKind::Control).expect("failed to unravel");
 
         assert!(!env.env.is_null());
         assert!(env.dbis[0] > 0);
@@ -568,14 +569,8 @@ mod tests {
         let timestamp = 123_456_789;
         let event_type = EventType::ApplicationEvent(1).to_u8();
 
-        let xaero_event = XaeroPoolManager::create_xaero_event(
-            &data,
-            event_type,
-            None,
-            None,
-            None,
-            timestamp,
-        ).expect("Failed to create XaeroEvent");
+        let xaero_event = XaeroPoolManager::create_xaero_event(&data, event_type, None, None, None, timestamp)
+            .expect("Failed to create XaeroEvent");
 
         let key = generate_xaero_key(&xaero_event).expect("failed to unravel");
         let bytes = bytes_of(&key);
@@ -596,8 +591,7 @@ mod tests {
 
         let dir = tempdir().expect("failed to unravel");
         let arc_env = Arc::new(Mutex::new(
-            LmdbEnv::new(dir.path().to_str().expect("failed to unravel"), BusKind::Data)
-                .expect("failed to unravel"),
+            LmdbEnv::new(dir.path().to_str().expect("failed to unravel"), BusKind::Data).expect("failed to unravel"),
         ));
 
         // Create two XaeroEvents
@@ -608,7 +602,8 @@ mod tests {
             None,
             None,
             emit_secs(),
-        ).expect("Failed to create event 1");
+        )
+        .expect("Failed to create event 1");
 
         let e2 = XaeroPoolManager::create_xaero_event(
             b"two",
@@ -617,7 +612,8 @@ mod tests {
             None,
             None,
             emit_secs(),
-        ).expect("Failed to create event 2");
+        )
+        .expect("Failed to create event 2");
 
         push_xaero_event(&arc_env, &e1).expect("failed to push e1");
         push_xaero_event(&arc_env, &e2).expect("failed to push e2");
@@ -647,8 +643,7 @@ mod tests {
 
         let dir = tempdir().expect("failed_to_unwrap");
         let arc_env = Arc::new(Mutex::new(
-            LmdbEnv::new(dir.path().to_str().expect("failed_to_unwrap"), BusKind::Control)
-                .expect("failed_to_unwrap"),
+            LmdbEnv::new(dir.path().to_str().expect("failed_to_unwrap"), BusKind::Control).expect("failed_to_unwrap"),
         ));
 
         let meta = SegmentMeta {
@@ -662,14 +657,9 @@ mod tests {
         };
 
         let data = bytemuck::bytes_of(&meta);
-        let xaero_event = XaeroPoolManager::create_xaero_event(
-            data,
-            EventType::MetaEvent(1).to_u8(),
-            None,
-            None,
-            None,
-            emit_secs(),
-        ).expect("Failed to create meta event");
+        let xaero_event =
+            XaeroPoolManager::create_xaero_event(data, EventType::MetaEvent(1).to_u8(), None, None, None, emit_secs())
+                .expect("Failed to create meta event");
 
         push_xaero_event(&arc_env, &xaero_event).expect("failed to push meta");
 

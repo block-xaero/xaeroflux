@@ -5,7 +5,7 @@ use rkyv::{Archive, Deserialize, Serialize};
 use xaeroid::XaeroID;
 
 #[repr(C)]
-#[derive(Debug,Clone, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
 pub struct VectorClock {
     pub latest_timestamp: u64,
     pub neighbor_clocks: HashMap<XaeroID, u64>,

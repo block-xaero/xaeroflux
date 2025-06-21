@@ -1,3 +1,4 @@
+#[allow(deprecated)]
 use std::{
     fmt::{Display, Formatter},
     sync::{
@@ -127,11 +128,10 @@ pub trait SubjectBatchOps {
     /// event header in archived form.
     fn fold_left<F>(self: &Arc<Self>, fold_left: Arc<F>) -> Arc<Self>
     where
-        F: Fn(Arc<Option<XaeroEvent>>, Vec<Arc<XaeroEvent>>) -> Result<Arc<XaeroEvent>,
-            AllocationError>
-        + Send
-        + Sync
-        + 'static;
+        F: Fn(Arc<Option<XaeroEvent>>, Vec<Arc<XaeroEvent>>) -> Result<Arc<XaeroEvent>, AllocationError>
+            + Send
+            + Sync
+            + 'static;
 
     /// Reduces vector of xaero events to a single XaeroEvent (stays in event domain).
     fn reduce<F>(self: &Arc<Self>, reducer: Arc<F>) -> Arc<Self>
@@ -244,11 +244,10 @@ impl SubjectBatchOps for Subject {
 
     fn fold_left<F>(self: &Arc<Self>, fold_left: Arc<F>) -> Arc<Self>
     where
-        F: Fn(Arc<Option<XaeroEvent>>, Vec<Arc<XaeroEvent>>) -> Result<Arc<XaeroEvent>,
-            AllocationError>
-        + Send
-        + Sync
-        + 'static,
+        F: Fn(Arc<Option<XaeroEvent>>, Vec<Arc<XaeroEvent>>) -> Result<Arc<XaeroEvent>, AllocationError>
+            + Send
+            + Sync
+            + 'static,
     {
         let mut new = (**self).clone();
         /// still lazy ~~ woohoo! ~~~
@@ -305,7 +304,7 @@ impl Subject {
             batch_mode: Arc::new(AtomicBool::new(false)), // by default its false.
             batch_context: None,
             mode_set: Arc::new(AtomicSignal::new(
-                Signal::from_u8(0).expect("cannot set an uninit mode from atomic signal - must panic!")
+                Signal::from_u8(0).expect("cannot set an uninit mode from atomic signal - must panic!"),
             )),
         })
     }

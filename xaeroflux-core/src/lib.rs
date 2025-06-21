@@ -13,14 +13,14 @@ pub mod hash;
 pub mod keys;
 pub mod logs;
 pub mod merkle_tree;
-pub  mod network;
+pub mod network;
 pub mod pipe;
+pub mod pool;
 pub mod size;
 pub mod sys;
 pub mod system_paths;
 pub mod vector_clock;
 pub mod workspace;
-pub mod pool;
 
 use std::{
     any::Any,
@@ -41,11 +41,7 @@ use rkyv::{
     util::AlignedVec,
     validation::{Validator, archive::ArchiveValidator, shared::SharedValidator},
 };
-use rusted_ring::{
-    allocator::EventAllocator,
-    pool::EventPools,
-    ring::{PooledEvent, RingBuffer},
-};
+use rusted_ring::allocator::EventAllocator;
 use threadpool::ThreadPool;
 use tracing::info;
 

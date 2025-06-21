@@ -11,15 +11,15 @@ use xaeroflux_core::{
     CONF, XAERO_DISPATCHER_POOL, XaeroPoolManager,
     event::XaeroEvent,
     init_xaero_pool, initialize,
+    pipe::{
+        BusKind::{Control, Data},
+        *,
+    },
     system_paths::{emit_control_path_with_subject_hash, emit_data_path_with_subject_hash},
 };
 
 use super::storage::lmdb::{LmdbEnv, push_xaero_event};
-use crate::{
-    subject::SubjectHash,
-};
-use xaeroflux_core::pipe::*;
-use xaeroflux_core::pipe::BusKind::{Control, Data};
+use crate::subject::SubjectHash;
 
 pub static NAME_PREFIX: &str = "aof";
 
@@ -50,11 +50,8 @@ impl AOFActor {
         );
         let cpc = control_path.clone();
 
-        let data_path = emit_data_path_with_subject_hash(
-            fpc.to_str().expect("path_invalid_for_aof"),
-            subject_hash.0,
-            NAME_PREFIX
-        );
+        let data_path =
+            emit_data_path_with_subject_hash(fpc.to_str().expect("path_invalid_for_aof"), subject_hash.0, NAME_PREFIX);
         let data_path_clone = data_path.clone();
 
         let (path, env) = if pipe.sink.kind == Control {
@@ -111,7 +108,7 @@ impl AOFActor {
     /// Handle a single XaeroEvent by writing it to LMDB storage
     fn handle_xaero_event(
         env: &Arc<Mutex<LmdbEnv>>,
-        xaero_event: &Arc<XaeroEvent>
+        xaero_event: &Arc<XaeroEvent>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         tracing::trace!(
             "Processing XaeroEvent: type={}, timestamp={:?}, data_len={}",
@@ -121,8 +118,7 @@ impl AOFActor {
         );
 
         // Use the new push_xaero_event function that works with Arc<XaeroEvent>
-        push_xaero_event(env, xaero_event)
-            .map_err(|e| panic!("Failed to push XaeroEvent: {}", e))?;
+        push_xaero_event(env, xaero_event).map_err(|e| panic!("Failed to push XaeroEvent: {}", e))?;
 
         tracing::trace!("XaeroEvent successfully persisted to LMDB");
         Ok(())
@@ -138,13 +134,14 @@ impl Drop for AOFActor {
 #[cfg(test)]
 mod tests {
     use std::{thread, time::Duration};
+
     use tempfile::tempdir;
     use xaeroflux_core::{
         config::Config,
-        event::{EventType, XaeroEvent},
         date_time::emit_secs,
+        event::{EventType, SystemEventKind, XaeroEvent},
     };
-    use xaeroflux_core::event::SystemEventKind;
+
     use super::*;
     use crate::subject::SubjectHash;
 
@@ -209,11 +206,12 @@ mod tests {
         let xaero_event = XaeroPoolManager::create_xaero_event(
             sample_data,
             EventType::ApplicationEvent(1).to_u8(),
-            None,  // author_id
-            None,  // merkle_proof
-            None,  // vector_clock
+            None, // author_id
+            None, // merkle_proof
+            None, // vector_clock
             emit_secs(),
-        ).unwrap_or_else(|pool_error| {
+        )
+        .unwrap_or_else(|pool_error| {
             tracing::error!("Pool allocation failed: {:?}", pool_error);
             panic!("Cannot create test event - ring buffer pool exhausted");
         });
@@ -252,7 +250,8 @@ mod tests {
                 None,
                 None,
                 emit_secs(),
-            ).unwrap_or_else(|pool_error| {
+            )
+            .unwrap_or_else(|pool_error| {
                 tracing::error!("Pool allocation failed for event {}: {:?}", i, pool_error);
                 panic!("Cannot create test event {} - ring buffer pool exhausted", i);
             });
@@ -262,7 +261,7 @@ mod tests {
                 .sink
                 .tx
                 .send(xaero_event)
-                .expect(&format!("Failed to send XaeroEvent {}", i));
+                .unwrap_or_else(|_| panic!("Failed to send XaeroEvent {}", i));
         }
 
         // Allow time for all events to be processed
@@ -288,14 +287,18 @@ mod tests {
             None,
             None,
             emit_secs(),
-        ).unwrap_or_else(|pool_error| {
+        )
+        .unwrap_or_else(|pool_error| {
             tracing::error!("Pool allocation failed: {:?}", pool_error);
             panic!("Cannot create test event - ring buffer pool exhausted");
         });
 
         // Verify zero-copy access works
         assert_eq!(xaero_event.data(), test_data);
-        assert_eq!(xaero_event.event_type(), EventType::SystemEvent(SystemEventKind::PayloadWritten).to_u8());
+        assert_eq!(
+            xaero_event.event_type(),
+            EventType::SystemEvent(SystemEventKind::PayloadWritten).to_u8()
+        );
 
         actor
             .pipe
