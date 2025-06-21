@@ -3,7 +3,6 @@ use std::sync::{Arc, Mutex};
 
 use xaeroid::XaeroID;
 
-
 /// Allows you to discover peers or actors that emit events for:
 /// Either `Workspace` or `Object` or
 pub trait PeerDiscovery {

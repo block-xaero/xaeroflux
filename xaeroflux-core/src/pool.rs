@@ -231,7 +231,7 @@ impl XaeroEvent {
     pub fn len(&self) -> u32 {
         self.evt.len()
     }
-    
+
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -506,15 +506,9 @@ impl XaeroPoolManager {
     ) -> Result<Arc<XaeroEvent>, PoolError> {
         // ALL stack ring buffer allocations
         let evt = Self::allocate_event_data(data, event_type)?;
-        let author_id = author_id
-            .map(Self::allocate_xaero_id)
-            .transpose()?;
-        let merkle_proof = merkle_proof
-            .map(Self::allocate_merkle_proof)
-            .transpose()?;
-        let vector_clock = vector_clock
-            .map(Self::allocate_vector_clock)
-            .transpose()?;
+        let author_id = author_id.map(Self::allocate_xaero_id).transpose()?;
+        let merkle_proof = merkle_proof.map(Self::allocate_merkle_proof).transpose()?;
+        let vector_clock = vector_clock.map(Self::allocate_vector_clock).transpose()?;
 
         // Single heap allocation for the event container (just pointers + u64)
         Ok(Arc::new(XaeroEvent {
