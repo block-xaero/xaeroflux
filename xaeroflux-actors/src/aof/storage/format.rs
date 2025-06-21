@@ -6,7 +6,6 @@
 //! - `MMRMeta`: Merkle Mountain Range index metadata per segment.
 
 use bytemuck::{Pod, Zeroable};
-use rkyv::{Archive, Deserialize, Serialize};
 
 /// Metadata for a persisted segment page in the append-only log.
 ///
@@ -44,11 +43,9 @@ unsafe impl Pod for SegmentMeta {}
 /// - `byte_offset`: byte offset within the current page.
 /// - `latest_segment_id`: most recent segment ID observed by this reader.
 #[repr(C)]
-#[derive(Debug, Clone, Archive, Serialize, Deserialize, Default)]
-#[rkyv(derive(Debug))]
-#[derive(Copy)]
+#[derive(Debug, Clone, Default, Copy)]
 pub struct ReaderCursor {
-    pub suscriber_name: [u8; 32], // Replace String with a fixed-size array to make it Copy
+    pub subscriber_name: [u8; 32], // Fixed-size array instead of String
     pub subscriber_id: usize,
     pub page_index: usize,
     pub segment_index: usize,
@@ -70,7 +67,7 @@ unsafe impl Pod for ReaderCursor {}
 #[repr(C, packed)]
 #[derive(Debug, Clone, Default, Copy)]
 pub struct MMRMeta {
-    pub root_hash: [u8; 32], // Replace String with a fixed-size array to make it Copy
+    pub root_hash: [u8; 32], // Fixed-size array instead of String
     pub peaks_count: usize,
     pub leaf_count: usize,
     pub segment_meta: SegmentMeta,

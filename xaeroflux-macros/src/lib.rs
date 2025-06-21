@@ -58,6 +58,7 @@ pub fn derive_pipe_kind(input: TokenStream) -> TokenStream {
     };
     TokenStream::from(expanded)
 }
+
 #[proc_macro]
 pub fn subject(input: TokenStream) -> TokenStream {
     // 1) Parse exactly one string literal: subject!("workspace/MyWS/object/MyObj")
@@ -65,25 +66,25 @@ pub fn subject(input: TokenStream) -> TokenStream {
     let span = subject_name_tokens.span();
     let literal_str = subject_name_tokens.value();
 
-    // 2) Split on ‘/’ and validate that we get exactly 4 parts:
+    // 2) Split on '/' and validate that we get exactly 4 parts:
     let parts: Vec<_> = literal_str.split('/').collect();
     if parts.len() != 4 {
         return syn::Error::new_spanned(
             &subject_name_tokens,
             "Subject must look like \"workspace/<workspace_id>/object/<object_id>\"",
         )
-        .to_compile_error()
-        .into();
+            .to_compile_error()
+            .into();
     }
 
-    // 3) Check the “workspace” / “object” prefixes:
+    // 3) Check the "workspace" / "object" prefixes:
     if parts[0] != "workspace" || parts[2] != "object" {
         return syn::Error::new_spanned(
             &subject_name_tokens,
             "Subject must look like \"workspace/<workspace_id>/object/<object_id>\"",
         )
-        .to_compile_error()
-        .into();
+            .to_compile_error()
+            .into();
     }
 
     // 4) Extract the actual IDs:
@@ -95,8 +96,8 @@ pub fn subject(input: TokenStream) -> TokenStream {
             &subject_name_tokens,
             "workspace_id and object_id cannot be empty",
         )
-        .to_compile_error()
-        .into();
+            .to_compile_error()
+            .into();
     }
 
     // 5) Compute three separate blake3 hashes:
@@ -135,49 +136,65 @@ pub fn subject(input: TokenStream) -> TokenStream {
     let ws_id_lit = LitStr::new(ws_id_str, span);
     let obj_id_lit = LitStr::new(obj_id_str, span);
 
-    // 8) Assemble the final token‐stream.
+    // 8) Assemble the final token‐stream with PooledEventPtr architecture support.
     let expanded = quote! {
         {
             // Bring everything into scope from the current crate:
             use crate::subject::SubjectHash;
             use xaeroflux_core::event::{ScanWindow, XaeroEvent};
             use crate::subject::Subject;
-            use xaeroflux_core::event::{Event, EventType, SystemEventKind};
+            use xaeroflux_core::event::{EventType, SystemEventKind};
+            use xaeroflux_core::date_time::emit_secs;
+            use xaeroflux_core::pool::XaeroPoolManager;
+            // Initialize ring buffer pools if not already initialized
+            XaeroPoolManager::init();
+
             // 1) Construct the Subject itself, calling new_with_workspace(...)
             let subject = Subject::new_with_workspace(
                 #subject_name_tokens.to_string(),         // name: String
                 [ #(#subject_bytes_tokens),* ],           // hash: [u8; 32]
-            #ws_id_lit.to_string(),                    // workspace_id: String
-            #obj_id_lit.to_string(),                   // object_id: String
+                #ws_id_lit.to_string(),                   // workspace_id: String
+                #obj_id_lit.to_string(),                  // object_id: String
             );
-            // 2) Emit a “WorkspaceCreated” system event
-            let wc_evt = XaeroEvent {
-                evt: xaeroflux_core::event::Event::new(
-                    vec![ #(#ws_bytes_tokens),* ],       // payload = workspace_id bytes
-                    EventType::SystemEvent(
-                        SystemEventKind::WorkspaceCreated
-                    ).to_u8()
-                ),
-               ..Default::default()
-            };
+
+            // 2) Create "WorkspaceCreated" system event using XaeroPoolManager
+            let workspace_data = vec![ #(#ws_bytes_tokens),* ];
+            let wc_evt = XaeroPoolManager::create_xaero_event(
+                &workspace_data,                          // data slice
+                EventType::SystemEvent(SystemEventKind::WorkspaceCreated).to_u8(),
+                None,                                     // author_id
+                None,                                     // merkle_proof
+                None,                                     // vector_clock
+                emit_secs(),                              // timestamp
+            ).unwrap_or_else(|e| {
+                tracing::error!("Critical: Failed to create WorkspaceCreated event: {:?}", e);
+                panic!("Cannot bootstrap subject without WorkspaceCreated event - ring buffer pool exhausted");
+            });
+
+            // Send WorkspaceCreated event
             subject.control.sink.tx.send(wc_evt)
                 .expect("failed to bootstrap: WorkspaceCreated");
 
-            // 3) Emit an “ObjectCreated” system event
-            let oc_evt = XaeroEvent {
-                evt: xaeroflux_core::event::Event::new(
-                    vec![ #(#obj_bytes_tokens),* ],      // payload = object_id bytes
-                    EventType::SystemEvent(
-                        SystemEventKind::ObjectCreated
-                    ).to_u8()
-                ),
-                ..Default::default()
-            };
+            // 3) Create "ObjectCreated" system event using XaeroPoolManager
+            let object_data = vec![ #(#obj_bytes_tokens),* ];
+            let oc_evt = XaeroPoolManager::create_xaero_event(
+                &object_data,                             // data slice
+                EventType::SystemEvent(SystemEventKind::ObjectCreated).to_u8(),
+                None,                                     // author_id
+                None,                                     // merkle_proof
+                None,                                     // vector_clock
+                emit_secs(),                              // timestamp
+            ).unwrap_or_else(|e| {
+                tracing::error!("Critical: Failed to create ObjectCreated event: {:?}", e);
+                panic!("Cannot bootstrap subject without ObjectCreated event - ring buffer pool exhausted");
+            });
+
+            // Send ObjectCreated event
             subject.control.sink.tx.send(oc_evt)
                 .expect("failed to bootstrap: ObjectCreated");
 
             // 4) Return the newly‐constructed Arc<Subject>
-            std::sync::Arc::new(subject)
+            subject
         }
     };
 

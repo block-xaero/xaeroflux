@@ -17,13 +17,12 @@ use std::{
 use crossbeam::channel::SendError;
 use memmap2::MmapMut;
 use xaeroflux_core::{
-    XAERO_DISPATCHER_POOL,
+    XAERO_DISPATCHER_POOL, XaeroPoolManager,
     date_time::{day_bounds_from_epoch_ms, emit_secs},
     event::{
-        Event, EventType, EventType::SystemEvent, ScanWindow, SystemEventKind, SystemEventKind::Shutdown, XaeroEvent,
+        EventType, EventType::SystemEvent, ScanWindow, SystemEventKind, SystemEventKind::Shutdown, XaeroEvent,
     },
     hash::sha_256_hash_b,
-    listeners::EventListener,
     pipe::{BusKind, Pipe},
     size::PAGE_SIZE,
     system_paths::{emit_control_path_with_subject_hash, emit_data_path_with_subject_hash},
@@ -32,19 +31,13 @@ use xaeroflux_core::{
 use crate::{
     aof::storage::{
         format::SegmentMeta,
-        lmdb::{LmdbEnv, push_event},
+        lmdb::{LmdbEnv},
         meta::iterate_segment_meta_by_range,
     },
-    indexing::storage::format::archive,
+    indexing::storage::format::archive_xaero_event, // Updated import
     subject::SubjectHash,
     system_payload::SystemPayload,
 };
-
-// thread_local! {
-//     // Each thread gets its own Vec with pre-allocated capacity
-//     static ARCHIVE_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::with_capacity(8192));
-//     static PAYLOAD_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::with_capacity(512));
-// }
 
 pub static NAME_PREFIX: &str = "segment_writer";
 
@@ -84,8 +77,6 @@ struct WriterState {
     memory_map: Option<MmapMut>,
     filename: PathBuf,
     initialized: bool,
-    // archive_buffer: Vec<u8>,
-    // payload_buffer: Vec<u8>
 }
 
 impl WriterState {
@@ -174,10 +165,22 @@ impl WriterState {
         };
 
         let data_b_segment_meta = bytemuck::bytes_of(&seg_meta);
-        push_event(
-            meta_db,
-            &Event::new(data_b_segment_meta.to_vec(), EventType::MetaEvent(1).to_u8()),
-        )?;
+        // Use XaeroPoolManager to create metadata event
+        let meta_event = XaeroPoolManager::create_xaero_event(
+            data_b_segment_meta,
+            EventType::MetaEvent(1).to_u8(),
+            None,
+            None,
+            None,
+            emit_secs(),
+        ).unwrap_or_else(|pool_error| {
+            tracing::error!("Pool allocation failed for metadata: {:?}", pool_error);
+            panic!("Failed to create metadata event: {:?}", pool_error);
+        });
+
+        // Use new push_xaero_event function
+        use crate::aof::storage::lmdb::push_xaero_event;
+        push_xaero_event(meta_db, &meta_event)?;
 
         Ok(())
     }
@@ -231,26 +234,33 @@ pub struct SegmentWriterActor {
     pub pipe: Arc<Pipe>,
     pub meta_db: Arc<Mutex<LmdbEnv>>,
     pub segment_config: SegmentConfig,
-    _xaero_event_loop_handle: Option<std::thread::JoinHandle<()>>,
     _event_handler_loop_handle: Option<std::thread::JoinHandle<()>>,
 }
+
 impl Drop for SegmentWriterActor {
     fn drop(&mut self) {
-        let res = self.pipe.sink.tx.send(XaeroEvent {
-            evt: Event::new(vec![], SystemEvent(Shutdown).to_u8()),
-            ..Default::default()
+        // Send shutdown event using XaeroPoolManager
+        let shutdown_event = XaeroPoolManager::create_xaero_event(
+            &[],
+            SystemEvent(Shutdown).to_u8(),
+            None,
+            None,
+            None,
+            emit_secs(),
+        ).unwrap_or_else(|pool_error| {
+            tracing::error!("Pool allocation failed: {:?}", pool_error);
+            // TODO: Update rusted_ring::AllocationError::EventCreation to accept String instead of &str
+            // TODO: Eliminate this fallback once all Event::new usage is removed
+            panic!("Failed to allocate Xaero pool due to: {:?}", pool_error);
         });
+
+        let res = self.pipe.sink.tx.send(shutdown_event);
         match res {
             Ok(_) => {
-                tracing::debug!("MmrIndexingActor :: Shutdown initiated");
+                tracing::debug!("SegmentWriterActor :: Shutdown initiated");
             }
             Err(e) => {
-                tracing::error!("MmrIndexingActor :: Error sending shutdown event: {:?}", e);
-            }
-        }
-        if let Some(handle) = self._xaero_event_loop_handle.take() {
-            if let Err(e) = handle.join() {
-                tracing::error!("Failed to join xaero event loop thread: {:?}", e);
+                tracing::error!("SegmentWriterActor :: Error sending shutdown event: {:?}", e);
             }
         }
 
@@ -261,6 +271,7 @@ impl Drop for SegmentWriterActor {
         }
     }
 }
+
 impl SegmentWriterActor {
     /// Create a `SegmentWriterActor` with default settings.
     pub fn new(name: SubjectHash, pipe: Arc<Pipe>) -> Self {
@@ -272,96 +283,71 @@ impl SegmentWriterActor {
         std::fs::create_dir_all(&config.lmdb_env_path).expect("failed to create directory");
         std::fs::create_dir_all(&config.segment_dir).expect("failed to create segment directory");
 
-        let cfc = config.clone();
         let meta_db = match pipe.sink.kind {
             BusKind::Control => Arc::new(Mutex::new(
                 LmdbEnv::new(
                     emit_control_path_with_subject_hash(config.lmdb_env_path.as_str(), name.0, NAME_PREFIX).as_str(),
                     BusKind::Data,
                 )
-                .expect("failed_to_create_lmdb_env"),
+                    .expect("failed_to_create_lmdb_env"),
             )),
             BusKind::Data => Arc::new(Mutex::new(
                 LmdbEnv::new(
                     emit_data_path_with_subject_hash(config.lmdb_env_path.as_str(), name.0, NAME_PREFIX).as_str(),
                     BusKind::Data,
                 )
-                .expect("failed_to_create_lmdb_env"),
+                    .expect("failed_to_create_lmdb_env"),
             )),
         };
-
-        let metadb_clone = meta_db.clone();
-        let pc_c1 = pipe.clone();
 
         // Create persistent writer state
         let writer_state = Arc::new(Mutex::new(WriterState::new()));
         let state_clone = writer_state.clone();
-        let (buffer_tx, buffer_rx) = crossbeam::channel::unbounded();
-        let listener = EventListener::new(
-            "segment_writer_actor",
-            Arc::new(move |event: Event<Vec<u8>>| {
-                let res = buffer_tx.send(event);
-                match res {
-                    Ok(_) => {}
-                    Err(e) => {
-                        tracing::error!("failed to send event: {}", e);
-                    }
-                }
-            }),
-            None,
-            Some(1), // single-threaded handler
-        );
+        let metadb_clone = meta_db.clone();
+        let config_clone = config.clone();
+        let pipe_clone = pipe.clone();
 
-        let pipe_clone0 = pc_c1.clone();
-        let xeh = thread::Builder::new()
+        // Direct event processing loop - no EventListener indirection
+        let _event_loop_handle = thread::Builder::new()
             .name(format!("xaeroflux-seg-writer-actor-{}", hex::encode(name.0)))
             .spawn(move || {
-                while let Ok(framed) = pipe_clone0.sink.rx.recv() {
-                    if (framed.evt.event_type == SystemEvent(Shutdown)) {
-                        tracing::warn!("sending Shutdown to listener");
-                        if let Err(e) = listener.inbox.send(framed.evt) {
-                            tracing::error!("Failed to send event to listener: {}", e);
-                        }
+                while let Ok(xaero_event) = pipe_clone.sink.rx.recv() {
+                    // Check for shutdown
+                    if xaero_event.event_type() == SystemEvent(Shutdown).to_u8() {
+                        tracing::warn!("SegmentWriterActor received shutdown signal");
                         break;
                     }
-                    if let Err(e) = listener.inbox.send(framed.evt) {
-                        tracing::error!("Failed to send event to listener: {}", e);
-                    }
-                }
-            })
-            .expect("failed to spawn xaeroflux-seg-writer-actor thread");
 
-        // looper
-        let _event_loop_handle = thread::Builder::new()
-            .spawn(move || {
-                while let Ok(event) = buffer_rx.recv() {
-                    if let Err(e) = Self::handle_event(&event, &config, &metadb_clone, &pipe, &state_clone) {
-                        tracing::error!("Failed to handle event: {}", e);
+                    // Handle the event directly - no intermediate channel
+                    if let Err(e) = Self::handle_xaero_event(&xaero_event, &config_clone, &metadb_clone, &pipe_clone, &state_clone) {
+                        tracing::error!("Failed to handle XaeroEvent: {}", e);
                     }
                 }
+                tracing::info!("SegmentWriterActor event loop terminated");
             })
             .expect("failed to spawn xaeroflux-seg-writer-actor event loop");
 
         SegmentWriterActor {
             name,
-            pipe: pc_c1,
+            pipe,
             meta_db,
-            segment_config: cfc,
-            _xaero_event_loop_handle: Some(xeh),
+            segment_config: config,
             _event_handler_loop_handle: Some(_event_loop_handle),
         }
     }
 
-    fn handle_event(
-        event: &Event<Vec<u8>>,
+    /// Handle Arc<XaeroEvent> directly using PooledEventPtr for zero-copy access
+    fn handle_xaero_event(
+        xaero_event: &Arc<XaeroEvent>,
         config: &SegmentConfig,
         meta_db: &Arc<Mutex<LmdbEnv>>,
         pipe: &Arc<Pipe>,
         writer_state: &Arc<Mutex<WriterState>>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let data = archive(event);
-        let write_len = data.len();
-        let leaf_hash = sha_256_hash_b(&data);
+        // Archive the XaeroEvent directly using the new format
+        let archived_data = archive_xaero_event(xaero_event);
+        let write_len = archived_data.len();
+        let leaf_hash = sha_256_hash_b(&archived_data);
 
         let mut state = writer_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
 
@@ -382,39 +368,48 @@ impl SegmentWriterActor {
         // Ensure we have an open file and memory map
         state.ensure_file_open(config)?;
 
-        // Write data to current position
+        // Write archived data to current position
         let start = state.byte_offset + state.write_pos;
         let end = start + write_len;
         let seg_id = state.seg_id;
         let local_page_idx = state.local_page_idx;
 
         if let Some(ref mut mm) = state.memory_map {
-            mm[start..end].copy_from_slice(&data);
+            mm[start..end].copy_from_slice(&archived_data);
             state.write_pos += write_len;
 
             tracing::debug!(
-                "Wrote {} bytes to segment {} page {} at offset {}",
+                "Wrote {} bytes to segment {} page {} at offset {} (event_type: {}, timestamp: {:?})",
                 write_len,
                 seg_id,
                 local_page_idx,
-                start
+                start,
+                xaero_event.event_type(),
+                xaero_event.latest_ts
             );
         }
 
-        // Send PayloadWritten event
+        // Send PayloadWritten event using XaeroPoolManager
         let bytes_of_payload_written = bytemuck::bytes_of::<SystemPayload>(&SystemPayload::PayloadWritten {
             leaf_hash,
             meta: state.current_segment_meta(),
-        })
-        .to_vec();
+        }).to_vec();
 
-        if let Err(e) = pipe.source.tx.send(XaeroEvent {
-            evt: Event::new(
-                bytes_of_payload_written,
-                SystemEvent(SystemEventKind::PayloadWritten).to_u8(),
-            ),
-            ..Default::default()
-        }) {
+        let payload_written_event = XaeroPoolManager::create_xaero_event(
+            &bytes_of_payload_written,
+            SystemEvent(SystemEventKind::PayloadWritten).to_u8(),
+            None,
+            None,
+            None,
+            emit_secs(),
+        ).unwrap_or_else(|pool_error| {
+            tracing::error!("Pool allocation failed: {:?}", pool_error);
+            // TODO: Update rusted_ring::AllocationError::EventCreation to accept String instead of &str
+            // TODO: Eliminate this fallback once all Event::new usage is removed
+            panic!("Failed to allocate Xaero pool due to: {:?}", pool_error);
+        });
+
+        if let Err(e) = pipe.source.tx.send(payload_written_event) {
             tracing::error!("Failed to send PayloadWritten message: {}", e);
         } else {
             tracing::debug!("Payload written message sent successfully");
@@ -443,24 +438,36 @@ mod tests {
 
     use serial_test::serial;
     use tempfile::tempdir;
-    use xaeroflux_core::{event::EventType, init_xaero_pool, initialize, shutdown_all_pools};
+    use xaeroflux_core::{event::EventType, init_xaero_pool, initialize, shutdown_all_pools, XaeroPoolManager};
 
     use super::*;
-    use crate::indexing::storage::format::archive;
+    use crate::indexing::storage::format::archive_xaero_event; // Updated import
 
     fn send_app_event(pipe: &Arc<Pipe>, data: Vec<u8>) {
-        let e = Event::new(data, EventType::ApplicationEvent(1).to_u8());
-        let xaero_evt = XaeroEvent {
-            evt: e,
-            ..Default::default()
-        };
-        pipe.sink.tx.send(xaero_evt).expect("failed to send event");
+        // Use XaeroPoolManager to create events
+        let xaero_event = XaeroPoolManager::create_xaero_event(
+            &data,
+            EventType::ApplicationEvent(1).to_u8(),
+            None,
+            None,
+            None,
+            emit_secs(),
+        ).unwrap_or_else(|pool_error| {
+            tracing::error!("Pool allocation failed: {:?}", pool_error);
+            // TODO: Update rusted_ring::AllocationError::EventCreation to accept String instead of &str
+            // TODO: Eliminate this fallback once all Event::new usage is removed
+            panic!("Failed to allocate Xaero pool due to: {:?}", pool_error);
+        });
+
+        pipe.sink.tx.send(xaero_event).expect("failed to send event");
     }
 
     #[test]
     #[serial]
     fn test_segment_meta_initial() {
         initialize();
+        XaeroPoolManager::init();
+
         let dir = tempdir().expect("failed to unpack tempdir");
         let arc_env = Arc::new(std::sync::Mutex::new(
             LmdbEnv::new(dir.path().to_str().expect("failed_to_unwrap"), BusKind::Data).expect("failed_to_unwrap"),
@@ -476,8 +483,21 @@ mod tests {
             ts_end: emit_secs(),
         };
         let bytes = bytemuck::bytes_of(&seg_meta).to_vec();
-        let ev = Event::new(bytes, EventType::MetaEvent(1).to_u8());
-        push_event(&arc_env, &ev).expect("failed_to_unwrap");
+        // Use XaeroPoolManager to create metadata event for testing
+        let meta_event = XaeroPoolManager::create_xaero_event(
+            &bytes,
+            EventType::MetaEvent(1).to_u8(),
+            None,
+            None,
+            None,
+            emit_secs(),
+        ).unwrap_or_else(|pool_error| {
+            tracing::error!("Pool allocation failed in test: {:?}", pool_error);
+            panic!("Failed to create test metadata event: {:?}", pool_error);
+        });
+
+        use crate::aof::storage::lmdb::push_xaero_event;
+        push_xaero_event(&arc_env, &meta_event).expect("failed_to_unwrap");
 
         // Verify metadata was stored correctly - use local variables for packed struct access
         let g_p_idx = seg_meta.page_index;
@@ -491,11 +511,12 @@ mod tests {
         assert_eq!(g_w_pos, 0);
         assert_eq!(g_b_off, 0);
         assert_eq!(g_l_s_id, 0);
+
         let res = shutdown_all_pools();
         match res {
             Ok(_) => {}
             Err(e) => {
-                tracing::error!("Failed to shutdown mmr actor: {:?}", e);
+                tracing::error!("Failed to shutdown: {:?}", e);
             }
         }
     }
@@ -504,6 +525,8 @@ mod tests {
     #[serial]
     fn test_page_segment_math() {
         initialize();
+        XaeroPoolManager::init();
+
         const PAGE_SIZE: usize = 16;
         const PAGES_PER_SEGMENT: usize = 4;
         let cases = [
@@ -520,11 +543,12 @@ mod tests {
             assert_eq!(idx % PAGES_PER_SEGMENT, local);
             assert_eq!(local * PAGE_SIZE, offset);
         }
+
         let res = shutdown_all_pools();
         match res {
             Ok(_) => {}
             Err(e) => {
-                tracing::error!("Failed to shutdown mmr actor: {:?}", e);
+                tracing::error!("Failed to shutdown: {:?}", e);
             }
         }
     }
@@ -533,6 +557,8 @@ mod tests {
     #[serial]
     fn test_actor_writes_single_event() {
         initialize();
+        XaeroPoolManager::init();
+
         let tmp = tempdir().expect("failed to create tempdir");
 
         let cfg = SegmentConfig {
@@ -563,11 +589,12 @@ mod tests {
 
         assert!(!files.is_empty(), "No segment files were created");
         drop(_actor);
+
         let res = shutdown_all_pools();
         match res {
             Ok(_) => {}
             Err(e) => {
-                tracing::error!("Failed to shutdown mmr actor: {:?}", e);
+                tracing::error!("Failed to shutdown: {:?}", e);
             }
         }
     }
@@ -576,17 +603,24 @@ mod tests {
     #[serial]
     fn test_actor_page_boundary_handling() {
         initialize();
+        XaeroPoolManager::init();
+
         let tmp = tempdir().expect("failed to create tempdir");
 
-        // Create events that will fill exactly one page each
-        let ev1 = Event::new(vec![1; 50], EventType::ApplicationEvent(1).to_u8());
-        let ev2 = Event::new(vec![2; 50], EventType::ApplicationEvent(1).to_u8());
+        // Test with new archive format - create test events to get size
+        let test_event = XaeroPoolManager::create_xaero_event(
+            &vec![1; 50],
+            EventType::ApplicationEvent(1).to_u8(),
+            None,
+            None,
+            None,
+            emit_secs(),
+        ).expect("Failed to create test event");
 
-        let framed1 = archive(&ev1);
-        let framed2 = archive(&ev2);
+        let archived_size = archive_xaero_event(&test_event).len();
 
         let cfg = SegmentConfig {
-            page_size: framed1.len().max(framed2.len()), // Exactly fit one event per page
+            page_size: archived_size, // Exactly fit one archived event per page
             pages_per_segment: 2,
             prefix: "test-boundary".to_string(),
             segment_dir: tmp.path().to_string_lossy().into_owned(),
@@ -613,11 +647,12 @@ mod tests {
 
         assert_eq!(files.len(), 1, "Expected exactly one segment file");
         drop(_actor);
+
         let res = shutdown_all_pools();
         match res {
             Ok(_) => {}
             Err(e) => {
-                tracing::error!("Failed to shutdown mmr actor: {:?}", e);
+                tracing::error!("Failed to shutdown: {:?}", e);
             }
         }
     }
@@ -626,16 +661,26 @@ mod tests {
     #[serial]
     fn test_actor_segment_rollover() {
         initialize();
+        XaeroPoolManager::init();
+
         let tmp = tempdir().expect("failed to create tempdir");
 
         // Create small pages and segments to force rollover
         let payload_size = 20;
-        let event = Event::new(vec![42; payload_size], EventType::ApplicationEvent(1).to_u8());
-        let framed = archive(&event);
+        let test_event = XaeroPoolManager::create_xaero_event(
+            &vec![42; payload_size],
+            EventType::ApplicationEvent(1).to_u8(),
+            None,
+            None,
+            None,
+            emit_secs(),
+        ).expect("Failed to create test event");
+
+        let archived_size = archive_xaero_event(&test_event).len();
 
         let cfg = SegmentConfig {
-            page_size: framed.len(), // Exactly one event per page
-            pages_per_segment: 2,    // Only 2 pages per segment
+            page_size: archived_size, // Exactly one archived event per page
+            pages_per_segment: 2,     // Only 2 pages per segment
             prefix: "test-rollover".to_string(),
             segment_dir: tmp.path().to_string_lossy().into_owned(),
             lmdb_env_path: tmp.path().to_string_lossy().into_owned(),
@@ -666,19 +711,23 @@ mod tests {
             files.len()
         );
         drop(_actor);
+
         let res = shutdown_all_pools();
         match res {
             Ok(_) => {}
             Err(e) => {
-                tracing::error!("Failed to shutdown mmr actor: {:?}", e);
+                tracing::error!("Failed to shutdown: {:?}", e);
             }
         }
     }
 
     #[test]
+    #[serial]
     fn test_actor_sends_payload_written_events() {
         initialize();
         init_xaero_pool();
+        XaeroPoolManager::init();
+
         let tmp = tempdir().expect("failed to create tempdir");
 
         let cfg = SegmentConfig {
@@ -701,15 +750,15 @@ mod tests {
         // Wait for processing
         sleep(Duration::from_millis(100));
 
-        // Try to receive PayloadWritten event
+        // Try to receive PayloadWritten event - handle Arc<XaeroEvent>
         let mut received_payload_written = false;
         let timeout = Duration::from_millis(500);
         let start = std::time::Instant::now();
 
         while start.elapsed() < timeout {
             match rx_out.try_recv() {
-                Ok(event) =>
-                    if event.evt.event_type == EventType::SystemEvent(SystemEventKind::PayloadWritten) {
+                Ok(xaero_event) =>
+                    if xaero_event.event_type() == EventType::SystemEvent(SystemEventKind::PayloadWritten).to_u8() {
                         received_payload_written = true;
                         break;
                     },
@@ -724,11 +773,58 @@ mod tests {
 
         assert!(received_payload_written, "Expected to receive PayloadWritten event");
         drop(_actor);
+
         let res = shutdown_all_pools();
         match res {
             Ok(_) => {}
             Err(e) => {
-                tracing::error!("Failed to shutdown mmr actor: {:?}", e);
+                tracing::error!("Failed to shutdown: {:?}", e);
+            }
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn test_zero_copy_archival() {
+        initialize();
+        XaeroPoolManager::init();
+
+        let tmp = tempdir().expect("failed to create tempdir");
+
+        let cfg = SegmentConfig {
+            page_size: 1024,
+            pages_per_segment: 2,
+            prefix: "test-zero-copy".to_string(),
+            segment_dir: tmp.path().to_string_lossy().into_owned(),
+            lmdb_env_path: tmp.path().to_string_lossy().into_owned(),
+        };
+
+        let pipe = Pipe::new(BusKind::Data, None);
+        let subject_hash = SubjectHash::from([0u8; 32]);
+        let _actor = SegmentWriterActor::new_with_config(subject_hash, pipe.clone(), cfg.clone());
+
+        // Send event with specific data to verify zero-copy archival
+        let test_data = b"zero-copy archival test data for ring buffer".to_vec();
+        send_app_event(&pipe, test_data.clone());
+
+        // Wait for processing
+        sleep(Duration::from_millis(100));
+
+        // Verify file was created (indirect verification of zero-copy archival)
+        let files: Vec<_> = std::fs::read_dir(&cfg.segment_dir)
+            .expect("failed to read segment dir")
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.path().extension().and_then(|s| s.to_str()) == Some("seg"))
+            .collect();
+
+        assert!(!files.is_empty(), "No segment files were created with zero-copy archival");
+        drop(_actor);
+
+        let res = shutdown_all_pools();
+        match res {
+            Ok(_) => {}
+            Err(e) => {
+                tracing::error!("Failed to shutdown: {:?}", e);
             }
         }
     }
