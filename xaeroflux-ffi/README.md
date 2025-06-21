@@ -8,15 +8,16 @@ Xaeroflux is an Rx-like distributed, decentralized, peer-to-peer event streaming
 
 1. [Introduction](#introduction)
 2. [Core Architecture](#core-architecture)
-3. [Getting Started](#getting-started)
-4. [Subject API](#subject-api)
-5. [Pipeline Processing](#pipeline-processing)
-6. [CRDT Operations](#crdt-operations)
-7. [Collaborative Examples](#collaborative-examples)
-8. [System Integration](#system-integration)
-9. [Testing](#testing)
-10. [Contributing](#contributing)
-11. [License](#license)
+3. [Memory Architecture](#memory-architecture)
+4. [Getting Started](#getting-started)
+5. [Subject API](#subject-api)
+6. [Pipeline Processing](#pipeline-processing)
+7. [CRDT Operations](#crdt-operations)
+8. [Collaborative Examples](#collaborative-examples)
+9. [System Integration](#system-integration)
+10. [Testing](#testing)
+11. [Contributing](#contributing)
+12. [License](#license)
 
 ## Introduction
 
@@ -30,10 +31,11 @@ Xaeroflux enables you to build **collaborative, decentralized applications** whe
 - **🤝 Conflict-Free**: Built-in CRDT support automatically resolves concurrent edits
 - **📱 Offline-First**: Works without internet, syncs when reconnected
 - **🔐 Cryptographically Secure**: Events signed with quantum-resistant signatures
-- **⚡ High Performance**: Zero-copy serialization and mmap-based storage
+- **⚡ High Performance**: Zero-copy ring buffer architecture with predictable memory usage
 - **🌐 P2P Native**: Direct peer-to-peer sync via Iroh networking
 - **🔄 Dual Processing**: Parallel streaming and batch event processing pipelines
 - **⚙️ Signal Control**: Advanced flow control with kill and blackhole signals
+- **🧠 Memory Efficient**: Stack-based allocation with ring buffer pools
 
 ## Core Architecture
 
@@ -53,12 +55,12 @@ Transform and filter events as they flow through the system in real-time:
 
 ```rust
 let filtered_chat = chat
-    .filter(|msg| !msg.evt.data.is_empty())
+    .filter(|msg| !msg.data().is_empty())
     .map(|msg| add_timestamp(msg));
 ```
 
 ### 3. Pipeline Processing - Batch Operations
-**NEW in v0.7.0-m5**: Sophisticated event processing pipelines with parallel streaming and batch loops:
+Sophisticated event processing pipelines with parallel streaming and batch loops:
 
 ```rust
 let collaborative_doc = subject
@@ -78,15 +80,77 @@ let collaborative_doc = subject
 ### 4. Event Routing - Intelligent Distribution
 Events are automatically routed between streaming and batch processing based on predicates, with efficient backpressure management and signal control.
 
+## Memory Architecture
+
+**NEW in v0.7.0-m5**: Xaeroflux now features a sophisticated zero-copy memory architecture built on ring buffer pools:
+
+### PooledEventPtr Architecture
+
+- **Ring Buffer Pools**: Stack-allocated pools for different event sizes (64B, 256B, 1KB, 4KB, 16KB)
+- **Zero-Copy Access**: Events remain in ring buffers throughout the pipeline
+- **Reference Counting**: `Arc<XaeroEvent>` provides safe sharing across threads
+- **Predictable Memory**: Fixed-size pools eliminate heap fragmentation
+- **Stack-Based**: All event data lives on the stack for better cache performance
+
+### Event Structure
+
+```rust
+pub struct XaeroEvent {
+    pub evt: PooledEventPtr,                     // Ring buffer pointer (zero-copy)
+    pub author_id: Option<RingPtr<XaeroID>>,     // Stack-allocated author
+    pub merkle_proof: Option<RingPtr<FixedMerkleProof>>, // Stack-allocated proof
+    pub vector_clock: Option<RingPtr<FixedVectorClock>>, // Stack-allocated clock
+    pub latest_ts: u64,                          // Timestamp
+}
+
+impl XaeroEvent {
+    pub fn data(&self) -> &[u8] {               // Zero-copy data access
+        self.evt.data()
+    }
+    
+    pub fn event_type(&self) -> u8 {            // Zero-copy type access
+        self.evt.event_type()
+    }
+}
+```
+
+### Memory Benefits
+
+- **Zero Allocations**: Events use pre-allocated ring buffer slots
+- **Cache Friendly**: Sequential memory layout improves performance
+- **Thread Safe**: Arc<XaeroEvent> enables safe concurrent access
+- **Bounded Memory**: Predictable memory usage for embedded systems
+- **Fast Serialization**: Direct memory mapping to storage
+
+### Pool Management
+
+```rust
+// Initialize ring buffer pools
+XaeroPoolManager::init();
+
+// Create events from pool
+let event = XaeroPoolManager::create_xaero_event(
+    data_slice,           // &[u8] - zero-copy data
+    event_type,           // u8 - event type  
+    None,                 // author_id (optional)
+    None,                 // merkle_proof (optional)
+    None,                 // vector_clock (optional)
+    timestamp,            // u64 - timestamp
+)?;
+```
+
 ## Getting Started
 
 ### Basic Subject Usage
 
 ```rust
 use xaeroflux_macros::subject;
-use xaeroflux_core::event::*;
+use xaeroflux_core::{XaeroPoolManager, event::*};
 use xaeroid::XaeroID;
 use std::sync::Arc;
+
+// Initialize ring buffer pools
+XaeroPoolManager::init();
 
 // 1. Create a subject for your data
 let likes = subject!("workspace/blog/object/post-123-likes");
@@ -94,28 +158,30 @@ let likes = subject!("workspace/blog/object/post-123-likes");
 // 2. Set up a simple streaming pipeline
 let likes_stream = likes
     .filter(|event| {
-        matches!(event.evt.event_type, 
-            EventType::ApplicationEvent(CRDT_COUNTER_INCREMENT))
+        matches!(event.event_type(), CRDT_COUNTER_INCREMENT)
     })
     .subscribe(|event| {
         println!("Someone liked the post!");
         event
     });
 
-// 3. Publish events
+// 3. Publish events using ring buffer pools
 let user_id = create_test_xaeroid("user123");
-let like_event = XaeroEvent {
-    evt: Event::new(1i64.to_le_bytes().to_vec(), CRDT_COUNTER_INCREMENT),
-    merkle_proof: None,
-    author_id: Some(user_id),
-    latest_ts: Some(current_timestamp()),
-};
+let like_event = XaeroPoolManager::create_xaero_event(
+    &1i64.to_le_bytes(),
+    CRDT_COUNTER_INCREMENT,
+    Some(user_id),
+    None,
+    None,
+    current_timestamp(),
+).expect("Pool allocation failed");
+
 likes.data.sink.tx.send(like_event).unwrap();
 ```
 
 ### Advanced Pipeline Processing
 
-**NEW**: Create sophisticated pipelines that handle both real-time and batch processing:
+Create sophisticated pipelines that handle both real-time and batch processing:
 
 ```rust
 use xaeroflux_crdt::{Sort, Fold, Reduce};
@@ -138,9 +204,8 @@ let collaborative_likes = likes
         ],
         Arc::new(|event| {
             // Route CRDT operations to batch processing
-            matches!(event.evt.event_type,
-                EventType::ApplicationEvent(CRDT_COUNTER_INCREMENT) |
-                EventType::ApplicationEvent(CRDT_COUNTER_DECREMENT)
+            matches!(event.event_type(),
+                CRDT_COUNTER_INCREMENT | CRDT_COUNTER_DECREMENT
             )
         }),
     )
@@ -150,12 +215,15 @@ let collaborative_likes = likes
     })
     .subscribe(|final_event| {
         // Handle both batch results and streaming events
-        match final_event.evt.event_type {
-            EventType::ApplicationEvent(CRDT_COUNTER_STATE) => {
+        match final_event.event_type() {
+            CRDT_COUNTER_STATE => {
                 // Batch-processed counter state
-                let bytes: [u8; 8] = final_event.evt.data[0..8].try_into().unwrap();
-                let total_likes = i64::from_le_bytes(bytes);
-                update_ui_likes(total_likes);
+                let data = final_event.data();
+                if data.len() >= 8 {
+                    let bytes: [u8; 8] = data[0..8].try_into().unwrap();
+                    let total_likes = i64::from_le_bytes(bytes);
+                    update_ui_likes(total_likes);
+                }
             },
             _ => {
                 // Regular streaming events
@@ -170,30 +238,39 @@ let collaborative_likes = likes
 
 ### XaeroEvent Structure
 
-Every event in Xaeroflux is wrapped in a `XaeroEvent`:
+Every event in Xaeroflux uses the new ring buffer architecture:
 
 ```rust
 pub struct XaeroEvent {
-    pub evt: Event<Vec<u8>>,           // Your data + metadata
-    pub merkle_proof: Option<Vec<u8>>, // Cryptographic proof
-    pub author_id: Option<XaeroID>,    // Who created this event
-    pub latest_ts: Option<u64>,        // Author's logical timestamp
+    pub evt: PooledEventPtr,                     // Ring buffer pointer (zero-copy)
+    pub author_id: Option<RingPtr<XaeroID>>,     // Stack-allocated
+    pub merkle_proof: Option<RingPtr<FixedMerkleProof>>, // Stack-allocated
+    pub vector_clock: Option<RingPtr<FixedVectorClock>>, // Stack-allocated
+    pub latest_ts: u64,                          // Timestamp
+}
+
+// Zero-copy access methods
+impl XaeroEvent {
+    pub fn data(&self) -> &[u8];                // Access event data
+    pub fn event_type(&self) -> u8;             // Access event type
+    pub fn author_id(&self) -> Option<&XaeroID>; // Access author
+    pub fn merkle_proof(&self) -> Option<&[u8]>; // Access proof
 }
 ```
 
 ### Streaming Operators
 
-Transform events in real-time:
+Transform events in real-time with zero-copy access:
 
 ```rust
 let processed = subject
     .map(|xe| {
-        // Transform each event
+        // Transform each event (zero-copy)
         add_metadata(xe)
     })
     .filter(|xe| {
-        // Keep only events matching criteria
-        !xe.evt.data.is_empty()
+        // Keep only events matching criteria (zero-copy)
+        !xe.data().is_empty()
     })
     .filter_merkle_proofs()  // Keep only cryptographically verified events
     .scan(scan_window);      // Replay historical events
@@ -201,7 +278,7 @@ let processed = subject
 
 ### Buffer Operators
 
-**NEW**: Handle concurrent operations with sophisticated pipeline processing:
+Handle concurrent operations with sophisticated pipeline processing:
 
 ```rust
 let pipeline = subject
@@ -220,13 +297,14 @@ let pipeline = subject
 
 ## Pipeline Processing
 
-**NEW in v0.7.0-m5**: Xaeroflux now features a sophisticated dual-loop architecture that processes events in parallel:
+Xaeroflux features a sophisticated dual-loop architecture that processes events in parallel with zero-copy semantics:
 
 ### Dual-Loop Architecture
 
 1. **Streaming Loop**: Handles real-time events with low latency
 2. **Batch Loop**: Collects and processes events for CRDT conflict resolution
 3. **Event Router**: Intelligently routes events between the two loops
+4. **Ring Buffer Integration**: All data flows through zero-copy ring buffers
 
 ### Pipeline Example: Document Collaboration
 
@@ -255,24 +333,22 @@ let doc_subject = subject!("workspace/docs/object/shared-document")
         ],
         Arc::new(|event| {
             // Route text operations to batch, cursor moves to streaming
-            matches!(event.evt.event_type,
-                EventType::ApplicationEvent(DOC_TEXT_INSERT) |
-                EventType::ApplicationEvent(DOC_TEXT_DELETE) |
-                EventType::ApplicationEvent(DOC_FORMAT_CHANGE)
+            matches!(event.event_type(),
+                DOC_TEXT_INSERT | DOC_TEXT_DELETE | DOC_FORMAT_CHANGE
             )
         }),
     )
     .filter(|event| {
         // Filter out system events in streaming mode
-        !matches!(event.evt.event_type, EventType::SystemEvent(_))
+        !matches!(event.event_type(), 200..=255) // System event range
     })
     .subscribe(|event| {
-        match event.evt.event_type {
-            EventType::ApplicationEvent(DOC_COMMIT_STATE) => {
+        match event.event_type() {
+            DOC_COMMIT_STATE => {
                 // Handle batch-processed document commits
                 apply_document_changes(event);
             },
-            EventType::ApplicationEvent(DOC_CURSOR_MOVE) => {
+            DOC_CURSOR_MOVE => {
                 // Handle real-time cursor updates
                 update_cursor_position(event);
             },
@@ -285,11 +361,12 @@ let doc_subject = subject!("workspace/docs/object/shared-document")
 // - Text edits → batch processing → conflict resolution → commit
 // - Cursor moves → streaming → immediate UI updates
 // - Parallel processing without blocking
+// - Zero-copy data access throughout
 ```
 
 ### Signal Control
 
-**NEW**: Advanced flow control with signals:
+Advanced flow control with signals:
 
 ```rust
 // Emergency stop - drops all future events
@@ -304,14 +381,16 @@ subject.control_signal_pipe.sink.tx.send(Signal::ControlBlackhole).unwrap();
 
 ### Performance Features
 
+- **Ring Buffer Pools**: Stack-based allocation with predictable memory usage
+- **Zero-Copy Operations**: Events never copied between processing stages
 - **Bounded Channels**: Built-in backpressure management
 - **Lock-free Routing**: Efficient event distribution
 - **Parallel Processing**: Batch and streaming loops run concurrently
-- **Memory Efficient**: Events are moved, not copied, between processing stages
+- **Cache Efficiency**: Sequential memory layout optimizes CPU cache usage
 
 ## CRDT Operations
 
-CRDTs (Conflict-free Replicated Data Types) automatically resolve conflicts when multiple users edit the same data simultaneously.
+CRDTs (Conflict-free Replicated Data Types) automatically resolve conflicts when multiple users edit the same data simultaneously. All CRDT operations use the ring buffer architecture for optimal performance.
 
 ### Available CRDT Types
 
@@ -342,21 +421,26 @@ pub const CRDT_REGISTER_STATE: u8 = 44;
 
 ### How CRDTs Work in Xaeroflux
 
-1. **Users create operations** (add, remove, increment, etc.)
+1. **Users create operations** (add, remove, increment, etc.) using ring buffer pools
 2. **Event router** directs CRDT operations to batch processing
 3. **Operations are collected** in time windows via `.buffer()`
 4. **Sort by causality** to determine proper order
 5. **Fold operations** using CRDT merge rules
 6. **Reduce to final state** for your application
 7. **Transition to streaming** for real-time updates
+8. **Zero-copy access** throughout the entire pipeline
 
 ## Collaborative Examples
 
-### Example 1: Mixed Processing - Gaming Leaderboard
+### Example 1: Gaming Leaderboard with Ring Buffers
 
 ```rust
 use xaeroflux_macros::subject;
 use xaeroflux_crdt::{Sort, Fold, Reduce};
+use xaeroflux_core::XaeroPoolManager;
+
+// Initialize ring buffer pools
+XaeroPoolManager::init();
 
 // Create leaderboard with mixed processing
 let leaderboard = subject!("workspace/game/object/arena-leaderboard")
@@ -375,33 +459,28 @@ let leaderboard = subject!("workspace/game/object/arena-leaderboard")
         ],
         Arc::new(|event| {
             // Route score changes to batch, player actions to streaming
-            matches!(event.evt.event_type,
-                EventType::ApplicationEvent(SCORE_CHANGE) |
-                EventType::ApplicationEvent(CRDT_COUNTER_INCREMENT) |
-                EventType::ApplicationEvent(CRDT_COUNTER_DECREMENT)
+            matches!(event.event_type(),
+                SCORE_CHANGE | CRDT_COUNTER_INCREMENT | CRDT_COUNTER_DECREMENT
             )
         }),
     )
-    .filter(|event| {
-        // Keep all events in streaming mode
-        true
-    })
     .subscribe(|event| {
-        match event.evt.event_type {
-            EventType::ApplicationEvent(CRDT_COUNTER_STATE) => {
+        match event.event_type() {
+            CRDT_COUNTER_STATE => {
                 // Batch-processed leaderboard update
-                let bytes: [u8; 8] = event.evt.data[0..8].try_into().unwrap();
-                let final_score = i64::from_le_bytes(bytes);
-                update_leaderboard_display(final_score);
-                
-                // Broadcast to all players
-                broadcast_leaderboard_update(final_score);
+                let data = event.data();
+                if data.len() >= 8 {
+                    let bytes: [u8; 8] = data[0..8].try_into().unwrap();
+                    let final_score = i64::from_le_bytes(bytes);
+                    update_leaderboard_display(final_score);
+                    broadcast_leaderboard_update(final_score);
+                }
             },
-            EventType::ApplicationEvent(PLAYER_MOVE) => {
+            PLAYER_MOVE => {
                 // Real-time player movement (streaming)
                 update_player_position(event);
             },
-            EventType::ApplicationEvent(CHAT_MESSAGE) => {
+            CHAT_MESSAGE => {
                 // Real-time chat (streaming)
                 display_chat_message(event);
             },
@@ -411,315 +490,94 @@ let leaderboard = subject!("workspace/game/object/arena-leaderboard")
     });
 
 // Usage: Multiple players affect scores simultaneously
-fn player_scores(player_id: XaeroID, points: i64) {
-    let event = XaeroEvent {
-        evt: Event::new(points.to_le_bytes().to_vec(), CRDT_COUNTER_INCREMENT),
-        merkle_proof: None,
-        author_id: Some(player_id),
-        latest_ts: Some(current_timestamp()),
-    };
+fn player_scores(player_id: XaeroID, points: i64) -> Result<(), PoolError> {
+    let event = XaeroPoolManager::create_xaero_event(
+        &points.to_le_bytes(),
+        CRDT_COUNTER_INCREMENT,
+        Some(player_id),
+        None,
+        None,
+        current_timestamp(),
+    )?;
     leaderboard.data.sink.tx.send(event).unwrap();
+    Ok(())
 }
 
-fn player_moves(player_id: XaeroID, position: (f32, f32)) {
+fn player_moves(player_id: XaeroID, position: (f32, f32)) -> Result<(), PoolError> {
     let mut data = Vec::new();
     data.extend_from_slice(&position.0.to_le_bytes());
     data.extend_from_slice(&position.1.to_le_bytes());
     
-    let event = XaeroEvent {
-        evt: Event::new(data, EventType::ApplicationEvent(PLAYER_MOVE).to_u8()),
-        merkle_proof: None,
-        author_id: Some(player_id),
-        latest_ts: Some(current_timestamp()),
-    };
+    let event = XaeroPoolManager::create_xaero_event(
+        &data,
+        PLAYER_MOVE,
+        Some(player_id),
+        None,
+        None,
+        current_timestamp(),
+    )?;
     leaderboard.data.sink.tx.send(event).unwrap();
+    Ok(())
 }
 
-// Concurrent operations work perfectly:
+// Concurrent operations work efficiently:
 // - Score changes are batched and resolved via CRDT
 // - Player movements are streamed in real-time
 // - Chat messages flow through streaming pipeline
-```
-
-### Example 2: IoT Sensor Data with Batch Processing
-
-```rust
-// Smart building temperature control system
-let building_sensors = subject!("workspace/iot/object/building-climate")
-    .buffer(
-        Duration::from_millis(1000),  // Aggregate sensor data every second
-        Some(50),                     // Or when 50 readings accumulate
-        vec![
-            // Sort by sensor ID and timestamp
-            Operator::Sort(Arc::new(|a, b| {
-                let a_id = a.author_id.as_ref().map(|id| id.did_peer_len).unwrap_or(0);
-                let b_id = b.author_id.as_ref().map(|id| id.did_peer_len).unwrap_or(0);
-                a_id.cmp(&b_id).then_with(|| a.latest_ts.unwrap_or(0).cmp(&b.latest_ts.unwrap_or(0)))
-            })),
-            
-            // Aggregate sensor readings
-            Operator::Fold(Arc::new(|_acc, events| {
-                let reading_count = events.len() as u32;
-                let avg_temp: f32 = events.iter()
-                    .filter_map(|e| {
-                        if e.evt.data.len() >= 4 {
-                            let bytes: [u8; 4] = e.evt.data[0..4].try_into().ok()?;
-                            Some(f32::from_le_bytes(bytes))
-                        } else {
-                            None
-                        }
-                    })
-                    .sum::<f32>() / events.len() as f32;
-
-                let mut data = Vec::new();
-                data.extend_from_slice(&reading_count.to_le_bytes());
-                data.extend_from_slice(&avg_temp.to_le_bytes());
-
-                XaeroEvent {
-                    evt: Event::new(data, EventType::ApplicationEvent(SENSOR_BATCH_READING).to_u8()),
-                    merkle_proof: None,
-                    author_id: Some(create_system_xaeroid()),
-                    latest_ts: Some(current_timestamp()),
-                }
-            })),
-            
-            // Transition to streaming for alerts
-            Operator::TransitionTo(
-                SubjectExecutionMode::Buffer,
-                SubjectExecutionMode::Streaming
-            ),
-        ],
-        Arc::new(|event| {
-            // Route sensor readings to batch processing
-            matches!(event.evt.event_type,
-                EventType::ApplicationEvent(SENSOR_TEMPERATURE) |
-                EventType::ApplicationEvent(SENSOR_HUMIDITY) |
-                EventType::ApplicationEvent(SENSOR_PRESSURE)
-            )
-        }),
-    )
-    .filter(|event| {
-        // In streaming mode, pass through alerts and system events
-        true
-    })
-    .subscribe(|event| {
-        match event.evt.event_type {
-            EventType::ApplicationEvent(SENSOR_BATCH_READING) => {
-                // Process aggregated sensor data
-                if event.evt.data.len() >= 8 {
-                    let count_bytes: [u8; 4] = event.evt.data[0..4].try_into().unwrap();
-                    let temp_bytes: [u8; 4] = event.evt.data[4..8].try_into().unwrap();
-                    
-                    let reading_count = u32::from_le_bytes(count_bytes);
-                    let avg_temperature = f32::from_le_bytes(temp_bytes);
-                    
-                    println!("📊 Processed {} readings, avg temp: {:.1}°C", 
-                             reading_count, avg_temperature);
-                    
-                    // Update building systems
-                    update_hvac_system(avg_temperature);
-                    log_to_building_management(reading_count, avg_temperature);
-                    
-                    // Check for alerts
-                    if avg_temperature > 26.0 || avg_temperature < 18.0 {
-                        trigger_temperature_alert(avg_temperature);
-                    }
-                }
-            },
-            EventType::ApplicationEvent(EMERGENCY_ALERT) => {
-                // Emergency alerts bypass batch processing (streaming)
-                handle_emergency_immediately(event);
-            },
-            _ => {}
-        }
-        event
-    });
-
-// High-frequency sensor data gets batched efficiently
-fn send_temperature_reading(sensor_id: &str, temperature: f32) {
-    let sensor_xid = create_sensor_xaeroid(sensor_id);
-    let event = XaeroEvent {
-        evt: Event::new(
-            temperature.to_le_bytes().to_vec(), 
-            EventType::ApplicationEvent(SENSOR_TEMPERATURE).to_u8()
-        ),
-        merkle_proof: None,
-        author_id: Some(sensor_xid),
-        latest_ts: Some(current_timestamp()),
-    };
-    building_sensors.data.sink.tx.send(event).unwrap();
-}
-
-// Emergency alerts go straight through streaming
-fn send_emergency_alert(alert_type: &str) {
-    let event = XaeroEvent {
-        evt: Event::new(
-            alert_type.as_bytes().to_vec(), 
-            EventType::ApplicationEvent(EMERGENCY_ALERT).to_u8()
-        ),
-        merkle_proof: None,
-        author_id: Some(create_system_xaeroid()),
-        latest_ts: Some(current_timestamp()),
-    };
-    building_sensors.data.sink.tx.send(event).unwrap();
-}
-
-// System intelligently handles:
-// - 100s of sensor readings → batched every second → aggregated data
-// - Emergency alerts → immediate streaming → instant response
-// - Different event types routed to appropriate processing mode
-```
-
-### Example 3: Collaborative Task Management with Transitions
-
-```rust
-// Project management with sophisticated event routing
-let project_tasks = subject!("workspace/projects/object/website-redesign")
-    .buffer(
-        Duration::from_millis(300),  // Batch task updates
-        Some(20),
-        vec![
-            Operator::Sort(Sort::VectorClock.to_operator()),
-            
-            // Merge task state changes using OR-Set CRDT
-            Operator::Fold(Fold::ORSet.to_operator()),
-            
-            // Extract final task list
-            Operator::Reduce(Reduce::SetContents.to_operator()),
-            
-            // Switch to streaming for comments and real-time updates
-            Operator::TransitionTo(
-                SubjectExecutionMode::Buffer,
-                SubjectExecutionMode::Streaming
-            ),
-        ],
-        Arc::new(|event| {
-            // Route task operations to batch processing
-            matches!(event.evt.event_type,
-                EventType::ApplicationEvent(TASK_CREATED) |
-                EventType::ApplicationEvent(TASK_COMPLETED) |
-                EventType::ApplicationEvent(TASK_ASSIGNED) |
-                EventType::ApplicationEvent(CRDT_SET_ADD) |
-                EventType::ApplicationEvent(CRDT_SET_REMOVE)
-            )
-        }),
-    )
-    .map(|event| {
-        // Add processing metadata in streaming mode
-        add_notification_metadata(event)
-    })
-    .filter(|event| {
-        // Filter out debug events in streaming
-        !matches!(event.evt.event_type, EventType::SystemEvent(_))
-    })
-    .subscribe(|event| {
-        match event.evt.event_type {
-            EventType::ApplicationEvent(CRDT_SET_STATE) => {
-                // Batch-processed task list update
-                if let Ok(task_data) = rkyv::from_bytes::<Vec<Vec<u8>>, _>(&event.evt.data) {
-                    let current_tasks: Vec<String> = task_data.into_iter()
-                        .filter_map(|t| String::from_utf8(t).ok())
-                        .collect();
-                        
-                    println!("📋 Project tasks updated: {} active tasks", current_tasks.len());
-                    refresh_task_board(current_tasks);
-                    
-                    // Notify team of major changes
-                    if current_tasks.len() < 5 {
-                        notify_sprint_completion();
-                    }
-                }
-            },
-            EventType::ApplicationEvent(COMMENT_ADDED) => {
-                // Real-time comments (streaming)
-                display_new_comment(event);
-                send_notification_to_team(event);
-            },
-            EventType::ApplicationEvent(USER_TYPING) => {
-                // Real-time typing indicators (streaming)
-                show_typing_indicator(event);
-            },
-            _ => {}
-        }
-        event
-    });
-
-// Task operations (go to batch processing)
-fn create_task(user_id: XaeroID, task_name: &str) {
-    let event = XaeroEvent {
-        evt: Event::new(task_name.as_bytes().to_vec(), CRDT_SET_ADD),
-        merkle_proof: None,
-        author_id: Some(user_id),
-        latest_ts: Some(current_timestamp()),
-    };
-    project_tasks.data.sink.tx.send(event).unwrap();
-}
-
-fn complete_task(user_id: XaeroID, task_name: &str) {
-    let event = XaeroEvent {
-        evt: Event::new(task_name.as_bytes().to_vec(), CRDT_SET_REMOVE),
-        merkle_proof: None,
-        author_id: Some(user_id),
-        latest_ts: Some(current_timestamp()),
-    };
-    project_tasks.data.sink.tx.send(event).unwrap();
-}
-
-// Real-time operations (go to streaming)
-fn add_comment(user_id: XaeroID, comment: &str) {
-    let event = XaeroEvent {
-        evt: Event::new(comment.as_bytes().to_vec(), EventType::ApplicationEvent(COMMENT_ADDED).to_u8()),
-        merkle_proof: None,
-        author_id: Some(user_id),
-        latest_ts: Some(current_timestamp()),
-    };
-    project_tasks.data.sink.tx.send(event).unwrap();
-}
-
-// Demonstrates the power of mixed processing:
-// - Task changes are batched and conflict-resolved
-// - Comments and typing appear in real-time
-// - System scales efficiently with team size
+// - All using zero-copy ring buffer architecture
 ```
 
 ## System Integration
 
 ### Storage Architecture
 
-Every Subject automatically connects to a sophisticated storage and processing system:
+Every Subject automatically connects to a sophisticated storage and processing system with ring buffer integration:
 
 1. **Event Router**: Distributes events between streaming and batch processing
-2. **Dual Processing Loops**: Parallel streaming and batch event processing
-3. **AOF Actor**: Appends all events to LMDB for durability
+2. **Dual Processing Loops**: Parallel streaming and batch event processing with zero-copy
+3. **AOF Actor**: Appends all events to LMDB using new archive format
 4. **MMR Actor**: Builds Merkle Mountain Range for cryptographic proofs
-5. **Segment Writer**: Pages events to memory-mapped files for efficient access
+5. **Segment Writer**: Pages events to memory-mapped files with zero-copy serialization
 6. **P2P Sync**: Exchanges events with peers via Iroh networking
+
+### Archive Format
+
+**NEW**: Optimized binary format for ring buffer events:
+
+- **24-byte header**: Magic marker, event type, length, timestamp
+- **Zero-copy serialization**: Direct memory mapping from ring buffers
+- **~50% size reduction**: Compared to previous rkyv format
+- **Alignment-safe**: Handles unaligned memory access correctly
 
 ### Actor Responsibilities
 
 - **Event Router**: Intelligent event distribution based on predicates
-- **Batch Processor**: Collects concurrent events for CRDT resolution
-- **Streaming Processor**: Handles real-time events with low latency
-- **AOF Actor**: Durable event persistence in LMDB
-- **MMR Actor**: Cryptographic proof generation
-- **Segment Writer**: Efficient file-based storage
+- **Batch Processor**: Collects concurrent events for CRDT resolution using ring buffers
+- **Streaming Processor**: Handles real-time events with zero-copy access
+- **AOF Actor**: Durable event persistence using new archive format
+- **MMR Actor**: Cryptographic proof generation with ring buffer hashing
+- **Segment Writer**: Efficient file-based storage with zero-copy serialization
 - **P2P Sync**: Peer-to-peer event synchronization
 
 ### Starting the System
 
 ```rust
 use xaeroflux_macros::subject;
+use xaeroflux_core::XaeroPoolManager;
+
+// Initialize ring buffer pools
+XaeroPoolManager::init();
 
 // Create subject with automatic system integration
 let my_subject = subject!("workspace/myapp/object/data");
 
 // All storage actors and processing loops start automatically
-// No need for explicit unsafe_run() with the macro
+// Ring buffer pools are shared across all system components
 ```
 
 ### Historical Replay
 
-Access historical events using the scan operator:
+Access historical events using the scan operator with zero-copy reconstruction:
 
 ```rust
 use xaeroflux_core::event::ScanWindow;
@@ -730,7 +588,10 @@ let historical = subject
         end: now_timestamp,
     })
     .subscribe(|historical_event| {
-        println!("Replaying: {:?}", historical_event);
+        // Events are reconstructed into ring buffers from storage
+        println!("Replaying: type={}, data_len={}", 
+                 historical_event.event_type(), 
+                 historical_event.data().len());
         historical_event
     });
 ```
@@ -751,11 +612,14 @@ subject.data_signal_pipe.sink.tx.send(Signal::Blackhole).unwrap();
 ### Running Tests
 
 ```bash
-# All tests
-cargo test
+# All tests with ring buffer stack size
+RUST_MIN_STACK=32000000 cargo test
 
 # CRDT-specific tests  
 cargo test -p xaeroflux-crdt
+
+# Ring buffer pool tests
+cargo test -p xaeroflux-core pool::
 
 # Pipeline processing tests
 cargo test test_pipeline_
@@ -772,15 +636,17 @@ cargo test test_concurrent_
 4. **Concurrency Tests**: Multiple users editing simultaneously
 5. **Signal Tests**: Kill and blackhole signal handling
 6. **Performance Tests**: Large batches and high throughput
+7. **Ring Buffer Tests**: Pool allocation, zero-copy access, memory safety
 
-### Example Test - Pipeline Processing
+### Example Test - Ring Buffer Integration
 
 ```rust
 #[test]
-fn test_mixed_processing_pipeline() {
-    let subject = subject!("test/mixed-processing");
-    let batch_results = Arc::new(Mutex::new(Vec::new()));
-    let streaming_results = Arc::new(Mutex::new(Vec::new()));
+fn test_ring_buffer_pipeline() {
+    XaeroPoolManager::init();
+    
+    let subject = subject!("test/ring-buffer-processing");
+    let results = Arc::new(Mutex::new(Vec::new()));
     
     let pipeline = subject
         .buffer(
@@ -796,36 +662,45 @@ fn test_mixed_processing_pipeline() {
                 ),
             ],
             Arc::new(|event| {
-                matches!(event.evt.event_type, EventType::ApplicationEvent(CRDT_SET_ADD))
+                matches!(event.event_type(), CRDT_SET_ADD)
             }),
         )
         .subscribe({
-            let batch_results = batch_results.clone();
-            let streaming_results = streaming_results.clone();
+            let results = results.clone();
             move |event| {
-                match event.evt.event_type {
-                    EventType::ApplicationEvent(CRDT_SET_STATE) => {
-                        batch_results.lock().unwrap().push(event.clone());
-                    },
-                    EventType::ApplicationEvent(STREAMING_EVENT) => {
-                        streaming_results.lock().unwrap().push(event.clone());
-                    },
-                    _ => {}
-                }
+                // Verify zero-copy access
+                assert!(!event.data().is_empty());
+                assert!(event.event_type() != 0);
+                
+                results.lock().unwrap().push(event.clone());
                 event
             }
         });
     
-    // Send mixed events
-    subject.data.sink.tx.send(create_set_add_event("item1")).unwrap();
-    subject.data.sink.tx.send(create_streaming_event("update1")).unwrap();
-    subject.data.sink.tx.send(create_set_add_event("item2")).unwrap();
+    // Create events using ring buffer pools
+    for i in 0..3 {
+        let event = XaeroPoolManager::create_xaero_event(
+            &format!("item{}", i).as_bytes(),
+            CRDT_SET_ADD,
+            None,
+            None,
+            None,
+            current_timestamp(),
+        ).expect("Pool allocation failed");
+        
+        subject.data.sink.tx.send(event).unwrap();
+    }
     
     std::thread::sleep(Duration::from_millis(100));
     
-    // Verify both processing modes worked
-    assert_eq!(batch_results.lock().unwrap().len(), 1);   // One batch result
-    assert_eq!(streaming_results.lock().unwrap().len(), 1); // One streaming result
+    // Verify pipeline processed events correctly
+    let final_results = results.lock().unwrap();
+    assert!(!final_results.is_empty());
+    
+    // Verify all events used ring buffer allocation
+    for event in final_results.iter() {
+        assert!(event.is_pure_zero_copy());
+    }
 }
 ```
 
@@ -839,25 +714,38 @@ We welcome contributions! Here's how to get involved:
 2. **Clone your fork**: `git clone https://github.com/yourusername/xaeroflux.git`
 3. **Create a branch**: `git checkout -b feature/amazing-feature`
 4. **Install dependencies**: `cargo build`
-5. **Run tests**: `cargo test`
+5. **Run tests**: `RUST_MIN_STACK=32000000 cargo test`
 
 ### Development Guidelines
 
 - **Write tests** for new functionality, especially pipeline and CRDT scenarios
+- **Test ring buffer integration** for any memory-related changes
 - **Update documentation** including examples in the README
 - **Follow Rust conventions** and run `cargo fmt` and `cargo clippy`
 - **Test concurrent scenarios** when working on CRDT features
 - **Test pipeline processing** when working on buffer/sort/fold/reduce features
 - **Maintain backward compatibility** with existing Subject API
+- **Consider memory safety** when working with ring buffer pools
 
 ### Areas We Need Help
 
 - **More CRDT types**: Text editing (RGA), Trees, Maps
-- **Pipeline optimization**: Buffer processing efficiency
+- **Pipeline optimization**: Buffer processing efficiency with ring buffers
 - **Advanced operators**: Custom sort/fold/reduce implementations
 - **Network protocols**: Better P2P discovery and sync
-- **Mobile support**: iOS/Android optimizations
+- **Mobile support**: iOS/Android ring buffer optimizations
 - **Documentation**: More examples and tutorials
+- **Benchmarking**: Performance testing of ring buffer architecture
+
+### Ring Buffer Development
+
+When working with the ring buffer architecture:
+
+- **Initialize pools**: Always call `XaeroPoolManager::init()` in tests
+- **Use create_xaero_event()**: Don't manually construct XaeroEvent
+- **Handle pool exhaustion**: Use proper error handling for allocation failures
+- **Test zero-copy**: Verify data access uses `.data()` and `.event_type()` methods
+- **Memory safety**: Ensure Arc<XaeroEvent> sharing is correct
 
 ### Submitting Changes
 

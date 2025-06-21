@@ -1,6 +1,6 @@
 [package]
 name = "xaeroflux-ffi"
-version = "0.7.0-m5"
+version = "0.8.0-m5" 
 edition     = "2024"
 description = "EXPERIMENTAL: actor layer for xaeroflux"
 categories = ["database", "database-implementations"]
@@ -13,5 +13,5 @@ homepage = "https://blockxaero.io"
 readme = "README.md"
 
 [dependencies]
-xaeroflux = {path = "../xaeroflux"}
+xaeroflux = { version = "0.8.0-m5" }
 blake3 = "1.8.2"

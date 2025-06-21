@@ -2,6 +2,40 @@
 
 All notable changes to Xaeroflux will be documented in this file.
 
+[0.8.0-m5] – 2025-06-21
+
+Added
+- **PooledEventPtr Architecture**: Complete migration from heap-based Event<Vec<u8>> to stack-based ring buffer pools for zero-copy event processing.
+- **Ring Buffer Pools**: Five-tier allocation system (64B, 256B, 1KB, 4KB, 16KB) with platform-specific configuration for mobile vs desktop.
+- **XaeroPoolManager**: Unified pool management for event data, author IDs, merkle proofs, and vector clocks with automatic initialization.
+- **Zero-Copy Event Access**: Arc<XaeroEvent> with .data() and .event_type() methods for direct ring buffer access without copying.
+- **New Archive Format**: Custom binary serialization format with 24-byte headers, replacing rkyv for ~50% size reduction and alignment safety.
+- **Memory-Aligned Storage**: Updated LMDB and segment file I/O to handle unaligned memory access from memory-mapped files.
+- **Stack-Based Allocation**: All event components (data, proofs, clocks) allocated in ring buffer pools for predictable memory usage.
+
+Changed
+- **XaeroEvent Structure**: Migrated from nested Event<Vec<u8>> to PooledEventPtr with optional stack-allocated components.
+- **Actor Event Processing**: All system actors (AOF, MMR, Segment Writer/Reader, Secondary Index) updated for Arc<XaeroEvent> processing.
+- **Archive Functions**: Replaced archive()/unarchive() with archive_xaero_event()/unarchive_to_xaero_event() for ring buffer integration.
+- **Storage Functions**: Updated push_event()/scan_range() to push_xaero_event()/scan_xaero_range() for new archive format.
+- **Hash Functions**: Updated to work directly with ring buffer data using sha_256_slice() and ring_buffer_hashes for pool-specific optimization.
+- **Subject Macro**: Modified to use XaeroPoolManager::create_xaero_event() for bootstrap events and pool initialization.
+- **FFI Layer**: Updated C/Dart interface to use Arc<XaeroEvent> with proper memory management for cross-language safety.
+
+Fixed
+- **Memory Alignment Issues**: Resolved SIGBUS errors in memory-mapped file access with proper header copying for alignment.
+- **Pool Allocation Errors**: Fixed struct sizing issues for FixedMerkleProof and FixedVectorClock to fit within pool constraints.
+- **Event Type Access**: Migrated from direct field access to method calls for PooledEventPtr compatibility.
+- **Unaligned Field Access**: Added safe patterns for packed struct field access in storage layer.
+
+Performance
+- **Zero-Copy Pipeline**: Events remain in ring buffers throughout the entire processing pipeline without intermediate copying.
+- **Cache Efficiency**: Sequential ring buffer layout improves CPU cache performance compared to scattered heap allocations.
+- **Bounded Memory**: Predictable memory usage eliminates heap fragmentation and enables embedded system deployment.
+- **Reference Counting**: Arc<XaeroEvent> enables safe concurrent access across system actors without locks.
+
+⸻
+
 [0.7.0-m5] – 2025-06-17
 
 Added
