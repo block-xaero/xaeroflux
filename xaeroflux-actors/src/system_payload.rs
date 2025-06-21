@@ -1,6 +1,6 @@
 use bytemuck::{Pod, Zeroable};
 
-use crate::{aof::storage::format::SegmentMeta,};
+use crate::aof::storage::format::SegmentMeta;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]

@@ -4,7 +4,6 @@ use std::sync::{
 };
 
 use crossbeam::channel::{Receiver, Sender};
-use rkyv::Archived;
 
 use crate::{event::XaeroEvent, next_id};
 

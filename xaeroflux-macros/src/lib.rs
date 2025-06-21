@@ -73,8 +73,8 @@ pub fn subject(input: TokenStream) -> TokenStream {
             &subject_name_tokens,
             "Subject must look like \"workspace/<workspace_id>/object/<object_id>\"",
         )
-            .to_compile_error()
-            .into();
+        .to_compile_error()
+        .into();
     }
 
     // 3) Check the "workspace" / "object" prefixes:
@@ -83,8 +83,8 @@ pub fn subject(input: TokenStream) -> TokenStream {
             &subject_name_tokens,
             "Subject must look like \"workspace/<workspace_id>/object/<object_id>\"",
         )
-            .to_compile_error()
-            .into();
+        .to_compile_error()
+        .into();
     }
 
     // 4) Extract the actual IDs:
@@ -96,8 +96,8 @@ pub fn subject(input: TokenStream) -> TokenStream {
             &subject_name_tokens,
             "workspace_id and object_id cannot be empty",
         )
-            .to_compile_error()
-            .into();
+        .to_compile_error()
+        .into();
     }
 
     // 5) Compute three separate blake3 hashes:

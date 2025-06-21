@@ -8,23 +8,24 @@
 
 use std::sync::{Arc, Mutex};
 
+use xaeroflux_core::{
+    IO_POOL, XAERO_DISPATCHER_POOL, XaeroPoolManager,
+    date_time::emit_secs,
+    event::{EventType, EventType::SystemEvent, SystemEventKind, SystemEventKind::Shutdown, XaeroEvent},
+    hash::sha_256_slice,
+    pipe::{BusKind, Pipe},
+    system_paths::*,
+};
+
 use super::segment_writer_actor::{SegmentConfig, SegmentWriterActor};
 use crate::{
-    aof::storage::lmdb::{push_xaero_event, LmdbEnv},
+    aof::storage::lmdb::{LmdbEnv, push_xaero_event},
     indexing::storage::{
         actors::ExecutionState,
         format::archive_xaero_event,
         mmr::{XaeroMmr, XaeroMmrOps},
     },
     subject::SubjectHash,
-};
-use xaeroflux_core::hash::sha_256_slice;
-use xaeroflux_core::{
-    date_time::emit_secs, event::{EventType, EventType::SystemEvent, SystemEventKind, SystemEventKind::Shutdown, XaeroEvent}, pipe::{BusKind, Pipe},
-    system_paths::*,
-    XaeroPoolManager,
-    IO_POOL,
-    XAERO_DISPATCHER_POOL,
 };
 
 pub static NAME_PREFIX: &str = "mmr_actor";
@@ -84,9 +85,12 @@ impl MmrState {
         let meta_event = XaeroPoolManager::create_xaero_event(
             data_b_mmr_meta,
             EventType::MetaEvent(2).to_u8(), // Different meta event type
-            None, None, None,
+            None,
+            None,
+            None,
             emit_secs(),
-        ).unwrap_or_else(|pool_error| {
+        )
+        .unwrap_or_else(|pool_error| {
             tracing::error!("Pool allocation failed for MMR metadata: {:?}", pool_error);
             panic!("Cannot create MMR metadata event - ring buffer pool exhausted");
         });
@@ -118,11 +122,14 @@ impl Drop for MmrIndexingActor {
     fn drop(&mut self) {
         // Send shutdown signal using XaeroPoolManager
         let shutdown_event = XaeroPoolManager::create_xaero_event(
-            &[],  // Empty data
+            &[], // Empty data
             SystemEvent(Shutdown).to_u8(),
-            None, None, None,
+            None,
+            None,
+            None,
             emit_secs(),
-        ).unwrap_or_else(|pool_error| {
+        )
+        .unwrap_or_else(|pool_error| {
             tracing::error!("Pool allocation failed for shutdown: {:?}", pool_error);
             panic!("Cannot create shutdown event - ring buffer pool exhausted");
         });
@@ -174,7 +181,7 @@ impl MmrIndexingActor {
                 emit_data_path_with_subject_hash(&segment_config.lmdb_env_path, name.0, NAME_PREFIX).as_str(),
                 BusKind::Data,
             )
-                .expect("failed to create LmdbEnv"),
+            .expect("failed to create LmdbEnv"),
         ));
 
         // Setup in-memory MMR and persistent state
@@ -226,7 +233,10 @@ impl MmrIndexingActor {
         let xaero_handle = std::thread::Builder::new()
             .name(dispatch_thread_name)
             .spawn(move || {
-                tracing::info!("MmrIndexingActor processing thread started for subject: {}", encoded_hash);
+                tracing::info!(
+                    "MmrIndexingActor processing thread started for subject: {}",
+                    encoded_hash
+                );
 
                 while let Ok(xaero_event) = pipe_clone.sink.rx.recv() {
                     // Check for shutdown signal
@@ -301,9 +311,12 @@ impl MmrIndexingActor {
         let mmr_event = XaeroPoolManager::create_xaero_event(
             &leaf_hash,
             EventType::SystemEvent(SystemEventKind::MmrAppended).to_u8(),
-            None, None, None,
+            None,
+            None,
+            None,
             emit_secs(),
-        ).unwrap_or_else(|pool_error| {
+        )
+        .unwrap_or_else(|pool_error| {
             tracing::error!("Pool allocation failed for MmrAppended: {:?}", pool_error);
             panic!("Cannot create MmrAppended event - ring buffer pool exhausted");
         });
@@ -345,10 +358,10 @@ mod actor_tests {
     use serial_test::serial;
     use tempfile;
     use xaeroflux_core::{
-        date_time::emit_secs,
-        event::{EventType, SystemEventKind, XaeroEvent}, init_xaero_pool, initialize,
-        shutdown_all_pools,
         XaeroPoolManager,
+        date_time::emit_secs,
+        event::{EventType, SystemEventKind, XaeroEvent},
+        init_xaero_pool, initialize, shutdown_all_pools,
     };
 
     use super::*;
@@ -359,9 +372,12 @@ mod actor_tests {
         let xaero_event = XaeroPoolManager::create_xaero_event(
             &data,
             EventType::ApplicationEvent(1).to_u8(),
-            None, None, None,
+            None,
+            None,
+            None,
             emit_secs(),
-        ).unwrap_or_else(|pool_error| {
+        )
+        .unwrap_or_else(|pool_error| {
             tracing::error!("Pool allocation failed: {:?}", pool_error);
             panic!("Cannot create test event - ring buffer pool exhausted");
         });
@@ -591,9 +607,12 @@ mod actor_tests {
         let test_event = XaeroPoolManager::create_xaero_event(
             test_data,
             EventType::ApplicationEvent(1).to_u8(),
-            None, None, None,
+            None,
+            None,
+            None,
             emit_secs(),
-        ).unwrap_or_else(|pool_error| {
+        )
+        .unwrap_or_else(|pool_error| {
             tracing::error!("Pool allocation failed: {:?}", pool_error);
             panic!("Cannot create test event - ring buffer pool exhausted");
         });

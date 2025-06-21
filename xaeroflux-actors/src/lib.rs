@@ -14,9 +14,9 @@ use std::sync::{Arc, OnceLock};
 
 use bytemuck::{Pod, Zeroable};
 use xaeroflux_core::{
+    XaeroPoolManager, // Import from xaeroflux_core
     event::{ScanWindow, XaeroEvent},
     pipe::{BusKind, Pipe},
-    XaeroPoolManager,  // Import from xaeroflux_core
 };
 
 use crate::subject::Subscription;
@@ -28,6 +28,7 @@ pub struct XFluxHandle {
     pub _sys_sub_control: Arc<Subscription>,
 }
 
+#[allow(deprecated)]
 #[cfg(test)]
 mod tests {
     use std::{
@@ -75,12 +76,7 @@ mod tests {
         let subject = subject!("workspace/cyan_workspace_123/object/cyan_object_white_board_id_134");
 
         // Receive events from control pipe - events are Arc<XaeroEvent>
-        let workspace_created_event = subject
-            .control
-            .sink
-            .rx
-            .recv()
-            .expect("attempt_to_unwrap_failed");
+        let workspace_created_event = subject.control.sink.rx.recv().expect("attempt_to_unwrap_failed");
 
         // Access event type through Arc<XaeroEvent>
         assert_eq!(
@@ -136,9 +132,12 @@ mod tests {
             let test_event = XaeroPoolManager::create_xaero_event(
                 b"hello",
                 EventType::ApplicationEvent(1).to_u8(),
-                None, None, None,
+                None,
+                None,
+                None,
                 emit_secs(),
-            ).expect("Failed to create test event");
+            )
+            .expect("Failed to create test event");
 
             // Use new archive format
             let frame = archive_xaero_event(&test_event);
@@ -165,9 +164,12 @@ mod tests {
         let meta_event = XaeroPoolManager::create_xaero_event(
             bytes_of(&seg_meta),
             EventType::MetaEvent(1).to_u8(),
-            None, None, None,
+            None,
+            None,
+            None,
             emit_secs(),
-        ).expect("Failed to create meta event");
+        )
+        .expect("Failed to create meta event");
 
         push_xaero_event(&meta_env, &meta_event).expect("push_xaero_event");
 
@@ -191,14 +193,10 @@ mod tests {
             None,
             None,
             emit_secs(),
-        ).expect("Failed to create replay event");
+        )
+        .expect("Failed to create replay event");
 
-        actor
-            .pipe
-            .sink
-            .tx
-            .send(replay_evt)
-            .expect("send replay");
+        actor.pipe.sink.tx.send(replay_evt).expect("send replay");
 
         // Give actor time to process
         std::thread::sleep(Duration::from_millis(200));
@@ -333,7 +331,8 @@ mod tests {
             None,
             None,
             emit_secs(),
-        ).expect("Failed to create test event");
+        )
+        .expect("Failed to create test event");
 
         // Access data through zero-copy interface
         let accessed_data = event.data(); // This should be zero-copy access
@@ -354,7 +353,8 @@ mod tests {
             None,
             None,
             emit_secs(),
-        ).expect("Failed to create shared event");
+        )
+        .expect("Failed to create shared event");
 
         let event_clone = event.clone();
 
@@ -387,23 +387,32 @@ mod tests {
         let small_event = XaeroPoolManager::create_xaero_event(
             small_data,
             EventType::ApplicationEvent(1).to_u8(),
-            None, None, None,
+            None,
+            None,
+            None,
             emit_secs(),
-        ).expect("Failed to create small event");
+        )
+        .expect("Failed to create small event");
 
         let medium_event = XaeroPoolManager::create_xaero_event(
             &medium_data,
             EventType::ApplicationEvent(2).to_u8(),
-            None, None, None,
+            None,
+            None,
+            None,
             emit_secs(),
-        ).expect("Failed to create medium event");
+        )
+        .expect("Failed to create medium event");
 
         let large_event = XaeroPoolManager::create_xaero_event(
             &large_data,
             EventType::ApplicationEvent(3).to_u8(),
-            None, None, None,
+            None,
+            None,
+            None,
             emit_secs(),
-        ).expect("Failed to create large event");
+        )
+        .expect("Failed to create large event");
 
         // Verify data integrity
         assert_eq!(small_event.data(), small_data);
@@ -426,16 +435,19 @@ mod tests {
         let original_event = XaeroPoolManager::create_xaero_event(
             test_data,
             EventType::ApplicationEvent(100).to_u8(),
-            None, None, None,
+            None,
+            None,
+            None,
             emit_secs(),
-        ).expect("Failed to create original event");
+        )
+        .expect("Failed to create original event");
 
         // Archive the event
         let archived_bytes = archive_xaero_event(&original_event);
         assert!(!archived_bytes.is_empty(), "Archived bytes should not be empty");
 
         // Verify we can unarchive it back
-        use crate::indexing::storage::format::{unarchive_to_xaero_event, unarchive_to_raw_data};
+        use crate::indexing::storage::format::{unarchive_to_raw_data, unarchive_to_xaero_event};
 
         // Test raw data extraction
         let (header, raw_data) = unarchive_to_raw_data(&archived_bytes);
@@ -443,10 +455,12 @@ mod tests {
         assert_eq!(header.event_type, EventType::ApplicationEvent(100).to_u8());
 
         // Test full reconstruction
-        let reconstructed_event = unarchive_to_xaero_event(&archived_bytes)
-            .expect("Failed to reconstruct event");
+        let reconstructed_event = unarchive_to_xaero_event(&archived_bytes).expect("Failed to reconstruct event");
 
         assert_eq!(reconstructed_event.data(), test_data);
-        assert_eq!(reconstructed_event.event_type(), EventType::ApplicationEvent(100).to_u8());
+        assert_eq!(
+            reconstructed_event.event_type(),
+            EventType::ApplicationEvent(100).to_u8()
+        );
     }
 }

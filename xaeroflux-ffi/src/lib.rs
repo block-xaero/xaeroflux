@@ -153,9 +153,7 @@ pub extern "C" fn xf_subject_filter_merkle_proofs(handle: *mut FfiSubject) -> *m
     let _subject = unsafe { &mut *(handle as *mut Subject) };
 
     // Create a filter that checks for merkle proofs
-    let _merkle_filter = |evt: &Arc<XaeroEvent>| -> bool {
-        evt.merkle_proof().is_some()
-    };
+    let _merkle_filter = |evt: &Arc<XaeroEvent>| -> bool { evt.merkle_proof().is_some() };
 
     // Apply the filter operation (this would need to be implemented in Subject)
     // subject.pipe = subject.pipe.filter(Arc::new(merkle_filter));
@@ -186,7 +184,8 @@ pub extern "C" fn xf_subject_blackhole(handle: *mut FfiSubject) -> *mut FfiSubje
 /// Run the pipeline to completion (or until it blocks).
 /// After calling this, the Subject is consumed/dropped.
 /// # Safety
-/// The handle must be a valid pointer returned from xf_subject_new and must not be used after this call.
+/// The handle must be a valid pointer returned from xf_subject_new and must not be used after this
+/// call.
 #[unsafe(no_mangle)]
 pub extern "C" fn xf_subject_unsafe_run(handle: *mut FfiSubject) {
     if handle.is_null() {
@@ -265,9 +264,7 @@ pub unsafe extern "C" fn xf_event_create(
 
     // Create XaeroEvent using XaeroPoolManager
     match XaeroPoolManager::create_xaero_event(
-        data_slice,
-        event_type,
-        None, // author_id
+        data_slice, event_type, None, // author_id
         None, // merkle_proof
         None, // vector_clock
         timestamp,
@@ -300,27 +297,25 @@ pub unsafe extern "C" fn xf_event_free(evt: *mut XaeroEvent) {
 
 #[cfg(test)]
 mod ffi_tests {
-    use super::*;
     use std::ffi::CString;
-    use xaeroflux::{initialize, event::EventType};
 
+    use xaeroflux::{event::EventType, initialize};
+
+    use super::*;
+
+    #[allow(dead_code)]
     //#[test]
     fn test_subject_creation_and_cleanup() {
         // Initialize everything properly
         initialize();
         XaeroPoolManager::init();
 
-        let name = CString::new("test_subject").unwrap();
-        let workspace = CString::new("test_workspace").unwrap();
-        let object = CString::new("test_object").unwrap();
+        let name = CString::new("test_subject").expect("failed_to_unravel");
+        let workspace = CString::new("test_workspace").expect("failed_to_unravel");
+        let object = CString::new("test_object").expect("failed_to_unravel");
 
-        let subject_ptr = unsafe {
-            xf_subject_new(
-                name.as_ptr(),
-                workspace.as_ptr(),
-                object.as_ptr(),
-            )
-        };
+        let subject_ptr =
+            unsafe { xf_subject_new(name.as_ptr(), workspace.as_ptr(), object.as_ptr()) };
 
         assert!(!subject_ptr.is_null(), "Subject creation failed");
 
@@ -328,7 +323,8 @@ mod ffi_tests {
         xf_subject_unsafe_run(subject_ptr);
     }
 
-   // #[test]
+    #[allow(dead_code)]
+    // #[test]
     fn test_event_helpers() {
         // Initialize everything properly
         initialize();
@@ -339,14 +335,8 @@ mod ffi_tests {
         let timestamp = 12345;
 
         // Create event
-        let event_ptr = unsafe {
-            xf_event_create(
-                test_data.as_ptr(),
-                test_data.len(),
-                event_type,
-                timestamp,
-            )
-        };
+        let event_ptr =
+            unsafe { xf_event_create(test_data.as_ptr(), test_data.len(), event_type, timestamp) };
 
         assert!(!event_ptr.is_null(), "Failed to create event");
 
@@ -356,9 +346,7 @@ mod ffi_tests {
         assert!(!data_ptr.is_null(), "Failed to get event data");
         assert_eq!(data_len, test_data.len());
 
-        let retrieved_data = unsafe {
-            std::slice::from_raw_parts(data_ptr, data_len)
-        };
+        let retrieved_data = unsafe { std::slice::from_raw_parts(data_ptr, data_len) };
         assert_eq!(retrieved_data, test_data);
 
         // Test type access

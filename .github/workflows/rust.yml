@@ -64,8 +64,8 @@ jobs:
 
       - name: Run all workspace tests
         working-directory: xaeroflux
-        run: cargo test --workspace --verbose
+        run: RUST_MIN_STACK=3200000 cargo test --workspace --verbose
 
       - name: Run clippy on all targets
         working-directory: xaeroflux
-        run: cargo clippy --all-targets --all-features
+        run: RUSTFLAGS="-A deprecated" cargo clippy --all-targets --all-features

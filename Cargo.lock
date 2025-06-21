@@ -6429,7 +6429,9 @@ dependencies = [
 
 [[package]]
 name = "xaeroid"
-version = "0.3.0-rc3"
+version = "0.3.1-rc3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92dab21ee531ba19dfabd486fb6d17c78b33775fc02c69e2e1e3351c88fcbed6"
 dependencies = [
  "ark-bn254",
  "ark-ff",

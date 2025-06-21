@@ -1,7 +1,8 @@
-use std::convert::TryInto;
+use std::{convert::TryInto, sync::Arc};
+
 use sha2::Digest;
+
 use crate::event::XaeroEvent;
-use std::sync::Arc;
 
 /// Primary hashing interface for XaeroEvent in the ring buffer architecture
 pub fn hash_xaero_event(xaero_event: &Arc<XaeroEvent>) -> [u8; 32] {
@@ -59,21 +60,21 @@ pub fn sha_256_multi_hash(data_arrays: &[&[u8]]) -> [u8; 32] {
 pub fn blake_hash(n: &str) -> [u8; 32] {
     let mut h = blake3::Hasher::new();
     h.update(n.as_bytes());
-    h.finalize().try_into().expect("failed to blake hash!")
+    h.finalize().into()
 }
 
 /// BLAKE3 hash for byte slices
 pub fn blake_hash_slice(data: &[u8]) -> [u8; 32] {
     let mut h = blake3::Hasher::new();
     h.update(data);
-    h.finalize().try_into().expect("failed to blake hash!")
+    h.finalize().into()
 }
 
 /// BLAKE3 hash with const size optimization
 pub fn blake_hash_const<const N: usize>(data: &[u8; N]) -> [u8; 32] {
     let mut h = blake3::Hasher::new();
     h.update(data.as_ref());
-    h.finalize().try_into().expect("failed to blake hash!")
+    h.finalize().into()
 }
 
 // Legacy compatibility functions - can be removed in future versions
@@ -82,6 +83,7 @@ pub fn sha_256_hash(n: Vec<u8>) -> [u8; 32] {
     sha_256_slice(&n)
 }
 
+#[allow(clippy::ptr_arg)]
 #[deprecated(note = "Use sha_256_slice instead")]
 pub fn sha_256_hash_b(n: &Vec<u8>) -> [u8; 32] {
     sha_256_slice(n)

@@ -1,3 +1,4 @@
+#[allow(deprecated)]
 use std::fmt::Debug;
 
 use rkyv::{Archive, Deserialize, Serialize};
