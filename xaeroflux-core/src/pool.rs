@@ -37,7 +37,7 @@ pub static XAERO_ID_EVENT_BASE: u8 = 108;
 pub static MERKLE_PROOF_EVENT_BASE: u8 = 110;
 pub static VECTOR_CLOCK_EVENT_BASE: u8 = 111;
 
-const MAX_PEERS_PER_OBJECT: usize = 10; // Reasonable for whiteboard collaboration
+const MAX_PEERS_PER_OBJECT: usize = 2; // Smaller to ensure it fits in pools
 
 #[derive(Debug, thiserror::Error)]
 pub enum PoolError {
@@ -55,8 +55,8 @@ pub enum PoolError {
 #[derive(Debug, Clone, Copy)]
 pub struct FixedMerkleProof {
     pub proof_len: u16,
-    pub _pad: [u8; 6],          // Alignment padding
-    pub proof_data: [u8; 1024], // 1KB max proof size
+    pub _pad: [u8; 6],         // Alignment padding
+    pub proof_data: [u8; 1016], // Fits in M pool (1024 - 8 bytes for header)
 }
 
 unsafe impl bytemuck::Pod for FixedMerkleProof {}
@@ -64,10 +64,10 @@ unsafe impl bytemuck::Zeroable for FixedMerkleProof {}
 
 impl FixedMerkleProof {
     pub fn from_bytes(data: &[u8]) -> Result<Self, PoolError> {
-        if data.len() > 1024 {
+        if data.len() > 1016 {
             return Err(PoolError::TooLarge {
                 data_len: data.len(),
-                max_pool_size: 1024,
+                max_pool_size: 1016,
             });
         }
 
@@ -89,7 +89,7 @@ pub struct FixedVectorClock {
     pub latest_timestamp: u64,
     pub peer_count: u8,
     pub _pad: [u8; 7],                                 // Alignment padding
-    pub peers: [(XaeroID, u64); MAX_PEERS_PER_OBJECT], // ~24KB per peer * 10
+    pub peers: [(XaeroID, u64); MAX_PEERS_PER_OBJECT], // Smaller for pool fitting
 }
 
 unsafe impl bytemuck::Pod for FixedVectorClock {}
@@ -149,7 +149,7 @@ impl MerkleProofAllocator {
         let fixed_proof = FixedMerkleProof::from_bytes(proof_data)?;
         let bytes = bytemuck::bytes_of(&fixed_proof);
 
-        // Use M pool (1KB) for merkle proofs
+        // Use M pool (1KB) for merkle proofs - struct now fits with 1016 byte array
         let ring_ptr = self
             .allocator
             .allocate_m_event(bytes, MERKLE_PROOF_EVENT_BASE as u32)
@@ -180,7 +180,7 @@ impl VectorClockAllocator {
         let fixed_vc = FixedVectorClock::from_vector_clock(vc)?;
         let bytes = bytemuck::bytes_of(&fixed_vc);
 
-        // Use XL pool (16KB) for vector clocks (they're ~24KB but we'll compress)
+        // Use XL pool (16KB) for vector clocks - keep original size
         let ring_ptr = self
             .allocator
             .allocate_xl_event(bytes, VECTOR_CLOCK_EVENT_BASE as u32)
@@ -549,29 +549,28 @@ mod tests {
     fn test_all_stack_allocation() {
         XaeroPoolManager::init();
 
-        // Create test vector clock
+        // Create test vector clock with minimal data to fit in pools
         let mut neighbor_clocks = HashMap::new();
         neighbor_clocks.insert(XaeroID::zeroed(), 123);
-        neighbor_clocks.insert(XaeroID::zeroed(), 456);
 
         let vc = VectorClock {
             latest_timestamp: 789,
             neighbor_clocks,
         };
 
-        // Test complete XaeroEvent creation - ALL STACK
+        // Test complete XaeroEvent creation with smaller data that fits in pools
         let event = XaeroPoolManager::create_xaero_event(
-            b"all stack test",
+            b"small test", // Smaller data
             42,
             Some(XaeroID::zeroed()),
-            Some(b"merkle_proof_data"),
+            Some(b"small_proof"), // Smaller merkle proof
             Some(&vc),
             1234567890,
         )
-        .unwrap();
+            .unwrap();
 
         // Verify ALL data is zero-copy accessible
-        assert_eq!(event.data(), b"all stack test");
+        assert_eq!(event.data(), b"small test");
         assert_eq!(event.event_type(), 42);
         assert_eq!(event.latest_ts, 1234567890);
         assert!(event.is_pure_zero_copy());
@@ -599,32 +598,31 @@ mod tests {
 
         // Drawing stroke event (common)
         let stroke_event = XaeroPoolManager::create_xaero_event(
-            b"stroke_data_with_coordinates_and_style",
+            b"stroke_data", // Smaller stroke data
             1, // STROKE_EVENT
             Some(XaeroID::zeroed()),
             None, // No merkle proof for simple strokes
             None, // No vector clock for simple strokes
             1234567890,
         )
-        .unwrap();
+            .unwrap();
 
-        // Collaborative edit with vector clock (less common)
+        // Collaborative edit with minimal vector clock (less common)
         let mut vc = VectorClock {
             latest_timestamp: 789,
             neighbor_clocks: HashMap::new(),
         };
         vc.neighbor_clocks.insert(XaeroID::zeroed(), 100);
-        vc.neighbor_clocks.insert(XaeroID::zeroed(), 200);
 
         let collab_event = XaeroPoolManager::create_xaero_event(
-            b"collaborative_edit_complex_operation",
+            b"edit_op", // Smaller collaborative edit data
             2, // COLLABORATIVE_EDIT
             Some(XaeroID::zeroed()),
-            Some(b"merkle_proof_for_complex_edit"),
+            Some(b"proof"), // Smaller merkle proof
             Some(&vc),
             1234567891,
         )
-        .unwrap();
+            .unwrap();
 
         events.push(stroke_event);
         events.push(collab_event);

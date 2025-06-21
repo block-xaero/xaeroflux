@@ -56,8 +56,10 @@ impl<'a> Iterator for PageEventIterator<'a> {
             return None;
         }
 
-        // 2) Read header
-        let hdr: &XaeroOnDiskEventHeader = from_bytes(&self.page[self.offset..self.offset + EVENT_HEADER_SIZE]);
+        // 2) Read header safely - copy to aligned buffer to avoid alignment issues
+        let mut header_bytes = [0u8; EVENT_HEADER_SIZE];
+        header_bytes.copy_from_slice(&self.page[self.offset..self.offset + EVENT_HEADER_SIZE]);
+        let hdr: XaeroOnDiskEventHeader = *bytemuck::from_bytes(&header_bytes);
 
         // 3) Stop on padding or invalid magic
         if hdr.marker != XAERO_MAGIC {
@@ -93,12 +95,16 @@ pub fn iter_all_events(mmap: &Mmap) -> impl Iterator<Item = &'_ [u8]> + '_ {
 }
 
 /// Helper function to validate event frame integrity
-pub fn validate_event_frame(frame: &[u8]) -> Result<&XaeroOnDiskEventHeader, &'static str> {
+/// Returns the header by value to avoid lifetime issues
+pub fn validate_event_frame(frame: &[u8]) -> Result<XaeroOnDiskEventHeader, &'static str> {
     if frame.len() < EVENT_HEADER_SIZE {
         return Err("Frame too small for header");
     }
 
-    let header: &XaeroOnDiskEventHeader = from_bytes(&frame[0..EVENT_HEADER_SIZE]);
+    // Copy header bytes to aligned buffer to avoid alignment issues
+    let mut header_bytes = [0u8; EVENT_HEADER_SIZE];
+    header_bytes.copy_from_slice(&frame[0..EVENT_HEADER_SIZE]);
+    let header: XaeroOnDiskEventHeader = *bytemuck::from_bytes(&header_bytes);
 
     if header.marker != XAERO_MAGIC {
         return Err("Invalid magic number");
@@ -113,7 +119,7 @@ pub fn validate_event_frame(frame: &[u8]) -> Result<&XaeroOnDiskEventHeader, &'s
 }
 
 /// Extract event data from a validated frame
-pub fn extract_event_data(frame: &[u8]) -> Result<(&XaeroOnDiskEventHeader, &[u8]), &'static str> {
+pub fn extract_event_data(frame: &[u8]) -> Result<(XaeroOnDiskEventHeader, &[u8]), &'static str> {
     let header = validate_event_frame(frame)?;
     let data = &frame[EVENT_HEADER_SIZE..];
     Ok((header, data))

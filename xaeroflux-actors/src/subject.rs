@@ -244,7 +244,7 @@ impl SubjectBatchOps for Subject {
 
     fn fold_left<F>(self: &Arc<Self>, fold_left: Arc<F>) -> Arc<Self>
     where
-        F: Fn(Arc<Option<XaeroEvent>>, Vec<Arc<XaeroEvent>>) -> Result<Arc<XaeroEvent>, 
+        F: Fn(Arc<Option<XaeroEvent>>, Vec<Arc<XaeroEvent>>) -> Result<Arc<XaeroEvent>,
             AllocationError>
         + Send
         + Sync
@@ -305,7 +305,7 @@ impl Subject {
             batch_mode: Arc::new(AtomicBool::new(false)), // by default its false.
             batch_context: None,
             mode_set: Arc::new(AtomicSignal::new(
-                Signal::from_u8(10).expect("cannot set an uninit mode from atomic signal - must panic!"),
+                Signal::from_u8(0).expect("cannot set an uninit mode from atomic signal - must panic!")
             )),
         })
     }
