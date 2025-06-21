@@ -1,6 +1,6 @@
 [package]
 name = "xaeroflux-actors"
-version = "0.7.0-m5"
+version = "0.8.0-m5"
 edition     = "2024"
 description = "EXPERIMENTAL: actor layer for xaeroflux"
 categories = ["database", "database-implementations"]
@@ -35,9 +35,9 @@ libc = "0.2.172"
 [dependencies]
 rusted-ring = "0.3.0"
 xaeroid = { workspace = true }
-xaeroflux-core = {path = "../xaeroflux-core"}
-xaeroflux-macros = {path = "../xaeroflux-macros"}
-xaeroflux-crdts = {path = "../xaeroflux-crdts"}
+xaeroflux-core = {version = "0.8.0-m5"}
+xaeroflux-macros = {version = "0.8.0-m5"}
+xaeroflux-crdts = {version = "0.8.0-m5"}
 ed25519-dalek = { version = "2.1.1", features = ["rand_core"] }
 rand = "0.8"
 iroh = {version = "0.35.0", "default-features" = true, features = ["discovery-local-network", "discovery-pkarr-dht"] }
