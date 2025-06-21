@@ -89,7 +89,7 @@ const _: () = assert!(std::mem::size_of::<XaeroOnDiskEventHeader>() == 24);
 
 /// Serialize an Arc<XaeroEvent> to a byte vector ready for paging.
 ///
-/// This creates a 20-byte `XaeroOnDiskEventHeader` followed by the raw event data
+/// This creates a 24-byte `XaeroOnDiskEventHeader` followed by the raw event data
 /// accessed through the PooledEventPtr (zero-copy).
 ///
 /// Only stores essential data:
@@ -105,6 +105,7 @@ pub fn archive_xaero_event(xaero_event: &Arc<XaeroEvent>) -> Vec<u8> {
     // Zero-copy access to ring buffer data
     let event_data = xaero_event.data();
     let event_type = xaero_event.event_type();
+    // FIX: latest_ts is u64, not Option<u64>
     let timestamp = xaero_event.latest_ts;
 
     // Create header with essential metadata
@@ -112,7 +113,7 @@ pub fn archive_xaero_event(xaero_event: &Arc<XaeroEvent>) -> Vec<u8> {
         marker: XAERO_MAGIC,
         len: event_data.len() as u32,
         event_type,
-        _pad1: [0; 7], // 7 bytes of padding
+        _pad1: [0; 7], // 7 bytes of padding for alignment
         timestamp,
     };
 
@@ -135,13 +136,13 @@ pub fn archive_xaero_event(xaero_event: &Arc<XaeroEvent>) -> Vec<u8> {
 /// Parse a memory slice into an event header and raw event data.
 ///
 /// Validates the magic prefix and payload length,
-/// then returns references to the header and raw event data.
+/// then returns the header values and raw event data.
 ///
-/// Returns: (header, raw_event_data)
+/// Returns: (header_copy, raw_event_data)
 ///
 /// # Panics
 /// Panics if the magic prefix is invalid or the buffer is too small.
-pub fn unarchive_to_raw_data(bytes: &[u8]) -> (&XaeroOnDiskEventHeader, &[u8]) {
+pub fn unarchive_to_raw_data(bytes: &[u8]) -> (XaeroOnDiskEventHeader, &[u8]) {
     if bytes.len() < EVENT_HEADER_SIZE {
         panic!(
             "Buffer too small for header: need {} bytes but got {}",
@@ -150,7 +151,11 @@ pub fn unarchive_to_raw_data(bytes: &[u8]) -> (&XaeroOnDiskEventHeader, &[u8]) {
         );
     }
 
-    let header: &XaeroOnDiskEventHeader = bytemuck::from_bytes(&bytes[0..EVENT_HEADER_SIZE]);
+    // FIX: Copy header bytes to aligned buffer to avoid alignment issues
+    let mut header_bytes = [0u8; EVENT_HEADER_SIZE];
+    header_bytes.copy_from_slice(&bytes[0..EVENT_HEADER_SIZE]);
+
+    let header: XaeroOnDiskEventHeader = *bytemuck::from_bytes(&header_bytes);
 
     // Validate magic prefix
     if header.marker != XAERO_MAGIC {
@@ -186,54 +191,45 @@ pub fn unarchive_to_raw_data(bytes: &[u8]) -> (&XaeroOnDiskEventHeader, &[u8]) {
 
 /// Reconstruct an Arc<XaeroEvent> from archived bytes using XaeroPoolManager.
 ///
-/// This function:
-/// 1. Parses the header and extracts raw event data
-/// 2. Uses XaeroPoolManager to allocate a new Arc<XaeroEvent> in ring buffers
-/// 3. Preserves event type and timestamp from the archived header
+/// Validates the header, extracts the event data, and creates a new XaeroEvent
+/// in the ring buffer pools with the same data and metadata.
 ///
-/// Returns: Arc<XaeroEvent> allocated in ring buffers
-///
-/// # Errors
-/// Returns AllocationError if ring buffer pools are exhausted.
+/// Returns an error if pool allocation fails.
 pub fn unarchive_to_xaero_event(bytes: &[u8]) -> Result<Arc<XaeroEvent>, AllocationError> {
     let (header, event_data) = unarchive_to_raw_data(bytes);
 
-    // Recreate Arc<XaeroEvent> using ring buffer allocation
-    let res_xaero_event = XaeroPoolManager::create_xaero_event(
+    // Reconstruct XaeroEvent using XaeroPoolManager
+    // FIX: Pass timestamp as u64 since that's what latest_ts expects
+    XaeroPoolManager::create_xaero_event(
         event_data,
         header.event_type,
-        None, // No author_id in archived data
-        None, // No merkle_proof in archived data
-        None, // No vector_clock in archived data
+        None, // author_id not stored in archive
+        None, // merkle_proof not stored in archive
+        None, // vector_clock not stored in archive
         header.timestamp,
-    )
-    .map_err(|_| {
-        AllocationError::EventCreation("failed due to pool error")
-    });
-
-    tracing::debug!(
-        "Reconstructed XaeroEvent: type={}, data_len={}, timestamp={}",
-        header.event_type,
-        event_data.len(),
-        header.timestamp
-    );
-    match res_xaero_event {
-        Ok(xaero_event) => Ok(xaero_event),
-        Err(allocation_error) => {
-            panic!("failed to reconstruct XaeroEvent: {:?}", allocation_error);
-        }
-    }
+    ).map_err(|pool_error| {
+        tracing::error!("Pool allocation failed during unarchive: {:?}", pool_error);
+        AllocationError::EventCreation("pool allocation failed during unarchive")
+    })
 }
 
-/// Convenience function to get event metadata without full reconstruction.
-///
-/// Useful for filtering or processing archived events without allocating
-/// new ring buffer slots.
-///
-/// Returns: (event_type, timestamp, data_length)
-pub fn peek_event_metadata(bytes: &[u8]) -> (u8, u64, usize) {
-    let (header, event_data) = unarchive_to_raw_data(bytes);
-    (header.event_type, header.timestamp, event_data.len())
+/// Helper function to peek at event metadata without full reconstruction
+pub fn peek_event_metadata(bytes: &[u8]) -> Result<(u8, u64, usize), &'static str> {
+    if bytes.len() < EVENT_HEADER_SIZE {
+        return Err("Buffer too small for header");
+    }
+
+    // Copy header bytes to aligned buffer to avoid alignment issues
+    let mut header_bytes = [0u8; EVENT_HEADER_SIZE];
+    header_bytes.copy_from_slice(&bytes[0..EVENT_HEADER_SIZE]);
+
+    let header: XaeroOnDiskEventHeader = *bytemuck::from_bytes(&header_bytes);
+
+    if header.marker != XAERO_MAGIC {
+        return Err("Invalid magic number");
+    }
+
+    Ok((header.event_type, header.timestamp, header.len as usize))
 }
 
 /// On-disk representation of a Merkle proof node.
@@ -297,8 +293,12 @@ mod tests {
         let timestamp = emit_secs();
 
         // Create original event
-        let original_event = XaeroPoolManager::create_xaero_event(test_data, event_type, None, None, None, timestamp)
-            .expect("Failed to create test event");
+        let original_event = XaeroPoolManager::create_xaero_event(
+            test_data,
+            event_type,
+            None, None, None,
+            timestamp
+        ).expect("Failed to create test event");
 
         // Archive the event
         let archived_bytes = archive_xaero_event(&original_event);
@@ -320,8 +320,12 @@ mod tests {
         let event_type = EventType::SystemEvent(SystemEventKind::MmrAppended).to_u8();
         let timestamp = 12345678;
 
-        let event = XaeroPoolManager::create_xaero_event(test_data, event_type, None, None, None, timestamp)
-            .expect("Failed to create test event");
+        let event = XaeroPoolManager::create_xaero_event(
+            test_data,
+            event_type,
+            None, None, None,
+            timestamp
+        ).expect("Failed to create test event");
 
         let archived_bytes = archive_xaero_event(&event);
         let (header, raw_data) = unarchive_to_raw_data(&archived_bytes);
@@ -341,11 +345,16 @@ mod tests {
         let event_type = EventType::ApplicationEvent(123).to_u8();
         let timestamp = 987654321;
 
-        let event = XaeroPoolManager::create_xaero_event(test_data, event_type, None, None, None, timestamp)
-            .expect("Failed to create test event");
+        let event = XaeroPoolManager::create_xaero_event(
+            test_data,
+            event_type,
+            None, None, None,
+            timestamp
+        ).expect("Failed to create test event");
 
         let archived_bytes = archive_xaero_event(&event);
-        let (peeked_type, peeked_timestamp, peeked_len) = peek_event_metadata(&archived_bytes);
+        let (peeked_type, peeked_timestamp, peeked_len) = peek_event_metadata(&archived_bytes)
+            .expect("Failed to peek event metadata");
 
         assert_eq!(peeked_type, event_type);
         assert_eq!(peeked_timestamp, timestamp);
@@ -359,8 +368,12 @@ mod tests {
         let large_data = vec![0xAB; 4096]; // 4KB test data
         let event_type = EventType::ApplicationEvent(255).to_u8();
 
-        let event = XaeroPoolManager::create_xaero_event(&large_data, event_type, None, None, None, emit_secs())
-            .expect("Failed to create large event");
+        let event = XaeroPoolManager::create_xaero_event(
+            &large_data,
+            event_type,
+            None, None, None,
+            emit_secs()
+        ).expect("Failed to create large event");
 
         // Archive should use zero-copy access to ring buffer
         let archived_bytes = archive_xaero_event(&event);
@@ -392,8 +405,12 @@ mod tests {
         let empty_data = b"";
         let event_type = EventType::ApplicationEvent(0).to_u8();
 
-        let event = XaeroPoolManager::create_xaero_event(empty_data, event_type, None, None, None, emit_secs())
-            .expect("Failed to create empty event");
+        let event = XaeroPoolManager::create_xaero_event(
+            empty_data,
+            event_type,
+            None, None, None,
+            emit_secs()
+        ).expect("Failed to create empty event");
 
         let archived_bytes = archive_xaero_event(&event);
         let (header, raw_data) = unarchive_to_raw_data(&archived_bytes);
@@ -401,5 +418,26 @@ mod tests {
         assert_eq!(header.len, 0);
         assert_eq!(raw_data.len(), 0);
         assert_eq!(raw_data, empty_data);
+    }
+
+    #[test]
+    fn test_timestamp_handling() {
+        setup();
+
+        let timestamp = 12345u64;
+        let test_event = XaeroPoolManager::create_xaero_event(
+            b"timestamp test",
+            EventType::ApplicationEvent(1).to_u8(),
+            None, None, None,
+            timestamp,
+        ).expect("Failed to create event with timestamp");
+
+        let archived = archive_xaero_event(&test_event);
+        let (header, _) = unarchive_to_raw_data(&archived);
+        assert_eq!(header.timestamp, timestamp);
+
+        // Verify reconstruction
+        let reconstructed = unarchive_to_xaero_event(&archived).expect("Failed to reconstruct");
+        assert_eq!(reconstructed.latest_ts, timestamp);
     }
 }
