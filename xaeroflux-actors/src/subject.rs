@@ -9,6 +9,7 @@ use std::{
 };
 
 use bytemuck::{Pod, Zeroable};
+use rusted_ring::AllocationError;
 use sha2::digest::consts::U64;
 use xaeroflux_core::{
     date_time::emit_secs,
@@ -100,6 +101,7 @@ pub struct Subject {
     /// read only for mode set - can be `Signal` Buffer, Streaming, Blackhole or Kill.
     pub(crate) mode_set: Arc<AtomicSignal>,
 }
+
 pub trait SubjectBatchOps {
     /// Buffers events in a duration window or `event_count_threshold` provided.
     /// With a pipeline of operators passed in. These operators are usually:
@@ -114,40 +116,44 @@ pub trait SubjectBatchOps {
         route_with: Arc<F>,
     ) -> Arc<Self>
     where
-        F: Fn(&XaeroEvent) -> bool + Send + Sync + 'static;
+        F: Fn(&Arc<XaeroEvent>) -> bool + Send + Sync + 'static;
 
     /// Sorts buffered events
-    fn sort<F>(self: &Arc<Self>, sorter: F) -> Arc<Self>
+    fn sort<F>(self: &Arc<Self>, sorter: Arc<F>) -> Arc<Self>
     where
-        F: Fn(&XaeroEvent, &XaeroEvent) -> std::cmp::Ordering + Send + Sync + 'static;
+        F: Fn(&Arc<XaeroEvent>, &Arc<XaeroEvent>) -> std::cmp::Ordering + Send + Sync + 'static;
 
     /// folds a `Vector` buffer of `XaeroEvent` to a single `XaeroEvent` packed in as a buffer with
     /// event header in archived form.
-    fn fold_left<F>(self: &Arc<Self>, fold_left: F) -> Arc<Self>
+    fn fold_left<F>(self: &Arc<Self>, fold_left: Arc<F>) -> Arc<Self>
     where
-        F: Fn(XaeroEvent, Vec<XaeroEvent>) -> XaeroEvent + Send + Sync + 'static;
+        F: Fn(Arc<Option<XaeroEvent>>, Vec<Arc<XaeroEvent>>) -> Result<Arc<XaeroEvent>,
+            AllocationError>
+        + Send
+        + Sync
+        + 'static;
 
-    /// Reduces vector of xaero events to pretty much anything you'd like (hence Vec<u8> without
-    /// type complexity).
-    fn reduce<F>(self: &Arc<Self>, reducer: F) -> Arc<Self>
+    /// Reduces vector of xaero events to a single XaeroEvent (stays in event domain).
+    fn reduce<F>(self: &Arc<Self>, reducer: Arc<F>) -> Arc<Self>
     where
-        F: Fn(Vec<XaeroEvent>) -> Vec<u8> + Send + Sync + 'static;
+        F: Fn(Vec<Arc<XaeroEvent>>) -> Result<Arc<XaeroEvent>, AllocationError> + Send + Sync + 'static;
 }
+
 /// Chainable subject operators without executing them until subscription.
 pub trait SubjectStreamingOps {
-    fn scan<F>(self: &Arc<Self>, scan_window: ScanWindow) -> Arc<Self>
+    fn scan<F>(self: &Arc<Self>, scan_window: Arc<ScanWindow>) -> Arc<Self>
     where
-        F: Fn(XaeroEvent) -> XaeroEvent + Send + Sync + 'static;
+        F: Fn(Arc<XaeroEvent>) -> Arc<XaeroEvent> + Send + Sync + 'static;
 
     /// Transform each event.
-    fn map<F>(self: &Arc<Self>, f: F) -> Arc<Self>
+    fn map<F>(self: &Arc<Self>, f: Arc<F>) -> Arc<Self>
     where
-        F: Fn(XaeroEvent) -> XaeroEvent + Send + Sync + 'static;
+        F: Fn(Arc<XaeroEvent>) -> Arc<XaeroEvent> + Send + Sync + 'static;
 
     /// Keep only events matching the predicate.
-    fn filter<P>(self: &Arc<Self>, p: P) -> Arc<Self>
+    fn filter<P>(self: &Arc<Self>, p: Arc<P>) -> Arc<Self>
     where
-        P: Fn(&XaeroEvent) -> bool + Send + Sync + 'static;
+        P: Fn(&Arc<XaeroEvent>) -> bool + Send + Sync + 'static;
 
     /// Drop events lacking a Merkle proof.
     fn filter_merkle_proofs(self: &Arc<Self>) -> Arc<Self>;
@@ -157,30 +163,30 @@ pub trait SubjectStreamingOps {
 }
 
 impl SubjectStreamingOps for Subject {
-    fn scan<F>(self: &Arc<Self>, scan_window: ScanWindow) -> Arc<Self>
+    fn scan<F>(self: &Arc<Self>, scan_window: Arc<ScanWindow>) -> Arc<Self>
     where
-        F: Fn(XaeroEvent) -> XaeroEvent + Send + Sync + 'static,
+        F: Fn(Arc<XaeroEvent>) -> Arc<XaeroEvent> + Send + Sync + 'static,
     {
         let mut new = (**self).clone();
-        new.ops.push(Operator::Scan(Arc::new(scan_window)));
+        new.ops.push(Operator::Scan(scan_window));
         Arc::new(new)
     }
 
-    fn map<F>(self: &Arc<Self>, f: F) -> Arc<Self>
+    fn map<F>(self: &Arc<Self>, f: Arc<F>) -> Arc<Self>
     where
-        F: Fn(XaeroEvent) -> XaeroEvent + Send + Sync + 'static,
+        F: Fn(Arc<XaeroEvent>) -> Arc<XaeroEvent> + Send + Sync + 'static,
     {
         let mut new = (**self).clone();
-        new.ops.push(Operator::Map(Arc::new(f)));
+        new.ops.push(Operator::Map(f));
         Arc::new(new)
     }
 
-    fn filter<P>(self: &Arc<Self>, p: P) -> Arc<Self>
+    fn filter<P>(self: &Arc<Self>, p: Arc<P>) -> Arc<Self>
     where
-        P: Fn(&XaeroEvent) -> bool + Send + Sync + 'static,
+        P: Fn(&Arc<XaeroEvent>) -> bool + Send + Sync + 'static,
     {
         let mut new = (**self).clone();
-        new.ops.push(Operator::Filter(Arc::new(p)));
+        new.ops.push(Operator::Filter(p));
         Arc::new(new)
     }
 
@@ -206,7 +212,7 @@ impl SubjectBatchOps for Subject {
         route_with: Arc<F>,
     ) -> Arc<Self>
     where
-        F: Fn(&XaeroEvent) -> bool + Send + Sync + 'static,
+        F: Fn(&Arc<XaeroEvent>) -> bool + Send + Sync + 'static,
     {
         let mut new = (**self).clone();
         new.batch_context = Some(SubjectBatchContext {
@@ -226,33 +232,37 @@ impl SubjectBatchOps for Subject {
         Arc::new(new)
     }
 
-    fn sort<F>(self: &Arc<Self>, sorter: F) -> Arc<Self>
+    fn sort<F>(self: &Arc<Self>, sorter: Arc<F>) -> Arc<Self>
     where
-        F: Fn(&XaeroEvent, &XaeroEvent) -> std::cmp::Ordering + Send + Sync + 'static,
+        F: Fn(&Arc<XaeroEvent>, &Arc<XaeroEvent>) -> std::cmp::Ordering + Send + Sync + 'static,
     {
         let mut new = (**self).clone();
         /// still lazy ~~ woohoo! ~~~
-        new.ops.push(Operator::Sort(Arc::new(sorter)));
+        new.ops.push(Operator::Sort(sorter));
         Arc::new(new)
     }
 
-    fn fold_left<F>(self: &Arc<Self>, fold_left: F) -> Arc<Self>
+    fn fold_left<F>(self: &Arc<Self>, fold_left: Arc<F>) -> Arc<Self>
     where
-        F: Fn(XaeroEvent, Vec<XaeroEvent>) -> XaeroEvent + Send + Sync + 'static,
+        F: Fn(Arc<Option<XaeroEvent>>, Vec<Arc<XaeroEvent>>) -> Result<Arc<XaeroEvent>, 
+            AllocationError>
+        + Send
+        + Sync
+        + 'static,
     {
         let mut new = (**self).clone();
         /// still lazy ~~ woohoo! ~~~
-        new.ops.push(Operator::Fold(Arc::new(fold_left)));
+        new.ops.push(Operator::Fold(fold_left));
         Arc::new(new)
     }
 
-    fn reduce<F>(self: &Arc<Self>, reducer: F) -> Arc<Self>
+    fn reduce<F>(self: &Arc<Self>, reducer: Arc<F>) -> Arc<Self>
     where
-        F: Fn(Vec<XaeroEvent>) -> Vec<u8> + Send + Sync + 'static,
+        F: Fn(Vec<Arc<XaeroEvent>>) -> Result<Arc<XaeroEvent>, AllocationError> + Send + Sync + 'static,
     {
         let mut new = (**self).clone();
         /// still lazy ~~ woohoo! ~~~
-        new.ops.push(Operator::Reduce(Arc::new(reducer)));
+        new.ops.push(Operator::Reduce(reducer));
         Arc::new(new)
     }
 }
@@ -265,14 +275,14 @@ pub trait SubscribeWith {
     fn subscribe_with<M, F>(self: &Arc<Self>, mat: M, handler: F) -> Subscription
     where
         M: Materializer,
-        F: Fn(XaeroEvent) -> XaeroEvent + Send + Sync + 'static;
+        F: Fn(Arc<XaeroEvent>) -> Arc<XaeroEvent> + Send + Sync + 'static;
 }
 
 impl SubscribeWith for Subject {
     fn subscribe_with<M, F>(self: &Arc<Self>, mat: M, handler: F) -> Subscription
     where
         M: Materializer,
-        F: Fn(XaeroEvent) -> XaeroEvent + Send + Sync + 'static,
+        F: Fn(Arc<XaeroEvent>) -> Arc<XaeroEvent> + Send + Sync + 'static,
     {
         mat.materialize(self.clone(), Arc::new(handler))
     }
@@ -313,7 +323,7 @@ impl Subject {
     /// Spawns a listener thread and processes incoming events through `ops`.
     pub fn subscribe<F>(self: &Arc<Self>, handler: F) -> Subscription
     where
-        F: Fn(XaeroEvent) -> XaeroEvent + Send + Sync + 'static,
+        F: Fn(Arc<XaeroEvent>) -> Arc<XaeroEvent> + Send + Sync + 'static,
     {
         self.subscribe_with(ThreadPoolForSubjectMaterializer::new(), handler)
     }

@@ -13,14 +13,14 @@ pub mod hash;
 pub mod keys;
 pub mod logs;
 pub mod merkle_tree;
-mod network;
+pub  mod network;
 pub mod pipe;
 pub mod size;
 pub mod sys;
 pub mod system_paths;
 pub mod vector_clock;
-mod workspace;
-mod pool;
+pub mod workspace;
+pub mod pool;
 
 use std::{
     any::Any,
@@ -50,7 +50,7 @@ use threadpool::ThreadPool;
 use tracing::info;
 
 use crate as xaeroflux_core;
-use crate::{config::Config, logs::init_logging, pool::XaeroPoolManager};
+pub use crate::{config::Config, logs::init_logging, pool::XaeroPoolManager};
 
 pub static EVENT_ALLOCATOR: OnceLock<EventAllocator> = OnceLock::new();
 

@@ -15,11 +15,9 @@ use std::{
 
 use bytemuck::{Pod, Zeroable};
 use rkyv::{Archive, Deserialize, Serialize};
+use rusted_ring::AllocationError;
 
-pub use crate::{
-    pool::XaeroEvent,
-    vector_clock::VectorClock,
-};
+pub use crate::{pool::XaeroEvent, vector_clock::VectorClock};
 
 /// Magic bytes prefix for event headers in paged segments.
 /// Used to identify and slice raw event bytes from storage pages.
@@ -254,7 +252,7 @@ pub enum Operator {
     // Stream Operators
     Scan(Arc<ScanWindow>),
     /// Transform the event into another event.
-    Map(Arc<dyn Fn(Arc<XaeroEvent>) -> XaeroEvent + Send + Sync>),
+    Map(Arc<dyn Fn(Arc<XaeroEvent>) -> Arc<XaeroEvent> + Send + Sync>),
     /// Keep only events matching the predicate.
     Filter(Arc<dyn Fn(&Arc<XaeroEvent>) -> bool + Send + Sync>),
     /// Drop events without a Merkle proof.
@@ -271,9 +269,22 @@ pub enum Operator {
     /// Causal, temporal ordering for events for example or anything in between.
     Sort(Arc<dyn Fn(&Arc<XaeroEvent>, &Arc<XaeroEvent>) -> Ordering + Send + Sync>),
     /// Folds vector of xaero events to a single xaero event.
-    Fold(Arc<dyn Fn(Arc<XaeroEvent>, Vec<XaeroEvent>) -> Arc<XaeroEvent> + Send + Sync>),
-    /// Reduces a vector of xaero events to any form you like (Vec<u8> is pretty much for laxity)
-    Reduce(Arc<dyn Fn(Arc<Vec<XaeroEvent>>) -> Vec<u8> + Send + Sync>),
+    // Fold: Streaming by default, combines events into single event
+    Fold(
+        Arc<
+            dyn Fn(
+                    Arc<Option<XaeroEvent>>,
+                    Vec<Arc<XaeroEvent>>,
+                ) -> Result<Arc<XaeroEvent>, AllocationError>
+                + Send
+                + Sync,
+        >,
+    ),
+
+    // Reduce: Also returns XaeroEvent (stays in event domain), not raw Vec<u8>
+    Reduce(
+        Arc<dyn Fn(Vec<Arc<XaeroEvent>>) -> Result<Arc<XaeroEvent>, AllocationError> + Send + Sync>,
+    ),
 
     // Systemic operators
     /// Initializes and calls `unsafe_run` that subscribes all system actors to current pipeline
