@@ -9,15 +9,17 @@
 use std::{
     cmp::Ordering,
     fmt::{Debug, Formatter},
-    sync::{Arc, LazyLock},
+    sync::Arc,
     time::Duration,
 };
 
 use bytemuck::{Pod, Zeroable};
-use crossbeam::queue::SegQueue;
 use rkyv::{Archive, Deserialize, Serialize};
 
-use crate::{CONF, XaeroData};
+pub use crate::{
+    pool::XaeroEvent,
+    vector_clock::VectorClock,
+};
 
 /// Magic bytes prefix for event headers in paged segments.
 /// Used to identify and slice raw event bytes from storage pages.
@@ -189,7 +191,6 @@ impl EventType {
     pub fn to_u8(&self) -> u8 {
         match self {
             EventType::ApplicationEvent(v) => *v,
-
             // System events - UNCHANGED
             EventType::SystemEvent(SystemEventKind::Start) => 1,
             EventType::SystemEvent(SystemEventKind::Stop) => 2,
@@ -219,54 +220,6 @@ impl EventType {
     }
 }
 
-// Rest of your code stays exactly the same...
-#[repr(C)]
-/// Generic event wrapper containing payload and metadata.
-///
-/// Fields:
-/// - `event_type`: type/category of the event.
-/// - `version`: configuration version when event was created.
-/// - `data`: event payload implementing `XaeroData`.
-/// - `ts`: UNIX epoch timestamp in milliseconds.
-#[derive(Debug, Clone, Archive, Serialize, Deserialize, Default)]
-#[rkyv(
-    derive(Debug),
-    archive_bounds(T::Archived: Debug),
-)]
-pub struct Event<T>
-where
-    T: XaeroData,
-{
-    pub event_type: EventType,
-    pub version: u64,
-    pub data: T,
-    pub ts: u64,
-}
-
-impl<T> Event<T>
-where
-    T: XaeroData,
-{
-    /// Construct a new application event.
-    ///
-    /// Assigns current configuration version and timestamp automatically.
-    ///
-    /// # Arguments
-    /// - `data`: payload data for the event.
-    /// - `e_type`: numeric event type code, converted via `EventType::from_u8`.
-    pub fn new(data: T, e_type: u8) -> Self {
-        Event {
-            data,
-            event_type: EventType::from_u8(e_type),
-            version: CONF.get().expect("not initialized").version,
-            ts: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("Time went backwards")
-                .as_millis() as u64,
-        }
-    }
-}
-
 #[repr(u16)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SystemErrorCode {
@@ -276,25 +229,6 @@ pub enum SystemErrorCode {
     MmrAppend = 4,
     SecondaryIndex = 5,
     Unknown = 0xFFFF,
-}
-
-/// Envelope wrapping an application or system `Event` payload
-/// along with an optional Merkle inclusion proof.
-#[derive(Debug, Clone, Default)]
-pub struct XaeroEvent {
-    /// Core event data (e.g., domain event encoded as bytes).
-    pub evt: Event<Vec<u8>>,
-    /// Optional Merkle proof bytes (e.g., from MMR).
-    pub merkle_proof: Option<Vec<u8>>,
-
-    pub author_id: Option<xaeroid::XaeroID>,
-    pub latest_ts: Option<u64>,
-}
-
-impl XaeroEvent {
-    pub fn reset(&mut self) {
-        *self = XaeroEvent::default();
-    }
 }
 
 #[repr(C)]
@@ -320,9 +254,9 @@ pub enum Operator {
     // Stream Operators
     Scan(Arc<ScanWindow>),
     /// Transform the event into another event.
-    Map(Arc<dyn Fn(XaeroEvent) -> XaeroEvent + Send + Sync>),
+    Map(Arc<dyn Fn(Arc<XaeroEvent>) -> XaeroEvent + Send + Sync>),
     /// Keep only events matching the predicate.
-    Filter(Arc<dyn Fn(&XaeroEvent) -> bool + Send + Sync>),
+    Filter(Arc<dyn Fn(&Arc<XaeroEvent>) -> bool + Send + Sync>),
     /// Drop events without a Merkle proof.
     FilterMerkleProofs,
 
@@ -332,14 +266,14 @@ pub enum Operator {
         Duration,
         Option<usize>,
         Vec<Operator>,
-        Arc<dyn Fn(&XaeroEvent) -> bool + Send + Sync + 'static>,
+        Arc<dyn Fn(&Arc<XaeroEvent>) -> bool + Send + Sync + 'static>,
     ),
     /// Causal, temporal ordering for events for example or anything in between.
-    Sort(Arc<dyn Fn(&XaeroEvent, &XaeroEvent) -> Ordering + Send + Sync>),
+    Sort(Arc<dyn Fn(&Arc<XaeroEvent>, &Arc<XaeroEvent>) -> Ordering + Send + Sync>),
     /// Folds vector of xaero events to a single xaero event.
-    Fold(Arc<dyn Fn(XaeroEvent, Vec<XaeroEvent>) -> XaeroEvent + Send + Sync>),
+    Fold(Arc<dyn Fn(Arc<XaeroEvent>, Vec<XaeroEvent>) -> Arc<XaeroEvent> + Send + Sync>),
     /// Reduces a vector of xaero events to any form you like (Vec<u8> is pretty much for laxity)
-    Reduce(Arc<dyn Fn(Vec<XaeroEvent>) -> Vec<u8> + Send + Sync>),
+    Reduce(Arc<dyn Fn(Arc<Vec<XaeroEvent>>) -> Vec<u8> + Send + Sync>),
 
     // Systemic operators
     /// Initializes and calls `unsafe_run` that subscribes all system actors to current pipeline
@@ -377,71 +311,5 @@ impl Debug for Operator {
                 write!(f, "TransitionTo({current:?}, {to:?})")
             }
         }
-    }
-}
-
-// Global event pool
-pub static DATA_EVENT_POOL: LazyLock<SegQueue<XaeroEvent>> = LazyLock::new(|| {
-    let pool = SegQueue::new();
-    // Pre-populate if needed
-    for _ in 0..1024 {
-        pool.push(XaeroEvent::default());
-    }
-    pool
-});
-
-pub static CONTROL_EVENT_POOL: LazyLock<SegQueue<XaeroEvent>> = LazyLock::new(|| {
-    let pool = SegQueue::new();
-    // Pre-populate if needed
-    for _ in 0..2048 {
-        pool.push(XaeroEvent::default());
-    }
-    pool
-});
-
-pub enum EventKind {
-    Control,
-    Data,
-}
-
-#[warn(clippy::unwrap_or_default)]
-// Replace your EventPool usage with:
-pub fn acquire_event(kind: EventKind) -> XaeroEvent {
-    match kind {
-        EventKind::Control => CONTROL_EVENT_POOL.pop().unwrap_or_default(),
-        EventKind::Data => DATA_EVENT_POOL.pop().unwrap_or_default(),
-    }
-}
-
-pub fn release_event(mut event: XaeroEvent, kind: EventKind) {
-    event.reset();
-    match kind {
-        EventKind::Control => {
-            CONTROL_EVENT_POOL.push(event);
-        }
-        EventKind::Data => {
-            DATA_EVENT_POOL.push(event);
-        }
-    }
-}
-
-/// Unit tests for event serialization and archiving via `rkyv`.
-#[cfg(test)]
-mod tests {
-    use rkyv::{Archived, rancor::Failure};
-
-    use crate::{event::Event, initialize};
-
-    #[test]
-    pub fn test_basic_serde() {
-        initialize();
-        let event = crate::event::Event::<String>::new("test".to_string(), 1);
-        let bytes: rkyv::util::AlignedVec =
-            rkyv::to_bytes::<Failure>(&Event::new("hello world".to_string(), 1))
-                .expect("failed to serialize");
-        let arch_event = rkyv::access::<Archived<Event<String>>, Failure>(&bytes)
-            .expect("failed to access archived event");
-        tracing::info!("non archived event: {:#?}", event);
-        tracing::info!("archived event: {:#?}", arch_event);
     }
 }

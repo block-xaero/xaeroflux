@@ -1,8 +1,8 @@
 use std::{
     hint::spin_loop,
     sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, Ordering}, Arc,
+        Mutex,
     },
     thread,
     time::{Duration, Instant},
@@ -14,15 +14,15 @@ use crossbeam::{
 };
 use threadpool::ThreadPool;
 use xaeroflux_core::{
+    event::{release_event, Event, EventKind, EventType, Operator, SubjectExecutionMode, XaeroEvent},
+    pipe::{BusKind, Signal, SignalPipe},
     DISPATCHER_POOL,
-    event::{Event, EventKind, EventType, Operator, SubjectExecutionMode, XaeroEvent, release_event},
 };
 
 use crate::{
     indexing::storage::format::archive,
-    pipe::{BusKind, SignalPipe},
     pipeline_parser::PipelineParser,
-    subject::{AtomicSignal, Signal, Subject, SubjectBatchContext, Subscription},
+    subject::{Subject, SubjectBatchContext, Subscription},
 };
 
 /// Strategy for wiring `Subject` + pipeline into threads and invoking handlers.
@@ -94,9 +94,7 @@ impl Materializer for ThreadPoolForSubjectMaterializer {
                             data.to_vec(),
                             EventType::SystemEvent(SystemEventKind::ReplayControl).to_u8(),
                         ),
-                        merkle_proof: None,
-                        author_id: None,
-                        latest_ts: None,
+                        ..Default::default()
                     })
                     .expect("failed_to_unwrap");
 
@@ -109,9 +107,7 @@ impl Materializer for ThreadPoolForSubjectMaterializer {
                             data.to_vec(),
                             EventType::SystemEvent(SystemEventKind::ReplayData).to_u8(),
                         ),
-                        merkle_proof: None,
-                        author_id: None,
-                        latest_ts: None,
+                        ..Default::default()
                     })
                     .expect("failed_to_unwrap");
             }
@@ -949,9 +945,7 @@ fn apply_batch_ops(
                         let res = f(buff.clone());
                         let res = XaeroEvent {
                             evt: Event::new(res, EventType::ApplicationEvent(1).to_u8()),
-                            merkle_proof: None,
-                            author_id: None,
-                            latest_ts: None,
+                            ..Default::default()
                         };
                         f_result = Some(res);
                     }
@@ -999,7 +993,7 @@ mod materializer_tests {
     use super::*;
     use crate::{
         materializer::{Materializer, ThreadPoolForSubjectMaterializer},
-        subject::{Signal, SubjectBatchOps, SubjectStreamingOps},
+        subject::{SubjectBatchOps, SubjectStreamingOps},
     };
 
     // Realistic event types for collaborative document editing
@@ -1050,14 +1044,13 @@ mod materializer_tests {
 
         XaeroEvent {
             evt: Event::new(data, EventType::ApplicationEvent(DOC_TEXT_INSERT).to_u8()),
-            merkle_proof: None,
-            author_id: None,
             latest_ts: Some(
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .expect("failed_to_unravel")
                     .as_millis() as u64,
             ),
+            ..Default::default()
         }
     }
 
@@ -1083,14 +1076,13 @@ mod materializer_tests {
 
         XaeroEvent {
             evt: Event::new(data, EventType::ApplicationEvent(DOC_CURSOR_MOVE).to_u8()),
-            merkle_proof: None,
-            author_id: None,
             latest_ts: Some(
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .expect("failed_to_unravel")
                     .as_millis() as u64,
             ),
+            ..Default::default()
         }
     }
 
@@ -1117,14 +1109,13 @@ mod materializer_tests {
 
         XaeroEvent {
             evt: Event::new(data, EventType::ApplicationEvent(ANALYTICS_PAGE_VIEW).to_u8()),
-            merkle_proof: None,
-            author_id: None,
             latest_ts: Some(
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .expect("failed_to_unravel")
                     .as_millis() as u64,
             ),
+            ..Default::default()
         }
     }
 
@@ -1137,14 +1128,13 @@ mod materializer_tests {
 
         XaeroEvent {
             evt: Event::new(data, EventType::ApplicationEvent(ANALYTICS_CLICK).to_u8()),
-            merkle_proof: None,
-            author_id: None,
             latest_ts: Some(
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .expect("failed_to_unravel")
                     .as_millis() as u64,
             ),
+            ..Default::default()
         }
     }
 
@@ -1171,14 +1161,13 @@ mod materializer_tests {
 
         XaeroEvent {
             evt: Event::new(data, EventType::ApplicationEvent(SENSOR_TEMPERATURE).to_u8()),
-            merkle_proof: None,
-            author_id: None,
             latest_ts: Some(
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .expect("failed_to_unravel")
                     .as_millis() as u64,
             ),
+            ..Default::default()
         }
     }
 
@@ -1246,14 +1235,13 @@ mod materializer_tests {
                             operation_count.to_le_bytes().to_vec(),
                             EventType::ApplicationEvent(DOC_COMMIT_STATE).to_u8(),
                         ),
-                        merkle_proof: None,
-                        author_id: None,
                         latest_ts: Some(
                             std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .expect("failed_to_unravel")
                                 .as_millis() as u64,
                         ),
+                        ..Default::default()
                     }
                 })),
             ],
@@ -1454,14 +1442,13 @@ mod materializer_tests {
 
                     XaeroEvent {
                         evt: Event::new(data, EventType::ApplicationEvent(SENSOR_BATCH_READING).to_u8()),
-                        merkle_proof: None,
-                        author_id: None,
                         latest_ts: Some(
                             std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .expect("failed_to_unravel")
                                 .as_millis() as u64,
                         ),
+                        ..Default::default()
                     }
                 })),
             ],
@@ -1534,9 +1521,7 @@ mod materializer_tests {
                     events.len().to_le_bytes().to_vec(),
                     EventType::ApplicationEvent(DOC_COMMIT_STATE).to_u8(),
                 ),
-                merkle_proof: None,
-                author_id: None,
-                latest_ts: None,
+                ..Default::default()
             }))],
             Arc::new(|event: &XaeroEvent| {
                 // Batch important document operations, stream cursor moves
@@ -1616,9 +1601,7 @@ mod materializer_tests {
                     events.len().to_le_bytes().to_vec(),
                     EventType::ApplicationEvent(DOC_COMMIT_STATE).to_u8(),
                 ),
-                merkle_proof: None,
-                author_id: None,
-                latest_ts: None,
+                ..Default::default()
             }))],
             Arc::new(is_document_operation),
         );

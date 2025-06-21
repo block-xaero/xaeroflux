@@ -1,6 +1,6 @@
 use bytemuck::{Pod, Zeroable};
 
-use crate::{aof::storage::format::SegmentMeta, networking::p2p::ADDRESS_MAX};
+use crate::{aof::storage::format::SegmentMeta,};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -20,14 +20,6 @@ pub enum SystemPayload {
         meta: SegmentMeta,
     },
 
-    PeerDiscovered {
-        peer_id: [u8; 32],
-        address: [u8; ADDRESS_MAX],
-    },
-    PeerLost {
-        peer_id: [u8; 32],
-        address: [u8; ADDRESS_MAX],
-    },
     SegmentRolledOver {
         meta: SegmentMeta,
     },

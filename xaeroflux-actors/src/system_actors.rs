@@ -26,7 +26,7 @@ pub struct SystemActors {
 
 impl SystemActors {
     /// Send event to all control bus actors
-    pub fn send_to_control(&self, event: &XaeroEvent) {
+    pub fn send_to_control(&self, event: &Arc<XaeroEvent>) {
         self.control_aof
             .pipe
             .sink
@@ -48,7 +48,7 @@ impl SystemActors {
     }
 
     /// Send event to all data bus actors  
-    pub fn send_to_data(&self, event: &XaeroEvent) {
+    pub fn send_to_data(&self, event: &Arc<XaeroEvent>) {
         self.data_aof
             .pipe
             .sink

@@ -143,7 +143,6 @@ pub fn subject(input: TokenStream) -> TokenStream {
             use xaeroflux_core::event::{ScanWindow, XaeroEvent};
             use crate::subject::Subject;
             use xaeroflux_core::event::{Event, EventType, SystemEventKind};
-            use crate::{BusKind, Pipe};
             // 1) Construct the Subject itself, calling new_with_workspace(...)
             let subject = Subject::new_with_workspace(
                 #subject_name_tokens.to_string(),         // name: String
@@ -151,8 +150,6 @@ pub fn subject(input: TokenStream) -> TokenStream {
             #ws_id_lit.to_string(),                    // workspace_id: String
             #obj_id_lit.to_string(),                   // object_id: String
             );
-            let control_pipe = Pipe::new(BusKind::Control,Some(100));
-            let data_pipe = Pipe::new(BusKind::Data,Some(100));
             // 2) Emit a “WorkspaceCreated” system event
             let wc_evt = XaeroEvent {
                 evt: xaeroflux_core::event::Event::new(
@@ -161,9 +158,7 @@ pub fn subject(input: TokenStream) -> TokenStream {
                         SystemEventKind::WorkspaceCreated
                     ).to_u8()
                 ),
-                merkle_proof: None,
-                author_id: None,
-                latest_ts: None,
+               ..Default::default()
             };
             subject.control.sink.tx.send(wc_evt)
                 .expect("failed to bootstrap: WorkspaceCreated");
@@ -176,9 +171,7 @@ pub fn subject(input: TokenStream) -> TokenStream {
                         SystemEventKind::ObjectCreated
                     ).to_u8()
                 ),
-                merkle_proof: None,
-                author_id: None,
-                latest_ts: None,
+                ..Default::default()
             };
             subject.control.sink.tx.send(oc_evt)
                 .expect("failed to bootstrap: ObjectCreated");

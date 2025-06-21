@@ -14,6 +14,8 @@ use xaeroflux_core::{
     date_time::emit_secs,
     event::{Operator, ScanWindow, XaeroEvent},
     hash::sha_256_hash,
+    next_id,
+    pipe::{AtomicSignal, BusKind, Pipe, Signal, SignalPipe},
 };
 
 use crate::{
@@ -26,8 +28,6 @@ use crate::{
         segment_writer_actor::{SegmentConfig, SegmentWriterActor},
     },
     materializer::{Materializer, ThreadPoolForSubjectMaterializer},
-    next_id,
-    pipe::{BusKind, Pipe, SignalPipe},
     system_actors::SystemActors,
 };
 
@@ -58,58 +58,6 @@ pub struct SubjectBatchContext {
     pub control_pipe: Arc<Pipe>,
     pub data_pipe: Arc<Pipe>,
     pub pipeline: Vec<Operator>,
-}
-
-/// Subject control signals
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Signal {
-    Blackhole = 0,
-    Kill = 1,
-    ControlBlackhole = 2,
-    ControlKill = 3,
-}
-
-impl Signal {
-    fn from_u8(value: u8) -> Option<Self> {
-        match value {
-            0 => Some(Signal::Blackhole),
-            1 => Some(Signal::Kill),
-            2 => Some(Signal::ControlBlackhole),
-            3 => Some(Signal::ControlKill),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct AtomicSignal(AtomicU8);
-
-impl AtomicSignal {
-    pub fn new(signal: Signal) -> Self {
-        Self(AtomicU8::new(signal as u8))
-    }
-
-    pub fn store(&self, signal: Signal, ordering: Ordering) {
-        self.0.store(signal as u8, ordering);
-    }
-
-    pub fn load(&self, ordering: Ordering) -> Signal {
-        Signal::from_u8(self.0.load(ordering)).expect("corrupted atomic signal")
-    }
-
-    pub fn compare_exchange(
-        &self,
-        current: Signal,
-        new: Signal,
-        success: Ordering,
-        failure: Ordering,
-    ) -> Result<Signal, Signal> {
-        match self.0.compare_exchange(current as u8, new as u8, success, failure) {
-            Ok(prev) => Ok(Signal::from_u8(prev).expect("corrupted signal")),
-            Err(prev) => Err(Signal::from_u8(prev).expect("corrupted signal")),
-        }
-    }
 }
 
 /// A multicast namespaced Event channel that houses:
@@ -346,7 +294,9 @@ impl Subject {
             object_id: sha_256_hash(object_id.as_bytes().to_vec()),
             batch_mode: Arc::new(AtomicBool::new(false)), // by default its false.
             batch_context: None,
-            mode_set: Arc::new(AtomicSignal(10.into())),
+            mode_set: Arc::new(AtomicSignal::new(
+                Signal::from_u8(10).expect("cannot set an uninit mode from atomic signal - must panic!"),
+            )),
         })
     }
 

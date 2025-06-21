@@ -28,11 +28,11 @@ use xaeroflux_core::{
 };
 
 use crate::{
-    BusKind, Pipe,
     aof::storage::{lmdb::LmdbEnv, meta::iterate_segment_meta_by_range},
     indexing::storage::{actors::segment_writer_actor::SegmentConfig, io},
     subject::SubjectHash,
 };
+use xaeroflux_core::pipe::{Pipe,BusKind};
 
 pub static NAME_PREFIX: &str = "segment_reader";
 
@@ -54,9 +54,7 @@ impl Drop for SegmentReaderActor {
     fn drop(&mut self) {
         let res = self.pipe.sink.tx.send(XaeroEvent {
             evt: Event::new(vec![], SystemEvent(Shutdown).to_u8()),
-            merkle_proof: None,
-            author_id: None,
-            latest_ts: None,
+            ..Default::default()
         });
         match res {
             Ok(_) => {
@@ -239,9 +237,7 @@ impl SegmentReaderActor {
                             Ok(deserialized_event) => {
                                 let xaero_event = XaeroEvent {
                                     evt: deserialized_event,
-                                    merkle_proof: None,
-                                    author_id: None,
-                                    latest_ts: None,
+                                    ..Default::default()
                                 };
 
                                 if let Err(e) = pipe.source.tx.send(xaero_event) {
@@ -339,9 +335,7 @@ mod tests {
             .tx
             .send(XaeroEvent {
                 evt: replay_evt,
-                merkle_proof: None,
-                author_id: None,
-                latest_ts: None,
+                ..Default::default()
             })
             .expect("failed_to_unravel");
 
@@ -399,9 +393,7 @@ mod tests {
             .tx
             .send(XaeroEvent {
                 evt: replay_evt,
-                merkle_proof: None,
-                author_id: None,
-                latest_ts: None,
+                ..Default::default()
             })
             .expect("failed_to_unravel");
 
@@ -459,9 +451,7 @@ mod tests {
             .tx
             .send(XaeroEvent {
                 evt: replay_evt,
-                merkle_proof: None,
-                author_id: None,
-                latest_ts: None,
+                ..Default::default()
             })
             .expect("failed_to_unravel");
 
@@ -516,9 +506,7 @@ mod tests {
             .tx
             .send(XaeroEvent {
                 evt: replay_evt,
-                merkle_proof: None,
-                author_id: None,
-                latest_ts: None,
+                ..Default::default()
             })
             .expect("failed_to_unravel");
 

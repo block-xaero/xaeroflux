@@ -58,6 +58,12 @@ pub fn sha_256_hash_b(n: &Vec<u8>) -> [u8; 32] {
     let hash = sha256.finalize();
     hash.as_slice().try_into().unwrap_or_default()
 }
+
+pub fn blake_hash(n: &str) -> [u8; 32] {
+    let mut h = blake3::Hasher::new();
+    h.update(n.as_bytes());
+    h.finalize().try_into().expect("failed to blake hash!")
+}
 #[cfg(test)]
 mod tests {
 

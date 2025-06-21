@@ -24,12 +24,12 @@ use xaeroflux_core::{
     },
     hash::sha_256_hash_b,
     listeners::EventListener,
+    pipe::{BusKind, Pipe},
     size::PAGE_SIZE,
     system_paths::{emit_control_path_with_subject_hash, emit_data_path_with_subject_hash},
 };
 
 use crate::{
-    BusKind, Pipe,
     aof::storage::{
         format::SegmentMeta,
         lmdb::{LmdbEnv, push_event},
@@ -238,9 +238,7 @@ impl Drop for SegmentWriterActor {
     fn drop(&mut self) {
         let res = self.pipe.sink.tx.send(XaeroEvent {
             evt: Event::new(vec![], SystemEvent(Shutdown).to_u8()),
-            merkle_proof: None,
-            author_id: None,
-            latest_ts: None,
+            ..Default::default()
         });
         match res {
             Ok(_) => {
@@ -413,11 +411,9 @@ impl SegmentWriterActor {
         if let Err(e) = pipe.source.tx.send(XaeroEvent {
             evt: Event::new(
                 bytes_of_payload_written,
-                EventType::SystemEvent(SystemEventKind::PayloadWritten).to_u8(),
+                SystemEvent(SystemEventKind::PayloadWritten).to_u8(),
             ),
-            merkle_proof: None,
-            author_id: None,
-            latest_ts: None,
+            ..Default::default()
         }) {
             tracing::error!("Failed to send PayloadWritten message: {}", e);
         } else {
@@ -452,14 +448,11 @@ mod tests {
     use super::*;
     use crate::indexing::storage::format::archive;
 
-    // Helper to wrap an Event<Vec<u8>> into a XaeroEvent and send it via pipe.
     fn send_app_event(pipe: &Arc<Pipe>, data: Vec<u8>) {
         let e = Event::new(data, EventType::ApplicationEvent(1).to_u8());
         let xaero_evt = XaeroEvent {
             evt: e,
-            merkle_proof: None,
-            author_id: None,
-            latest_ts: None,
+            ..Default::default()
         };
         pipe.sink.tx.send(xaero_evt).expect("failed to send event");
     }

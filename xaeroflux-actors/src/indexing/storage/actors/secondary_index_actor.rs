@@ -12,10 +12,12 @@ struct CacheEntry {
     mmr_appended: bool,
     timestamp: Instant,
 }
-use xaeroflux_core::event::XaeroEvent;
+use xaeroflux_core::{
+    event::XaeroEvent,
+    pipe::{BusKind, Pipe},
+};
 
 use crate::{
-    Pipe,
     aof::storage::{
         format::SegmentMeta,
         lmdb::{LmdbEnv, put_secondary_index},
@@ -58,9 +60,7 @@ impl SecondaryIndexActor {
                                 bytemuck::bytes_of(&SystemPayload::MMRLeafAppended { leaf_hash }).to_vec(),
                                 SystemEvent(SystemEventKind::MmrAppended).to_u8(),
                             ),
-                            merkle_proof: None,
-                            author_id: None,
-                            latest_ts: None,
+                            ..Default::default()
                         })
                         .expect("failed_to_unravel");
                     } else {
@@ -73,9 +73,7 @@ impl SecondaryIndexActor {
                                 .to_vec(),
                                 SystemEvent(SystemEventKind::MmrAppendFailed).to_u8(),
                             ),
-                            merkle_proof: None,
-                            author_id: None,
-                            latest_ts: None,
+                            ..Default::default()
                         })
                         .expect("failed_to_unravel");
                     }
@@ -97,32 +95,28 @@ impl SecondaryIndexActor {
                     if res.is_ok() {
                         pc.sink
                             .tx
-                            .send(XaeroEvent {
-                                evt: Event::new(
+                            .send(Arc::new(XaeroEvent {
+                                evt: Arc::new(Event::new(
                                     bytemuck::bytes_of(&SystemPayload::SecondaryIndexWritten { leaf_hash }).to_vec(),
                                     SystemEvent(SystemEventKind::SecondaryIndexWritten).to_u8(),
-                                ),
-                                merkle_proof: None,
-                                author_id: None,
-                                latest_ts: None,
-                            })
+                                )),
+                                ..Default::default()
+                            }))
                             .expect("failed_to_unravel");
                     } else {
                         pc.sink
                             .tx
-                            .send(XaeroEvent {
-                                evt: Event::new(
+                            .send(Arc::new(XaeroEvent {
+                                evt: Arc::new(Event::new(
                                     bytemuck::bytes_of(&SystemPayload::SecondaryIndexFailed {
                                         leaf_hash,
                                         error_code: SystemErrorCode::SecondaryIndex as u16,
                                     })
                                     .to_vec(),
                                     SystemEvent(SystemEventKind::SecondaryIndexFailed).to_u8(),
-                                ),
-                                merkle_proof: None,
-                                author_id: None,
-                                latest_ts: None,
-                            })
+                                )),
+                                ..Default::default()
+                            }))
                             .expect("failed_to_unravel");
                     }
                 }

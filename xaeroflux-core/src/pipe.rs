@@ -1,8 +1,12 @@
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU8, Ordering},
+};
 
 use crossbeam::channel::{Receiver, Sender};
+use rkyv::Archived;
 
-use crate::{XaeroEvent, next_id, subject::Signal};
+use crate::{event::XaeroEvent, next_id};
 
 /// Helps `Subject` De-lineate control and data event flow to relevant actors.
 #[repr(C)]
@@ -12,6 +16,61 @@ pub enum BusKind {
     Data,
 }
 
+/// Subject control signals
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Signal {
+    Blackhole = 0,
+    Kill = 1,
+    ControlBlackhole = 2,
+    ControlKill = 3,
+}
+
+impl Signal {
+    pub fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(Signal::Blackhole),
+            1 => Some(Signal::Kill),
+            2 => Some(Signal::ControlBlackhole),
+            3 => Some(Signal::ControlKill),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct AtomicSignal(AtomicU8);
+
+impl AtomicSignal {
+    pub fn new(signal: Signal) -> Self {
+        Self(AtomicU8::new(signal as u8))
+    }
+
+    pub fn store(&self, signal: Signal, ordering: Ordering) {
+        self.0.store(signal as u8, ordering);
+    }
+
+    pub fn load(&self, ordering: Ordering) -> Signal {
+        Signal::from_u8(self.0.load(ordering)).expect("corrupted atomic signal")
+    }
+
+    pub fn compare_exchange(
+        &self,
+        current: Signal,
+        new: Signal,
+        success: Ordering,
+        failure: Ordering,
+    ) -> Result<Signal, Signal> {
+        match self
+            .0
+            .compare_exchange(current as u8, new as u8, success, failure)
+        {
+            Ok(prev) => Ok(Signal::from_u8(prev).expect("corrupted signal")),
+            Err(prev) => Err(Signal::from_u8(prev).expect("corrupted signal")),
+        }
+    }
+}
+
 #[derive(Debug)]
 /// Receiver side of a `Subject` channel for `XaeroEvent`s.
 pub struct Source<T> {
@@ -19,7 +78,7 @@ pub struct Source<T> {
     pub id: u64,
     /// Underlying Crossbeam receiver.
     pub rx: Receiver<T>,
-    pub(crate) tx: Sender<T>,
+    pub tx: Sender<T>,
     pub kind: BusKind,
 }
 
@@ -43,7 +102,7 @@ pub struct Sink<T> {
     pub id: u64,
     /// Underlying Crossbeam sender.
     pub tx: Sender<T>,
-    pub(crate) rx: Receiver<T>,
+    pub rx: Receiver<T>,
     pub kind: BusKind,
 }
 
@@ -61,10 +120,10 @@ impl<T> Sink<T> {
 }
 
 #[repr(C)]
-#[derive(Clone, Debug)]
+#[derive(Debug, Clone)]
 pub struct Pipe {
-    pub source: Arc<Source<XaeroEvent>>,
-    pub sink: Arc<Sink<XaeroEvent>>,
+    pub source: Arc<Source<Arc<XaeroEvent>>>,
+    pub sink: Arc<Sink<Arc<XaeroEvent>>>,
 }
 
 impl Pipe {
