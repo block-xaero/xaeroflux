@@ -1,6 +1,6 @@
 [package]
 name = "xaeroflux-core"
-version = "0.8.0-m5"
+version = "0.8.1-m5"
 edition = "2024"
 description = "EXPERIMENTAL: actor layer for xaeroflux"
 categories = ["database", "database-implementations"]
@@ -17,7 +17,7 @@ diagnostics = []
 default = []
 
 [dependencies]
-rusted-ring = "0.3.3"
+rusted-ring = { workspace = true }
 blake3 = "1.8.2"
 xaeroid = { workspace = true }
 ed25519-dalek = { version = "2.1.1", features = ["rand_core"] }
