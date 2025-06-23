@@ -1,6 +1,6 @@
 [package]
 name = "xaeroflux-macros"
-version = "0.8.0-m5"
+version = "0.8.1-m5"
 edition     = "2024"
 description = "EXPERIMENTAL: actor layer for xaeroflux"
 categories = ["database", "database-implementations"]
@@ -15,7 +15,7 @@ readme = "README.md"
 proc-macro = true
 
 [dependencies]
-xaeroflux-core = {version = "0.8.0-m5"}
+xaeroflux-core = { version = "0.8.1-m5" }
 trybuild = "1.0.105"
 proc-macro2 = "1.0.95"
 quote = "1.0.40"

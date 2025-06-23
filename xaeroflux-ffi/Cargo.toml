@@ -13,5 +13,5 @@ homepage = "https://blockxaero.io"
 readme = "README.md"
 
 [dependencies]
-xaeroflux = { version = "0.8.0-m5" }
+xaeroflux = { path = "../xaeroflux" }
 blake3 = "1.8.2"
