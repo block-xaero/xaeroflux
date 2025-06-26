@@ -13,6 +13,7 @@ homepage = "https://blockxaero.io"
 readme = "README.md"
 
 [dependencies]
+rusted-ring-new = {package = "rusted-ring", workspace = true}
 rusted-ring = { workspace = true }
 xaeroid = { workspace = true }
 xaeroflux-core = { version = "0.8.1-m5" }
