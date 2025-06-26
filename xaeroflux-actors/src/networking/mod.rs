@@ -3,7 +3,6 @@ use xaeroid::{XaeroCredential, XaeroID, XaeroProof};
 mod actor;
 mod control_plane;
 mod data_plane;
-mod network_conduit;
 mod p2p;
 mod pool;
 mod state;

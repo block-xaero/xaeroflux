@@ -1,7 +1,6 @@
 use xaeroid::XaeroID;
 
-use crate::aof::storage::format::SegmentMeta;
-use crate::networking::BufferStatus;
+use crate::{aof::storage::format::SegmentMeta, networking::BufferStatus};
 
 // Topic: "xaeroflux/group/{group_id}/control/discovery"
 pub enum ControlMessage {

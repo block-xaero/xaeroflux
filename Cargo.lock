@@ -4434,6 +4434,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rusted-ring"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b61ba99ba451efda797e9fc04ac295668eddd7367c8e34faa1e81a3f11e6dd69"
+dependencies = [
+ "bytemuck",
+ "thiserror 2.0.12",
+]
+
+[[package]]
 name = "rustfix"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6311,7 +6321,8 @@ dependencies = [
 name = "xaeroflux"
 version = "0.8.1-m5"
 dependencies = [
- "rusted-ring",
+ "rusted-ring 0.4.0",
+ "rusted-ring 0.5.0",
  "xaeroflux-actors 0.8.1-m5 (registry+https://github.com/rust-lang/crates.io-index)",
  "xaeroflux-core 0.8.1-m5 (registry+https://github.com/rust-lang/crates.io-index)",
  "xaeroflux-crdts 0.8.1-m5 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -6343,7 +6354,8 @@ dependencies = [
  "rand 0.8.5",
  "rkyv 0.8.10",
  "rkyv_dyn",
- "rusted-ring",
+ "rusted-ring 0.4.0",
+ "rusted-ring 0.5.0",
  "rustfix",
  "serde",
  "serial_test",
@@ -6387,7 +6399,7 @@ dependencies = [
  "rand 0.8.5",
  "rkyv 0.8.10",
  "rkyv_dyn",
- "rusted-ring",
+ "rusted-ring 0.4.0",
  "rustfix",
  "serde",
  "sha2",
@@ -6422,7 +6434,8 @@ dependencies = [
  "rand 0.8.5",
  "rkyv 0.8.10",
  "rkyv_dyn",
- "rusted-ring",
+ "rusted-ring 0.4.0",
+ "rusted-ring 0.5.0",
  "rustfix",
  "serde",
  "sha2",
@@ -6457,7 +6470,7 @@ dependencies = [
  "rand 0.8.5",
  "rkyv 0.8.10",
  "rkyv_dyn",
- "rusted-ring",
+ "rusted-ring 0.4.0",
  "rustfix",
  "serde",
  "sha2",
@@ -6479,7 +6492,8 @@ dependencies = [
  "bytemuck",
  "crdts",
  "rkyv 0.8.10",
- "rusted-ring",
+ "rusted-ring 0.4.0",
+ "rusted-ring 0.5.0",
  "serde",
  "xaeroflux-core 0.8.1-m5 (registry+https://github.com/rust-lang/crates.io-index)",
  "xaeroid",
@@ -6495,7 +6509,7 @@ dependencies = [
  "bytemuck",
  "crdts",
  "rkyv 0.8.10",
- "rusted-ring",
+ "rusted-ring 0.4.0",
  "serde",
  "xaeroflux-core 0.8.1-m5 (registry+https://github.com/rust-lang/crates.io-index)",
  "xaeroid",
@@ -6559,7 +6573,7 @@ dependencies = [
  "rand 0.8.5",
  "rand_chacha 0.3.1",
  "rkyv 0.8.10",
- "rusted-ring",
+ "rusted-ring 0.4.0",
  "thiserror 2.0.12",
 ]
 

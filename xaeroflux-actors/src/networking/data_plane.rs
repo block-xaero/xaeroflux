@@ -5,12 +5,10 @@ use xaeroflux_core::{
     pool::{FixedMerkleProof, FixedVectorClock},
 };
 
-use crate::{
-    aof::storage::format::SegmentMeta,
-    networking::SyncContext,
-};
+use crate::{aof::storage::format::SegmentMeta, networking::SyncContext};
 
 // Topic: "xaeroflux/group/{group_id}/workspace/{workspace_id}/object/{object_id}/data"
+#[allow(clippy::large_enum_variant)]
 pub enum DataMessage {
     // Live CRDT operations
     LiveEvent {
