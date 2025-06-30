@@ -1,8 +1,7 @@
 use std::time::Duration;
 
-use rusted_ring_new::{EventUtils, Reader, RingBuffer, Writer};
+use rusted_ring_new::{Reader, RingBuffer, Writer};
 
-use crate::pool::XaeroEvent;
 
 #[derive(Debug)]
 pub struct RingSource<const TSHIRT_SIZE: usize, const RING_CAPACITY: usize> {
@@ -71,7 +70,7 @@ impl<const TSHIRT_SIZE: usize, const RING_CAPACITY: usize>
                 let w = &mut pipe.source.writer;
                 loop {
                     let mut processed_any = false;
-                    while let Some(event) = pipe.sink.reader.next() {
+                    for event in pipe.sink.reader.by_ref() {
                         let processed = handler(event);
                         tracing::debug!("event processed before writes: {:?}", processed);
                         let res = w.add(processed);
@@ -123,8 +122,8 @@ mod ring_actor_tests {
         let test_id = next_test_id();
         let (input_ring, output_ring) = create_test_rings::<1024, 100>();
 
-        let input_buf = input_ring.get_or_init(|| RingBuffer::new());
-        let output_buf = output_ring.get_or_init(|| RingBuffer::new());
+        let input_buf = input_ring.get_or_init(RingBuffer::new);
+        let output_buf = output_ring.get_or_init(RingBuffer::new);
 
         let _actor = RingBufferActor::init(
             &|mut event| {
@@ -165,8 +164,8 @@ mod ring_actor_tests {
         let test_id = next_test_id();
         let (input_ring, output_ring) = create_test_rings::<1024, 100>();
 
-        let input_buf = input_ring.get_or_init(|| RingBuffer::new());
-        let output_buf = output_ring.get_or_init(|| RingBuffer::new());
+        let input_buf = input_ring.get_or_init(RingBuffer::new);
+        let output_buf = output_ring.get_or_init(RingBuffer::new);
 
         let _actor = RingBufferActor::init(
             &|mut event| {
@@ -220,8 +219,8 @@ mod ring_actor_tests {
         let test_id = next_test_id();
         let (input_ring, output_ring) = create_test_rings::<1024, 100>();
 
-        let input_buf = input_ring.get_or_init(|| RingBuffer::new());
-        let output_buf = output_ring.get_or_init(|| RingBuffer::new());
+        let input_buf = input_ring.get_or_init(RingBuffer::new);
+        let output_buf = output_ring.get_or_init(RingBuffer::new);
 
         let _actor = RingBufferActor::init(
             &|event| {
@@ -251,12 +250,8 @@ mod ring_actor_tests {
             if let Some(output_event) = output_reader.next() {
                 if output_event.event_type == 0 {
                     filtered_count += 1;
-                } else if output_event.event_type >= test_id
-                    && output_event.event_type < test_id + 6
-                {
-                    if output_event.event_type % 2 == 0 {
-                        even_count += 1;
-                    }
+                } else if output_event.event_type >= test_id && output_event.event_type < test_id + 6 && output_event.event_type % 2 == 0 {
+                    even_count += 1;
                 }
                 total_processed += 1;
 
@@ -283,8 +278,8 @@ mod ring_actor_tests {
         let events_count = 100; // Reduced count to avoid cursor issues
         let (input_ring, output_ring) = create_test_rings::<1024, 200>(); // Larger capacity
 
-        let input_buf = input_ring.get_or_init(|| RingBuffer::new());
-        let output_buf = output_ring.get_or_init(|| RingBuffer::new());
+        let input_buf = input_ring.get_or_init(RingBuffer::new);
+        let output_buf = output_ring.get_or_init(RingBuffer::new);
 
         let _actor = RingBufferActor::init(
             &|mut event| {
@@ -341,8 +336,8 @@ mod ring_actor_tests {
     #[test]
     fn test_ring_source_sink_creation() {
         let (input_ring, output_ring) = create_test_rings::<1024, 100>();
-        let input_buf = input_ring.get_or_init(|| RingBuffer::new());
-        let output_buf = output_ring.get_or_init(|| RingBuffer::new());
+        let input_buf = input_ring.get_or_init(RingBuffer::new);
+        let output_buf = output_ring.get_or_init(RingBuffer::new);
 
         let _sink = RingSink::new(input_buf);
         let _source = RingSource::new(output_buf);
@@ -353,8 +348,8 @@ mod ring_actor_tests {
     #[test]
     fn test_ring_pipe_creation() {
         let (input_ring, output_ring) = create_test_rings::<1024, 100>();
-        let input_buf = input_ring.get_or_init(|| RingBuffer::new());
-        let output_buf = output_ring.get_or_init(|| RingBuffer::new());
+        let input_buf = input_ring.get_or_init(RingBuffer::new);
+        let output_buf = output_ring.get_or_init(RingBuffer::new);
 
         let _pipe = RingPipe::new(input_buf, output_buf);
 
@@ -364,7 +359,7 @@ mod ring_actor_tests {
     #[test]
     fn test_ring_sink_clone() {
         let (input_ring, _) = create_test_rings::<1024, 100>();
-        let input_buf = input_ring.get_or_init(|| RingBuffer::new());
+        let input_buf = input_ring.get_or_init(RingBuffer::new);
         let sink1 = RingSink::new(input_buf);
         let _sink2 = sink1.clone();
 
@@ -374,8 +369,8 @@ mod ring_actor_tests {
     #[test]
     fn test_actor_thread_naming() {
         let (input_ring, output_ring) = create_test_rings::<1024, 100>();
-        let input_buf = input_ring.get_or_init(|| RingBuffer::new());
-        let output_buf = output_ring.get_or_init(|| RingBuffer::new());
+        let input_buf = input_ring.get_or_init(RingBuffer::new);
+        let output_buf = output_ring.get_or_init(RingBuffer::new);
 
         let actor = RingBufferActor::init(&|event| event, input_buf, output_buf);
 

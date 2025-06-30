@@ -20,9 +20,9 @@ mod ring_buffer_actor;
 pub mod size;
 pub mod sys;
 pub mod system_paths;
-pub mod workspace;
-mod vector_clock_actor;
 mod vector_clock;
+mod vector_clock_actor;
+pub mod workspace;
 
 use std::{
     any::Any,
