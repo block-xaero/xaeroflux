@@ -97,7 +97,7 @@ mod ring_actor_tests {
         atomic::{AtomicU32, Ordering},
     };
 
-    use rusted_ring_new::{EventUtils, PooledEvent};
+    use rusted_ring_new::EventUtils;
 
     use super::*;
 
