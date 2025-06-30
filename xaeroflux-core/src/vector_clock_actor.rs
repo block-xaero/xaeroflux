@@ -1,6 +1,6 @@
 use std::{cmp::max, collections::HashMap, sync::OnceLock};
 
-use bytemuck::{Pod, Zeroable, from_bytes};
+use bytemuck::{from_bytes, Pod, Zeroable};
 use rusted_ring_new::{EventUtils, RingBuffer};
 
 use crate::date_time::emit_secs;
@@ -63,8 +63,6 @@ static VC_DELTA_OUTPUT_RING: OnceLock<RingBuffer<1024, 1000>> = OnceLock::new();
 
 pub struct VectorClockState {
     clock: XaeroClock,
-    write_idx: usize,
-    eviction_idx: usize,
     lru_cache: HashMap<[u8; 32], XaeroClock>,
 }
 
@@ -72,11 +70,10 @@ impl VectorClockState {
     pub fn new() -> VectorClockState {
         VectorClockState {
             clock: XaeroClock::new(),
-            write_idx: 0,
-            eviction_idx: 0,
             lru_cache: HashMap::with_capacity(100),
         }
     }
+
 
     // Fix: Correct tick logic with proper increment after overflow
     pub fn tick(&mut self) {
@@ -246,18 +243,11 @@ impl VectorClockActor {
 // Updated tests with fixes
 #[cfg(test)]
 mod vector_clock_tests {
-    use std::sync::atomic::{AtomicU32, Ordering};
-
     use bytemuck::{bytes_of, from_bytes};
     use rusted_ring_new::{EventUtils, Reader, Writer};
 
     use super::*;
 
-    static TEST_COUNTER: AtomicU32 = AtomicU32::new(1000);
-
-    fn next_test_id() -> u32 {
-        TEST_COUNTER.fetch_add(100, Ordering::Relaxed)
-    }
 
     #[test]
     fn test_fixed_serialization_sizes() {
