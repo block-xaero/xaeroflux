@@ -1,6 +1,6 @@
 use std::{cmp::max, collections::HashMap, sync::OnceLock};
 
-use bytemuck::{from_bytes, Pod, Zeroable};
+use bytemuck::{Pod, Zeroable, from_bytes};
 use rusted_ring_new::{EventUtils, RingBuffer};
 
 use crate::date_time::emit_secs;
@@ -73,7 +73,6 @@ impl VectorClockState {
             lru_cache: HashMap::with_capacity(100),
         }
     }
-
 
     // Fix: Correct tick logic with proper increment after overflow
     pub fn tick(&mut self) {
@@ -247,7 +246,6 @@ mod vector_clock_tests {
     use rusted_ring_new::{EventUtils, Reader, Writer};
 
     use super::*;
-
 
     #[test]
     fn test_fixed_serialization_sizes() {
