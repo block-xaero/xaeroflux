@@ -1,8 +1,4 @@
-use std::{
-    cmp::max,
-    collections::HashMap,
-    sync::OnceLock,
-};
+use std::{cmp::max, collections::HashMap, sync::OnceLock};
 
 use bytemuck::{Pod, Zeroable, from_bytes};
 use rusted_ring_new::{EventUtils, RingBuffer};
@@ -13,9 +9,9 @@ use crate::date_time::emit_secs;
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct XaeroClock {
-    pub base_ts: u64,           // 8 bytes
-    pub latest_timestamp: u16,  // 2 bytes
-    pub _pad: [u8; 6],          // 6 bytes padding = 16 bytes total
+    pub base_ts: u64,          // 8 bytes
+    pub latest_timestamp: u16, // 2 bytes
+    pub _pad: [u8; 6],         // 6 bytes padding = 16 bytes total
 }
 
 unsafe impl Pod for XaeroClock {}
@@ -23,7 +19,7 @@ unsafe impl Zeroable for XaeroClock {}
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub struct XaeroVectorClockEntry([u8; 32], XaeroClock);  // 32 + 16 = 48 bytes
+pub struct XaeroVectorClockEntry([u8; 32], XaeroClock); // 32 + 16 = 48 bytes
 unsafe impl Pod for XaeroVectorClockEntry {}
 unsafe impl Zeroable for XaeroVectorClockEntry {}
 
@@ -39,7 +35,7 @@ impl XaeroClock {
     pub fn new() -> Self {
         Self {
             base_ts: emit_secs(),
-            latest_timestamp: 0,  // Start at 0, tick() will increment
+            latest_timestamp: 0, // Start at 0, tick() will increment
             _pad: [0; 6],
         }
     }
@@ -53,10 +49,10 @@ impl XaeroClock {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct XaeroVectorClock {
-    pub clock: XaeroClock,                        // 16 bytes
-    pub peers: [XaeroVectorClockEntry; 10],       // 10 * 48 = 480 bytes
-    pub _pad: [u8; 8],                           // 8 bytes padding
-    // Total: 16 + 480 + 8 = 504 bytes
+    pub clock: XaeroClock,                  // 16 bytes
+    pub peers: [XaeroVectorClockEntry; 10], // 10 * 48 = 480 bytes
+    pub _pad: [u8; 8],                      /* 8 bytes padding
+                                             * Total: 16 + 480 + 8 = 504 bytes */
 }
 unsafe impl Pod for XaeroVectorClock {}
 unsafe impl Zeroable for XaeroVectorClock {}
@@ -112,7 +108,8 @@ impl VectorClockState {
 
         // Represent new logical time efficiently
         let current_wall_time = emit_secs();
-        if new_logical >= current_wall_time && (new_logical - current_wall_time) <= u16::MAX as u64 {
+        if new_logical >= current_wall_time && (new_logical - current_wall_time) <= u16::MAX as u64
+        {
             self.clock.base_ts = current_wall_time;
             self.clock.latest_timestamp = (new_logical - current_wall_time) as u16;
         } else {
@@ -122,7 +119,9 @@ impl VectorClockState {
 
         // Merge peer clocks
         for pvc in peer_vc.peers {
-            if pvc.0 == [0; 32] { continue; } // Skip empty entries
+            if pvc.0 == [0; 32] {
+                continue;
+            } // Skip empty entries
 
             let found = self.lru_cache.get(&pvc.0);
             match found {
@@ -135,10 +134,12 @@ impl VectorClockState {
                     let max_peer_logical = max(existing_logical, incoming_logical);
 
                     // Convert back to base + offset representation
-                    if max_peer_logical >= current_wall_time && (max_peer_logical - current_wall_time) <= u16::MAX as u64 {
+                    if max_peer_logical >= current_wall_time
+                        && (max_peer_logical - current_wall_time) <= u16::MAX as u64
+                    {
                         let new_clock = XaeroClock::with_base(
                             current_wall_time,
-                            (max_peer_logical - current_wall_time) as u16
+                            (max_peer_logical - current_wall_time) as u16,
                         );
                         self.lru_cache.insert(pvc.0, new_clock);
                     } else {
@@ -168,7 +169,9 @@ impl VectorClockState {
         let mut index = 0;
 
         for (peer_id, clock) in self.lru_cache.iter() {
-            if index >= 10 { break; }
+            if index >= 10 {
+                break;
+            }
             peers_array[index] = XaeroVectorClockEntry(*peer_id, *clock);
             index += 1;
         }
@@ -196,13 +199,14 @@ impl VectorClockActor {
             let out_buffer = VC_DELTA_OUTPUT_RING
                 .get()
                 .expect("cannot allocate vector clock");
-            let mut reader = rusted_ring_new::Reader::new(&in_buffer);
-            let mut writer = rusted_ring_new::Writer::new(&out_buffer);
+            let mut reader = rusted_ring_new::Reader::new(in_buffer);
+            let mut writer = rusted_ring_new::Writer::new(out_buffer);
 
             loop {
-                while let Some(event) = reader.next() {
+                for event in reader.by_ref() {
                     // Parse incoming vector clock
-                    let new_vector_clock = from_bytes::<XaeroVectorClock>(&event.data[..event.len as usize]);
+                    let new_vector_clock =
+                        from_bytes::<XaeroVectorClock>(&event.data[..event.len as usize]);
 
                     // Merge with peer clock
                     self.state.merge_peer_clock(new_vector_clock);
@@ -228,7 +232,9 @@ impl VectorClockActor {
                         .expect("failed to create auto-sized event!");
                     let res = writer.add(e);
                     if !res {
-                        tracing::error!("failed to update vector clock snapshot - output buffer full");
+                        tracing::error!(
+                            "failed to update vector clock snapshot - output buffer full"
+                        );
                     }
                 }
                 std::thread::sleep(std::time::Duration::from_micros(100));
@@ -240,10 +246,12 @@ impl VectorClockActor {
 // Updated tests with fixes
 #[cfg(test)]
 mod vector_clock_tests {
-    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
     use bytemuck::{bytes_of, from_bytes};
     use rusted_ring_new::{EventUtils, Reader, Writer};
-    use std::sync::atomic::{AtomicU32, Ordering};
+
+    use super::*;
 
     static TEST_COUNTER: AtomicU32 = AtomicU32::new(1000);
 
@@ -313,7 +321,9 @@ mod vector_clock_tests {
         for i in 0..15 {
             let mut peer_id = [0u8; 32];
             peer_id[0] = i;
-            state.lru_cache.insert(peer_id, XaeroClock::with_base(1704067200, i as u16 * 10));
+            state
+                .lru_cache
+                .insert(peer_id, XaeroClock::with_base(1704067200, i as u16 * 10));
         }
 
         let peers_array = state.peers_to_array();
@@ -328,8 +338,11 @@ mod vector_clock_tests {
 
         // HashMap iteration order is not guaranteed, so we might get fewer than 10
         // due to how we're checking [0; 32] vs actual peer IDs
-        assert!(found_entries <= 10 && found_entries >= 9); // Allow some variance
-        println!("✅ Peer array supports up to 10 peers (found: {})", found_entries);
+        assert!((9..=10).contains(&found_entries)); // Allow some variance
+        println!(
+            "✅ Peer array supports up to 10 peers (found: {})",
+            found_entries
+        );
     }
 
     #[test]
@@ -339,8 +352,8 @@ mod vector_clock_tests {
         static TEST_INPUT_RING: OnceLock<RingBuffer<1024, 100>> = OnceLock::new();
         static TEST_OUTPUT_RING: OnceLock<RingBuffer<1024, 100>> = OnceLock::new();
 
-        let input_buffer = TEST_INPUT_RING.get_or_init(|| RingBuffer::new());
-        let output_buffer = TEST_OUTPUT_RING.get_or_init(|| RingBuffer::new());
+        let input_buffer = TEST_INPUT_RING.get_or_init(RingBuffer::new);
+        let output_buffer = TEST_OUTPUT_RING.get_or_init(RingBuffer::new);
 
         let mut writer = Writer::new(input_buffer);
         let mut reader = Reader::new(output_buffer);
@@ -365,7 +378,7 @@ mod vector_clock_tests {
         if let Some(event) = input_reader.next() {
             let parsed_vc = from_bytes::<XaeroVectorClock>(&event.data[..event.len as usize]);
 
-            state.merge_peer_clock(&parsed_vc);
+            state.merge_peer_clock(parsed_vc);
             state.tick();
 
             let output_vc = XaeroVectorClock {
@@ -378,11 +391,15 @@ mod vector_clock_tests {
             let output_event = EventUtils::create_pooled_event::<1024>(output_vc_bytes, 2)
                 .expect("Should create output event");
 
-            assert!(output_writer.add(output_event), "Should write to output buffer");
+            assert!(
+                output_writer.add(output_event),
+                "Should write to output buffer"
+            );
         }
 
         if let Some(output_event) = reader.next() {
-            let final_vc = from_bytes::<XaeroVectorClock>(&output_event.data[..output_event.len as usize]);
+            let final_vc =
+                from_bytes::<XaeroVectorClock>(&output_event.data[..output_event.len as usize]);
             assert!(final_vc.clock.logical_timestamp() > incoming_vc.clock.logical_timestamp());
         } else {
             panic!("No output event found");
