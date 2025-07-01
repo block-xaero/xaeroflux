@@ -17,6 +17,7 @@ use xaeroflux_core::{
     XaeroPoolManager,
     event::{EventType, XaeroEvent},
     hash::{sha_256, sha_256_slice},
+    pool::XaeroInternalEvent,
 };
 
 use super::format::{EventKey, SegmentMeta};
@@ -395,6 +396,192 @@ pub fn generate_xaero_key(xaero_event: &Arc<XaeroEvent>) -> Result<EventKey, Fai
         kind: xaero_event.event_type(),
         hash: sha_256_slice(event_data),
     })
+}
+
+/// Generates event key that consists of :
+/// - `timestamp`
+/// - `even_type` (see `EventType`)
+/// - `sha_256_slice` hash of event_data
+/// to uniquely identify an event.
+pub fn generate_event_key(event_data: &[u8], event_type: u32, timestamp: u64) -> EventKey {
+    EventKey {
+        ts: timestamp.to_be(),
+        kind: event_type as u8,
+        hash: sha_256_slice(event_data),
+    }
+}
+
+// Push raw event data to LMDB using the universal approach (Option 2)
+/// This works with any event size and avoids the TSHIRT_SIZE generic problem
+pub fn push_internal_event_universal(
+    arc_env: &Arc<Mutex<LmdbEnv>>,
+    event_data: &[u8],
+    event_type: u32,
+    latest_ts: u64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    unsafe {
+        let env = arc_env.lock().expect("failed to lock env");
+        let mut txn = ptr::null_mut();
+        let sc_tx_begin = mdb_txn_begin(env.env, ptr::null_mut(), 0, &mut txn);
+        if sc_tx_begin != 0 {
+            return Err(from_lmdb_err(sc_tx_begin));
+        }
+
+        let event_type_enum = EventType::from_u8(event_type as u8);
+
+        // Handle segment_meta events specially
+        if let EventType::MetaEvent(1) = event_type_enum {
+            let sm: &SegmentMeta = bytemuck::from_bytes(event_data);
+
+            // 1) Composite entry: raw SegmentMeta bytes under composite key
+            let mut key_buf = [0u8; 16];
+            key_buf[..8].copy_from_slice(&sm.ts_start.to_be_bytes());
+            key_buf[8..16].copy_from_slice(&(sm.segment_index as u64).to_be_bytes());
+            let mut key_val = MDB_val {
+                mv_size: key_buf.len(),
+                mv_data: key_buf.as_ptr() as *mut libc::c_void,
+            };
+
+            let mut data_val = MDB_val {
+                mv_size: event_data.len(),
+                mv_data: std::ptr::null_mut(),
+            };
+            let sc = mdb_put(
+                txn,
+                env.dbis[DBI::Meta as usize],
+                &mut key_val,
+                &mut data_val,
+                MDB_RESERVE,
+            );
+            if sc != 0 {
+                mdb_txn_abort(txn);
+                return Err(from_lmdb_err(sc));
+            }
+            std::ptr::copy_nonoverlapping(event_data.as_ptr(), data_val.mv_data.cast(), event_data.len());
+
+            // 2) Static entry: raw SegmentMeta bytes under "segment_meta"
+            let static_key = b"segment_meta";
+            let mut static_key_val = MDB_val {
+                mv_size: static_key.len(),
+                mv_data: static_key.as_ptr() as *mut libc::c_void,
+            };
+            let mut static_val = MDB_val {
+                mv_size: event_data.len(),
+                mv_data: std::ptr::null_mut(),
+            };
+            let sc2 = mdb_put(
+                txn,
+                env.dbis[DBI::Meta as usize],
+                &mut static_key_val,
+                &mut static_val,
+                MDB_RESERVE,
+            );
+            if sc2 != 0 {
+                mdb_txn_abort(txn);
+                return Err(from_lmdb_err(sc2));
+            }
+            std::ptr::copy_nonoverlapping(event_data.as_ptr(), static_val.mv_data.cast(), event_data.len());
+        } else if let EventType::MetaEvent(2) = event_type_enum {
+            // Static entry: raw MMRMeta bytes under "mmr_meta"
+            let static_key = b"mmr_meta";
+            let mut key_val = MDB_val {
+                mv_size: static_key.len(),
+                mv_data: static_key.as_ptr() as *mut libc::c_void,
+            };
+
+            let mut data_val = MDB_val {
+                mv_size: event_data.len(),
+                mv_data: std::ptr::null_mut(),
+            };
+            let sc = mdb_put(
+                txn,
+                env.dbis[DBI::Meta as usize],
+                &mut key_val,
+                &mut data_val,
+                MDB_RESERVE,
+            );
+            if sc != 0 {
+                mdb_txn_abort(txn);
+                return Err(from_lmdb_err(sc));
+            }
+            std::ptr::copy_nonoverlapping(event_data.as_ptr(), data_val.mv_data.cast(), event_data.len());
+        } else {
+            // Application event: store using event key
+            let key = generate_event_key(event_data, event_type, latest_ts);
+            let key_bytes: &[u8] = bytemuck::bytes_of(&key);
+            let mut key_val = MDB_val {
+                mv_size: key_bytes.len(),
+                mv_data: key_bytes.as_ptr() as *mut libc::c_void,
+            };
+
+            // Create a simple header + data format for storage
+            let header = InternalEventHeader {
+                latest_ts,
+                event_type,
+                data_len: event_data.len() as u32,
+                _pad: [0; 4],
+            };
+
+            let header_bytes = bytemuck::bytes_of(&header);
+            let total_size = header_bytes.len() + event_data.len();
+
+            let mut data_val = MDB_val {
+                mv_size: total_size,
+                mv_data: std::ptr::null_mut(),
+            };
+            let sc = mdb_put(
+                txn,
+                env.dbis[DBI::Aof as usize],
+                &mut key_val,
+                &mut data_val,
+                MDB_RESERVE,
+            );
+            if sc != 0 {
+                mdb_txn_abort(txn);
+                return Err(from_lmdb_err(sc));
+            }
+
+            // Copy header then data
+            let dest_ptr = data_val.mv_data as *mut u8;
+            std::ptr::copy_nonoverlapping(header_bytes.as_ptr(), dest_ptr, header_bytes.len());
+            std::ptr::copy_nonoverlapping(event_data.as_ptr(), dest_ptr.add(header_bytes.len()), event_data.len());
+        }
+
+        tracing::debug!(
+            "Pushed internal event to LMDB: type={}, size={} bytes, ts={}",
+            event_type,
+            event_data.len(),
+            latest_ts
+        );
+
+        let sc_tx_commit = mdb_txn_commit(txn);
+        if sc_tx_commit != 0 {
+            return Err(from_lmdb_err(sc_tx_commit));
+        }
+    }
+    Ok(())
+}
+
+/// Simple header for internal events stored in LMDB
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct InternalEventHeader {
+    pub latest_ts: u64,  // 8 bytes
+    pub event_type: u32, // 4 bytes
+    pub data_len: u32,   // 4 bytes
+    pub _pad: [u8; 4],   // 4 bytes padding = 20 bytes total
+}
+
+unsafe impl bytemuck::Pod for InternalEventHeader {}
+unsafe impl bytemuck::Zeroable for InternalEventHeader {}
+
+/// Convenience function for XaeroInternalEvent of any size
+pub fn push_xaero_internal_event_any<const TSHIRT_SIZE: usize>(
+    arc_env: &Arc<Mutex<LmdbEnv>>,
+    xaero_event: &XaeroInternalEvent<TSHIRT_SIZE>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let event_data = &xaero_event.evt.data[..xaero_event.evt.len as usize];
+    push_internal_event_universal(arc_env, event_data, xaero_event.evt.event_type, xaero_event.latest_ts)
 }
 
 /// Store a mapping from `leaf_hash` to `SegmentMeta` in the SecondaryIndex DB.

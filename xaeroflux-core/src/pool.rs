@@ -1,10 +1,10 @@
 use std::sync::{Arc, OnceLock};
 
-use bytemuck::Zeroable;
+use bytemuck::{Pod, Zeroable};
 use rusted_ring::{
     EventAllocator, EventSize, PooledEvent, RingPtr, pooled_event_ptr::PooledEventPtr,
 };
-use xaeroid::XaeroID;
+use xaeroid::{XaeroID, XaeroProof};
 
 use crate::event::VectorClock;
 
@@ -28,6 +28,8 @@ mod desktop_config {
 use desktop_config::*;
 #[cfg(any(target_os = "ios", target_os = "android"))]
 use mobile_config::*;
+
+use crate::vector_clock_actor::XaeroVectorClock;
 
 // Global allocators - ALL stack allocated
 static EVENT_DATA_ALLOCATOR: OnceLock<EventAllocator> = OnceLock::new();
@@ -218,6 +220,27 @@ pub struct XaeroEvent {
     // Only primitives on heap
     pub latest_ts: u64, // Stack primitive
 }
+
+#[derive(Debug, Clone, Copy)]
+pub struct XaeroInternalEvent<const TSHIRT_SIZE: usize> {
+    pub evt: rusted_ring_new::PooledEvent<TSHIRT_SIZE>,
+    pub latest_ts: u64,
+}
+
+unsafe impl<const TSHIRT_SIZE: usize> Pod for XaeroInternalEvent<TSHIRT_SIZE> {}
+unsafe impl<const TSHIRT_SIZE: usize> Zeroable for XaeroInternalEvent<TSHIRT_SIZE> {}
+
+#[derive(Clone, Copy)]
+pub struct XaeroPeerEvent<const TSHIRT_SIZE: usize> {
+    pub evt: rusted_ring_new::PooledEvent<TSHIRT_SIZE>,
+    pub author_id: Option<XaeroID>,
+    pub merkle_proof: Option<XaeroProof>,
+    pub vector_clock: XaeroVectorClock,
+    pub latest_ts: u64,
+}
+
+unsafe impl<const TSHIRT_SIZE: usize> Pod for XaeroPeerEvent<TSHIRT_SIZE> {}
+unsafe impl<const TSHIRT_SIZE: usize> Zeroable for XaeroPeerEvent<TSHIRT_SIZE> {}
 
 impl XaeroEvent {
     pub fn data(&self) -> &[u8] {

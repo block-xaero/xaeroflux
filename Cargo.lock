@@ -6367,7 +6367,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber 0.3.19",
- "xaeroflux-core 0.8.1-m5 (registry+https://github.com/rust-lang/crates.io-index)",
+ "xaeroflux-core 0.8.1-m5",
  "xaeroflux-crdts 0.8.1-m5 (registry+https://github.com/rust-lang/crates.io-index)",
  "xaeroflux-macros 0.8.1-m5 (registry+https://github.com/rust-lang/crates.io-index)",
  "xaeroid",
