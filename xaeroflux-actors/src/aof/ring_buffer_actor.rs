@@ -338,8 +338,14 @@ impl AofActor {
     /// Data event processing loop (AOF data input -> AOF data output for confirmations)
     fn run_data_event_loop(state: &mut AofState, reader: &mut Reader<256, 1000>, writer: &mut Writer<64, 2000>) {
         tracing::warn!("🚀 AOF Data event loop STARTED");
-        tracing::warn!("🎯 Actor input ring buffer address: {:p}", reader.ringbuffer as *const _);
-        tracing::warn!("🎯 Actor output ring buffer address: {:p}", writer.ringbuffer as *const _);
+        tracing::warn!(
+            "🎯 Actor input ring buffer address: {:p}",
+            reader.ringbuffer as *const _
+        );
+        tracing::warn!(
+            "🎯 Actor output ring buffer address: {:p}",
+            writer.ringbuffer as *const _
+        );
         loop {
             let mut events_processed = 0;
 
@@ -450,10 +456,20 @@ mod tests {
         xaeroflux_core::initialize();
         let subject_hash = SubjectHash([2u8; 32]);
         let mut actor = AofActor::spin(subject_hash, BusKind::Data).expect("Failed to create AOF actor");
-        tracing::warn!("🔍 Test input ring buffer address: {:p}",
-                 AOF_DATA_INPUT_RING.get().map(|r| r as *const _).unwrap_or(std::ptr::null()));
-        tracing::warn!("🔍 Test output ring buffer address: {:p}",
-                 AOF_DATA_OUTPUT_RING.get().map(|r| r as *const _).unwrap_or(std::ptr::null()));
+        tracing::warn!(
+            "🔍 Test input ring buffer address: {:p}",
+            AOF_DATA_INPUT_RING
+                .get()
+                .map(|r| r as *const _)
+                .unwrap_or(std::ptr::null())
+        );
+        tracing::warn!(
+            "🔍 Test output ring buffer address: {:p}",
+            AOF_DATA_OUTPUT_RING
+                .get()
+                .map(|r| r as *const _)
+                .unwrap_or(std::ptr::null())
+        );
         // Test S writer with CRDT operation (256 bytes for data events)
         let crdt_op = b"{'op':'insert','pos':42,'char':'a','user':'alice'}"; // CRDT operation
         let event = EventUtils::create_pooled_event::<256>(crdt_op, 100).expect("Failed to create S event");
