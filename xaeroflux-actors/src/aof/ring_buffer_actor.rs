@@ -448,7 +448,10 @@ mod tests {
 
         let subject_hash = SubjectHash([2u8; 32]);
         let mut actor = AofActor::spin(subject_hash, BusKind::Data).expect("Failed to create AOF actor");
-
+        println!("🔍 Test input ring buffer address: {:p}",
+                 AOF_DATA_INPUT_RING.get().map(|r| r as *const _).unwrap_or(std::ptr::null()));
+        println!("🔍 Test output ring buffer address: {:p}",
+                 AOF_DATA_OUTPUT_RING.get().map(|r| r as *const _).unwrap_or(std::ptr::null()));
         // Test S writer with CRDT operation (256 bytes for data events)
         let crdt_op = b"{'op':'insert','pos':42,'char':'a','user':'alice'}"; // CRDT operation
         let event = EventUtils::create_pooled_event::<256>(crdt_op, 100).expect("Failed to create S event");
