@@ -435,7 +435,10 @@ mod tests {
             if let Some(conf_event) = actor.out_reader_data.next() {
                 println!("{:#?}", conf_event);
                 println!("Confirmation event length: {}", conf_event.len);
-                println!("Expected AofWriteConfirmation size: {}", std::mem::size_of::<AofWriteConfirmation>());
+                println!(
+                    "Expected AofWriteConfirmation size: {}",
+                    std::mem::size_of::<AofWriteConfirmation>()
+                );
                 println!("Event data: {:?}", &conf_event.data[..conf_event.len as usize]);
 
                 match bytemuck::try_from_bytes::<AofWriteConfirmation>(&conf_event.data[..conf_event.len as usize]) {
@@ -443,8 +446,12 @@ mod tests {
                         println!("✅ Confirmation parsed successfully");
                     }
                     Err(e) => {
-                        panic!("Failed to parse S confirmation: {:?}. Event len: {}, Expected: {}",
-                               e, conf_event.len, std::mem::size_of::<AofWriteConfirmation>());
+                        panic!(
+                            "Failed to parse S confirmation: {:?}. Event len: {}, Expected: {}",
+                            e,
+                            conf_event.len,
+                            std::mem::size_of::<AofWriteConfirmation>()
+                        );
                     }
                 }
                 confirmation_found = true;
