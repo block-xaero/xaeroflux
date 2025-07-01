@@ -223,6 +223,8 @@ pub struct XaeroEvent {
 
 #[derive(Debug, Clone, Copy)]
 pub struct XaeroInternalEvent<const TSHIRT_SIZE: usize> {
+    pub xaero_id_hash: [u8; 32],
+    pub vector_clock_hash: [u8; 32],
     pub evt: rusted_ring_new::PooledEvent<TSHIRT_SIZE>,
     pub latest_ts: u64,
 }

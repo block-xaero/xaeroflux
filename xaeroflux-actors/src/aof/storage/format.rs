@@ -100,9 +100,11 @@ unsafe impl Pod for LeafLocation {}
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct EventKey {
-    pub(crate) ts: u64,        // 8 bytes, big-endian
-    pub(crate) kind: u8,       // 1 byte
-    pub(crate) hash: [u8; 32], // 32 bytes
+    pub xaero_id_hash: [u8; 32],
+    pub vector_clock_hash: [u8; 32],
+    pub ts: u64,        // 8 bytes, big-endian
+    pub kind: u8,       // 1 byte
+    pub hash: [u8; 32], // 32 bytes
 }
 unsafe impl Pod for EventKey {}
 unsafe impl Zeroable for EventKey {}
