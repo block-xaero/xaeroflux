@@ -427,13 +427,21 @@ mod tests {
         // Write to S input buffer
         assert!(actor.in_writer_data.add(event), "Should write CRDT op to S buffer");
 
-        thread::sleep(Duration::from_millis(150));
+        let mut confirmation_found = false;
+        for attempt in 0..50 {
+            // Try for up to 5 seconds (50 * 100ms)
+            thread::sleep(Duration::from_millis(100));
 
-        // Check S output buffer
-        if let Some(conf_event) = actor.out_reader_data.next() {
-            let _conf = bytemuck::try_from_bytes::<AofWriteConfirmation>(&conf_event.data[..conf_event.len as usize])
-                .expect("Should parse S confirmation");
+            if let Some(conf_event) = actor.out_reader_data.next() {
+                let _conf =
+                    bytemuck::try_from_bytes::<AofWriteConfirmation>(&conf_event.data[..conf_event.len as usize])
+                        .expect("Should parse S confirmation");
+                confirmation_found = true;
+                break;
+            }
         }
+
+        assert!(confirmation_found, "Should receive S confirmation within timeout");
     }
 
     #[test]
