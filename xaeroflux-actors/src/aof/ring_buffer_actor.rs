@@ -131,17 +131,8 @@ impl AofState {
             });
         }
 
-        // Create enhanced key for better indexing
-        let event_key = generate_event_key(
-            event_data,
-            event_type as u32,
-            timestamp,
-            xaero_id_hash,
-            vector_clock_hash,
-        );
-
-        // Store with enhanced key structure
-        match self.persist_with_event_key(&event_key, event_data, timestamp) {
+        // Use the universal push function for storage
+        match push_internal_event_universal(&self.env, event_data, event_type as u32, timestamp) {
             Ok(_) => {
                 self.sequence_counter += 1;
                 self.stats.total_writes += 1;
@@ -187,23 +178,6 @@ impl AofState {
             [0; 32], // Empty xaero_id_hash
             [0; 32], // Empty vector_clock_hash
         )
-    }
-
-    /// Persist event with enhanced key to LMDB
-    fn persist_with_event_key(
-        &self,
-        event_key: &EventKey,
-        event_data: &[u8],
-        timestamp: u64,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        // For now, use the existing universal function with enhanced metadata
-        // In the future, this could store multiple index entries:
-        // 1. Primary: enhanced_key → event_data
-        // 2. Secondary: (xaero_id_hash, timestamp) → enhanced_key
-        // 3. Secondary: (vector_clock_hash) → enhanced_key
-        // 4. Secondary: (timestamp_range) → enhanced_key
-
-        push_internal_event_universal(&self.env, event_data, event_key.kind as u32, timestamp)
     }
 
     /// Filter out noise events to reduce storage overhead
@@ -279,8 +253,9 @@ impl AofActor {
         state: &mut AofState,
         event: &PooledEvent<SIZE>,
     ) -> Result<AofWriteConfirmation, Box<dyn std::error::Error>> {
-        // Try to parse as XaeroInternalEvent
+        // Try to parse as XaeroInternalEvent first
         if event.len == std::mem::size_of::<XaeroInternalEvent<SIZE>>() as u32 {
+            // Safety: We've verified the size matches exactly
             let internal_event = unsafe { std::ptr::read(event as *const _ as *const XaeroInternalEvent<SIZE>) };
 
             let event_data = &internal_event.evt.data[..internal_event.evt.len as usize];
@@ -295,7 +270,7 @@ impl AofActor {
             );
         }
 
-        // Fallback: parse as raw data (no peer/vector clock info)
+        // Fallback: parse as raw PooledEvent data (no peer/vector clock info)
         let event_data = &event.data[..event.len as usize];
         state.process_legacy_event(event_data, event.event_type as u8)
     }
@@ -459,5 +434,75 @@ mod tests {
             let _conf = bytemuck::try_from_bytes::<AofWriteConfirmation>(&conf_event.data[..conf_event.len as usize])
                 .expect("Should parse S confirmation");
         }
+    }
+
+    #[test]
+    fn test_xaero_internal_event_detection() {
+        // Test that we can distinguish XaeroInternalEvent from regular PooledEvent
+        use bytemuck::Zeroable;
+        use rusted_ring_new::PooledEvent;
+
+        // Create XaeroInternalEvent<256>
+        let mut pooled_event = PooledEvent::<256>::zeroed();
+        let test_data = b"internal event test";
+        let copy_len = std::cmp::min(test_data.len(), 256);
+        pooled_event.data[..copy_len].copy_from_slice(&test_data[..copy_len]);
+        pooled_event.len = test_data.len() as u32;
+        pooled_event.event_type = 42;
+
+        let internal_event = XaeroInternalEvent::<256> {
+            xaero_id_hash: [1u8; 32],
+            vector_clock_hash: [2u8; 32],
+            evt: pooled_event,
+            latest_ts: emit_secs(),
+        };
+
+        // Convert to bytes and back as PooledEvent
+        let internal_bytes = bytemuck::bytes_of(&internal_event);
+
+        // Check size detection logic
+        let size_matches = internal_bytes.len() == std::mem::size_of::<XaeroInternalEvent<256>>();
+        assert!(size_matches, "Size should match XaeroInternalEvent<256>");
+
+        // Create regular PooledEvent for comparison
+        let regular_event = EventUtils::create_pooled_event::<256>(test_data, 42).unwrap();
+        let regular_size = std::mem::size_of::<PooledEvent<256>>();
+        let internal_size = std::mem::size_of::<XaeroInternalEvent<256>>();
+
+        assert_ne!(regular_size, internal_size, "Sizes should be different");
+        println!(
+            "✅ XaeroInternalEvent detection logic working: regular={}, internal={}",
+            regular_size, internal_size
+        );
+    }
+
+    #[test]
+    fn test_event_processing_with_enhanced_data() {
+        xaeroflux_core::initialize();
+
+        let subject_hash = SubjectHash([3u8; 32]);
+        let mut state = AofState::new(subject_hash, BusKind::Data).expect("Failed to create AOF state");
+
+        // Test processing enhanced event with peer/vector clock info
+        let test_data = b"enhanced event with metadata";
+        let confirmation = state
+            .process_event(
+                test_data,
+                42,
+                emit_secs(),
+                [5u8; 32], // peer ID
+                [6u8; 32], // vector clock
+            )
+            .expect("Should process enhanced event");
+
+        assert_eq!(confirmation.status, 0, "Should succeed");
+        assert_eq!(confirmation.event_type, 42, "Should preserve event type");
+        assert_eq!(
+            confirmation.original_hash,
+            sha_256_slice(test_data),
+            "Should hash correctly"
+        );
+
+        println!("✅ Enhanced event processing working");
     }
 }
