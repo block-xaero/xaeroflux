@@ -7,13 +7,13 @@
 //! - Exposes reader/writer interfaces for external interaction
 
 use std::{
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
     thread::{self, JoinHandle},
     time::Duration,
 };
 
 use bytemuck::{Pod, Zeroable};
-use rusted_ring_new::{EventPoolFactory, EventUtils, PooledEvent, Reader, Writer};
+use rusted_ring_new::{EventPoolFactory, EventUtils, PooledEvent, Reader, RingBuffer, Writer};
 use xaeroflux_core::{
     CONF, date_time::emit_secs, hash::sha_256_slice, pipe::BusKind, pool::XaeroInternalEvent, system_paths,
 };
@@ -25,6 +25,18 @@ use crate::{
     },
     subject::SubjectHash,
 };
+
+// ================================================================================================
+// AOF-SPECIFIC RING BUFFERS
+// ================================================================================================
+
+// AOF Control Event Flow: XS input -> XS output (confirmations)
+static AOF_CONTROL_INPUT_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
+static AOF_CONTROL_OUTPUT_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
+
+// AOF Data Event Flow: S input -> XS output (confirmations are small)
+static AOF_DATA_INPUT_RING: OnceLock<RingBuffer<256, 1000>> = OnceLock::new();
+static AOF_DATA_OUTPUT_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
 
 // ================================================================================================
 // TYPES & STRUCTS
@@ -65,11 +77,11 @@ pub struct AofState {
 
 /// AOF Actor - processes events from ring buffer and persists to LMDB
 pub struct AofActor {
-    // Exposed interfaces for external interaction using existing pools
-    pub in_writer: Writer<64, 2000>,        // XS writer for Control events
-    pub in_writer_data: Writer<256, 1000>,  // S writer for Data events (CRDT Ops)
-    pub out_reader: Reader<64, 2000>,       // XS reader for Control confirmations
-    pub out_reader_data: Reader<256, 1000>, // S reader for Data confirmations
+    // Exposed interfaces for external interaction using dedicated AOF ring buffers
+    pub in_writer: Writer<64, 2000>,       // Control events input
+    pub in_writer_data: Writer<256, 1000>, // Data events input
+    pub out_reader: Reader<64, 2000>,      // Control confirmations output
+    pub out_reader_data: Reader<64, 2000>, // Data confirmations output (confirmations are small)
     pub jh: JoinHandle<()>,
 }
 
@@ -210,7 +222,7 @@ impl AofState {
 // ================================================================================================
 
 impl AofActor {
-    /// Create and spawn AOF actor with ring buffer processing using existing pools
+    /// Create and spawn AOF actor with ring buffer processing using dedicated AOF ring buffers
     pub fn spin(subject_hash: SubjectHash, bus_kind: BusKind) -> Result<Self, Box<dyn std::error::Error>> {
         let mut state = AofState::new(subject_hash, bus_kind.clone())?;
 
@@ -219,25 +231,38 @@ impl AofActor {
 
             match bus_kind {
                 BusKind::Control => {
-                    // Use XS pool for control events (64 bytes, 2000 capacity = 128KB)
-                    let mut reader = EventPoolFactory::get_xs_reader();
-                    let mut writer = EventPoolFactory::get_xs_writer();
-                    Self::run_control_event_loop(&mut state, &mut reader, &mut writer);
+                    // Control: Read from AOF control input, write confirmations to AOF control output
+                    let control_input_ring = AOF_CONTROL_INPUT_RING.get_or_init(RingBuffer::new);
+                    let control_output_ring = AOF_CONTROL_OUTPUT_RING.get_or_init(RingBuffer::new);
+
+                    let mut input_reader = Reader::new(control_input_ring);
+                    let mut output_writer = Writer::new(control_output_ring);
+
+                    Self::run_control_event_loop(&mut state, &mut input_reader, &mut output_writer);
                 }
                 BusKind::Data => {
-                    // Use S pool for data events/CRDT ops (256 bytes, 1000 capacity = 256KB)
-                    let mut reader = EventPoolFactory::get_s_reader();
-                    let mut writer = EventPoolFactory::get_s_writer();
-                    Self::run_data_event_loop(&mut state, &mut reader, &mut writer);
+                    // Data: Read from AOF data input, write confirmations to AOF data output
+                    let data_input_ring = AOF_DATA_INPUT_RING.get_or_init(RingBuffer::new);
+                    let data_output_ring = AOF_DATA_OUTPUT_RING.get_or_init(RingBuffer::new);
+
+                    let mut input_reader = Reader::new(data_input_ring);
+                    let mut output_writer = Writer::new(data_output_ring);
+
+                    Self::run_data_event_loop(&mut state, &mut input_reader, &mut output_writer);
                 }
             }
         });
 
-        // Create exposed reader/writer interfaces using the same pools
-        let in_writer = EventPoolFactory::get_xs_writer(); // Control events input
-        let in_writer_data = EventPoolFactory::get_s_writer(); // Data events input
-        let out_reader = EventPoolFactory::get_xs_reader(); // Control confirmations output
-        let out_reader_data = EventPoolFactory::get_s_reader(); // Data confirmations output
+        // Create exposed interfaces using the dedicated AOF ring buffers
+        let control_input_ring = AOF_CONTROL_INPUT_RING.get_or_init(RingBuffer::new);
+        let control_output_ring = AOF_CONTROL_OUTPUT_RING.get_or_init(RingBuffer::new);
+        let data_input_ring = AOF_DATA_INPUT_RING.get_or_init(RingBuffer::new);
+        let data_output_ring = AOF_DATA_OUTPUT_RING.get_or_init(RingBuffer::new);
+
+        let in_writer = Writer::new(control_input_ring); // Control events input
+        let in_writer_data = Writer::new(data_input_ring); // Data events input
+        let out_reader = Reader::new(control_output_ring); // Control confirmations output
+        let out_reader_data = Reader::new(data_output_ring); // Data confirmations output
 
         Ok(Self {
             in_writer,
@@ -275,7 +300,7 @@ impl AofActor {
         state.process_legacy_event(event_data, event.event_type as u8)
     }
 
-    /// Control event processing loop (XS pool - 64 bytes)
+    /// Control event processing loop (AOF control input -> AOF control output)
     fn run_control_event_loop(state: &mut AofState, reader: &mut Reader<64, 2000>, writer: &mut Writer<64, 2000>) {
         loop {
             let mut events_processed = 0;
@@ -284,14 +309,14 @@ impl AofActor {
                 match Self::process_ring_event_sized::<64>(state, &event) {
                     Ok(confirmation) => {
                         let conf_bytes = bytemuck::bytes_of(&confirmation);
-                        // Confirmation fits in 64 bytes (48 bytes + padding)
+                        // Confirmation fits exactly in 64 bytes
                         match EventUtils::create_pooled_event::<64>(conf_bytes, 200) {
                             Ok(conf_event) =>
                                 if !writer.add(conf_event) {
-                                    tracing::warn!("AOF XS confirmation buffer full - dropping confirmation");
+                                    tracing::warn!("AOF control confirmation buffer full - dropping confirmation");
                                 },
                             Err(e) => {
-                                tracing::error!("Failed to create XS confirmation event: {:?}", e);
+                                tracing::error!("Failed to create control confirmation event: {:?}", e);
                             }
                         }
                     }
@@ -310,8 +335,8 @@ impl AofActor {
         }
     }
 
-    /// Data event processing loop (S pool - 256 bytes)
-    fn run_data_event_loop(state: &mut AofState, reader: &mut Reader<256, 1000>, writer: &mut Writer<256, 1000>) {
+    /// Data event processing loop (AOF data input -> AOF data output for confirmations)
+    fn run_data_event_loop(state: &mut AofState, reader: &mut Reader<256, 1000>, writer: &mut Writer<64, 2000>) {
         loop {
             let mut events_processed = 0;
 
@@ -319,14 +344,14 @@ impl AofActor {
                 match Self::process_ring_event_sized::<256>(state, &event) {
                     Ok(confirmation) => {
                         let conf_bytes = bytemuck::bytes_of(&confirmation);
-                        // Confirmation fits in 256 bytes easily
-                        match EventUtils::create_pooled_event::<256>(conf_bytes, 200) {
+                        // Confirmation fits exactly in 64 bytes
+                        match EventUtils::create_pooled_event::<64>(conf_bytes, 200) {
                             Ok(conf_event) =>
                                 if !writer.add(conf_event) {
-                                    tracing::warn!("AOF S confirmation buffer full - dropping confirmation");
+                                    tracing::warn!("AOF data confirmation buffer full - dropping confirmation");
                                 },
                             Err(e) => {
-                                tracing::error!("Failed to create S confirmation event: {:?}", e);
+                                tracing::error!("Failed to create data confirmation event: {:?}", e);
                             }
                         }
                     }
@@ -393,24 +418,28 @@ mod tests {
         let test_data = b"control cmd"; // Small control command
         let event = EventUtils::create_pooled_event::<64>(test_data, 42).expect("Failed to create XS event");
 
-        // Write directly to XS input buffer
-        assert!(actor.in_writer.add(event), "Should write to XS input buffer");
+        // Write to AOF control input buffer
+        assert!(actor.in_writer.add(event), "Should write to AOF control input buffer");
 
-        // Allow processing time
-        thread::sleep(Duration::from_millis(100));
+        // Read confirmations from AOF control output buffer
+        let mut confirmation_found = false;
+        for _attempt in 0..50 {
+            thread::sleep(Duration::from_millis(100));
 
-        // Read confirmations from XS output buffer
-        let mut confirmations_found = 0;
-        while let Some(conf_event) = actor.out_reader.next() {
-            if let Ok(_conf) =
-                bytemuck::try_from_bytes::<AofWriteConfirmation>(&conf_event.data[..conf_event.len as usize])
-            {
-                confirmations_found += 1;
-                break;
+            if let Some(conf_event) = actor.out_reader.next() {
+                if let Ok(_conf) =
+                    bytemuck::try_from_bytes::<AofWriteConfirmation>(&conf_event.data[..conf_event.len as usize])
+                {
+                    confirmation_found = true;
+                    break;
+                }
             }
         }
 
-        assert!(confirmations_found > 0, "Should receive XS confirmation");
+        assert!(
+            confirmation_found,
+            "Should receive control confirmation from AOF output buffer"
+        );
     }
 
     #[test]
@@ -424,42 +453,39 @@ mod tests {
         let crdt_op = b"{'op':'insert','pos':42,'char':'a','user':'alice'}"; // CRDT operation
         let event = EventUtils::create_pooled_event::<256>(crdt_op, 100).expect("Failed to create S event");
 
-        // Write to S input buffer
-        assert!(actor.in_writer_data.add(event), "Should write CRDT op to S buffer");
+        // Write to AOF data input buffer
+        assert!(
+            actor.in_writer_data.add(event),
+            "Should write CRDT op to AOF data input buffer"
+        );
 
+        // Read confirmations from AOF data output buffer (separate ring buffer for confirmations)
         let mut confirmation_found = false;
-        for attempt in 0..50 {
-            // Try for up to 5 seconds (50 * 100ms)
+        for _attempt in 0..50 {
             thread::sleep(Duration::from_millis(100));
 
             if let Some(conf_event) = actor.out_reader_data.next() {
-                println!("{:#?}", conf_event);
-                println!("Confirmation event length: {}", conf_event.len);
-                println!(
-                    "Expected AofWriteConfirmation size: {}",
-                    std::mem::size_of::<AofWriteConfirmation>()
-                );
-                println!("Event data: {:?}", &conf_event.data[..conf_event.len as usize]);
-
                 match bytemuck::try_from_bytes::<AofWriteConfirmation>(&conf_event.data[..conf_event.len as usize]) {
                     Ok(_conf) => {
-                        println!("✅ Confirmation parsed successfully");
+                        confirmation_found = true;
+                        break;
                     }
                     Err(e) => {
                         panic!(
-                            "Failed to parse S confirmation: {:?}. Event len: {}, Expected: {}",
+                            "Failed to parse data confirmation: {:?}. Event len: {}, Expected: {}",
                             e,
                             conf_event.len,
                             std::mem::size_of::<AofWriteConfirmation>()
                         );
                     }
                 }
-                confirmation_found = true;
-                break;
             }
         }
 
-        assert!(confirmation_found, "Should receive S confirmation within timeout");
+        assert!(
+            confirmation_found,
+            "Should receive data confirmation from AOF output buffer within timeout"
+        );
     }
 
     #[test]
