@@ -386,12 +386,15 @@ pub fn push_xaero_event(
     Ok(())
 }
 
+#[deprecated]
 /// Generates an `EventKey` from a XaeroEvent consisting of timestamp, type, and data hash.
 pub fn generate_xaero_key(xaero_event: &Arc<XaeroEvent>) -> Result<EventKey, Failure> {
     let event_data = xaero_event.data();
     let timestamp = xaero_event.latest_ts;
 
     Ok(EventKey {
+        xaero_id_hash: [0u8; 32],
+        vector_clock_hash: [0u8; 32],
         ts: timestamp.to_be(),
         kind: xaero_event.event_type(),
         hash: sha_256_slice(event_data),
@@ -403,8 +406,16 @@ pub fn generate_xaero_key(xaero_event: &Arc<XaeroEvent>) -> Result<EventKey, Fai
 /// - `even_type` (see `EventType`)
 /// - `sha_256_slice` hash of event_data
 /// to uniquely identify an event.
-pub fn generate_event_key(event_data: &[u8], event_type: u32, timestamp: u64) -> EventKey {
+pub fn generate_event_key(
+    event_data: &[u8],
+    event_type: u32,
+    timestamp: u64,
+    xaero_id_hash: [u8; 32],
+    vector_clock_hash: [u8; 32],
+) -> EventKey {
     EventKey {
+        xaero_id_hash,
+        vector_clock_hash,
         ts: timestamp.to_be(),
         kind: event_type as u8,
         hash: sha_256_slice(event_data),
@@ -507,7 +518,7 @@ pub fn push_internal_event_universal(
             std::ptr::copy_nonoverlapping(event_data.as_ptr(), data_val.mv_data.cast(), event_data.len());
         } else {
             // Application event: store using event key
-            let key = generate_event_key(event_data, event_type, latest_ts);
+            let key = generate_event_key(event_data, event_type, latest_ts, [0u8; 32], [0u8; 32]);
             let key_bytes: &[u8] = bytemuck::bytes_of(&key);
             let mut key_val = MDB_val {
                 mv_size: key_bytes.len(),
