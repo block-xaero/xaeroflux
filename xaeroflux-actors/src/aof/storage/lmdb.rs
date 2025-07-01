@@ -700,12 +700,13 @@ pub unsafe fn scan_enhanced_range<const TSHIRT_SIZE: usize>(
                     }
                     Err(_) => {
                         // Copy to properly aligned buffer
-                        let mut aligned_buffer: std::mem::MaybeUninit<XaeroInternalEvent<TSHIRT_SIZE>> = std::mem::MaybeUninit::uninit();
+                        let mut aligned_buffer: std::mem::MaybeUninit<XaeroInternalEvent<TSHIRT_SIZE>> =
+                            std::mem::MaybeUninit::uninit();
                         unsafe {
                             std::ptr::copy_nonoverlapping(
                                 data_slice.as_ptr(),
                                 aligned_buffer.as_mut_ptr() as *mut u8,
-                                data_slice.len()
+                                data_slice.len(),
                             );
                             let internal_event = aligned_buffer.assume_init();
                             results.push(internal_event);
@@ -834,12 +835,13 @@ pub unsafe fn scan_by_peer_range<const TSHIRT_SIZE: usize>(
                     }
                     Err(_) => {
                         // Copy to properly aligned buffer
-                        let mut aligned_buffer: std::mem::MaybeUninit<XaeroInternalEvent<TSHIRT_SIZE>> = std::mem::MaybeUninit::uninit();
+                        let mut aligned_buffer: std::mem::MaybeUninit<XaeroInternalEvent<TSHIRT_SIZE>> =
+                            std::mem::MaybeUninit::uninit();
                         unsafe {
                             std::ptr::copy_nonoverlapping(
                                 data_slice.as_ptr(),
                                 aligned_buffer.as_mut_ptr() as *mut u8,
-                                data_slice.len()
+                                data_slice.len(),
                             );
                             let internal_event = aligned_buffer.assume_init();
                             results.push(internal_event);
