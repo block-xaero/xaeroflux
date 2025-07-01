@@ -13,6 +13,7 @@ pub mod hash;
 pub mod keys;
 pub mod logs;
 pub mod merkle_tree;
+mod namespacing;
 pub mod network;
 pub mod pipe;
 pub mod pool;

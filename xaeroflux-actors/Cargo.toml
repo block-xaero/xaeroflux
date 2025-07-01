@@ -36,7 +36,7 @@ libc = "0.2.172"
 rusted-ring-new = {package = "rusted-ring", workspace = true}
 rusted-ring = { workspace = true }
 xaeroid = { workspace = true }
-xaeroflux-core = { version = "0.8.1-m5" }
+xaeroflux-core = { path = "../xaeroflux-core" }
 xaeroflux-macros = { version = "0.8.1-m5" }
 xaeroflux-crdts = { version = "0.8.1-m5" }
 ed25519-dalek = { version = "2.1.1", features = ["rand_core"] }
