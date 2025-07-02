@@ -10,13 +10,13 @@ pub mod subject;
 mod system_actors;
 mod system_payload;
 
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 use xaeroflux_core::{
-    XaeroPoolManager, // Import from xaeroflux_core
-    event::{ScanWindow, XaeroEvent},
+    event::ScanWindow, // Import from xaeroflux_core
     pipe::{BusKind, Pipe},
+    XaeroPoolManager,
 };
 
 use crate::subject::Subscription;
@@ -38,11 +38,23 @@ mod tests {
         time::Duration,
     };
 
+    use super::*;
+    use crate::{
+        aof::storage::{
+            format::SegmentMeta,
+            lmdb::{push_xaero_event, LmdbEnv},
+        },
+        indexing::storage::{
+            actors::{segment_reader_actor::SegmentReaderActor, segment_writer_actor::SegmentConfig},
+            format::{archive_xaero_event, PAGE_SIZE},
+        },
+        subject::SubjectHash,
+    };
     use bytemuck::bytes_of;
     use crossbeam::channel::unbounded;
-    use iroh_blobs::store::bao_tree::blake3;
     use memmap2::MmapMut;
     use tempfile::tempdir;
+    use xaeroflux_core::hash::{blake_hash, blake_hash_const, blake_hash_slice};
     use xaeroflux_core::{
         date_time::emit_secs,
         event::{EventType, SystemEventKind},
@@ -50,19 +62,6 @@ mod tests {
         system_paths::emit_data_path_with_subject_hash,
     };
     use xaeroflux_macros::subject;
-
-    use super::*;
-    use crate::{
-        aof::storage::{
-            format::SegmentMeta,
-            lmdb::{LmdbEnv, push_xaero_event},
-        },
-        indexing::storage::{
-            actors::{segment_reader_actor::SegmentReaderActor, segment_writer_actor::SegmentConfig},
-            format::{PAGE_SIZE, archive_xaero_event},
-        },
-        subject::SubjectHash,
-    };
 
     #[test]
     fn test_subject_macro() {
@@ -228,16 +227,12 @@ mod tests {
             xaeroflux_core::hash::sha_256_hash("cyan_object_white_board_id_134".as_bytes().to_vec());
 
         // Now compute the combined Blake3 hash exactly as the macro does:
-        let mut hasher_ws = blake3::Hasher::new();
-        hasher_ws.update("cyan_workspace_123".as_bytes());
-        let ws_blake = hasher_ws.finalize();
-        let mut hasher_obj = blake3::Hasher::new();
-        hasher_obj.update("cyan_object_white_board_id_134".as_bytes());
-        let obj_blake = hasher_obj.finalize();
-        let mut combined_hasher = blake3::Hasher::new();
-        combined_hasher.update(ws_blake.as_bytes());
-        combined_hasher.update(obj_blake.as_bytes());
-        let expected_combined: [u8; 32] = *combined_hasher.finalize().as_bytes();
+        let ws_blake = blake_hash_slice("cyan_workspace_123".as_bytes());
+        let obj_blake = blake_hash_slice("cyan_object_white_board_id_134".as_bytes());
+        let mut cb = Vec::new();
+        cb.extend_from_slice(&ws_blake);
+        cb.extend_from_slice(&obj_blake);
+        let expected_combined = blake_hash_slice(cb.as_slice());
 
         // Invoke the macro
         let subject = subject!("workspace/cyan_workspace_123/object/cyan_object_white_board_id_134");

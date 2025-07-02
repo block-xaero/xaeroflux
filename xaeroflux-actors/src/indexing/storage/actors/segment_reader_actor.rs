@@ -313,7 +313,6 @@ mod tests {
     use std::{thread::sleep, time::Duration};
 
     use bytemuck::bytes_of;
-    use iroh_blobs::store::bao_tree::blake3;
     use serial_test::serial;
     use tempfile::tempdir;
     use xaeroflux_core::{

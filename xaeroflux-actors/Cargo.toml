@@ -16,6 +16,10 @@ readme = "README.md"
 [lints.rust]
 unused = "allow"
 
+[[bin]]
+name = "test_discovery"
+path = "examples/test_discovery.rs"
+
 [lib]
 name = "xaeroflux_actors"  # This should match your library name without the "lib" prefix
 crate-type = ["staticlib", "cdylib", "rlib"] 
@@ -41,10 +45,9 @@ xaeroflux-macros = { version = "0.8.1-m5" }
 xaeroflux-crdts = { version = "0.8.1-m5" }
 ed25519-dalek = { version = "2.1.1", features = ["rand_core"] }
 rand = "0.8"
-iroh = {version = "0.35.0", "default-features" = true, features = ["discovery-local-network", "discovery-pkarr-dht"] }
+iroh = {version = "0.90.0", "default-features" = true, features = ["discovery-local-network", "discovery-pkarr-dht"] }
 multihash = "0.19.3" 
-iroh-gossip = { version = "0.35.0", default-features = false, features = ["net"] }
-iroh-blobs = "0.35.0"
+iroh-gossip = { version = "0.90.0", default-features = false, features = ["net"] }
 cid = "0.11.1"
 async-trait = "0.1.88"
 tokio = { version = "1.45.1", default-features = false, features = ["rt", "macros", "net", "sync"] }
@@ -69,6 +72,7 @@ crossbeam = "0.8.4"
 serde = { version = "1.0.219", features = ["derive"] }
 rustfix = "0.9.0"
 env_logger = "0.8.4"
+blake3 = "1.8.2"
 
 
 [profile.release]
