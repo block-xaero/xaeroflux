@@ -22,7 +22,7 @@ pub mod size;
 pub mod sys;
 pub mod system_paths;
 mod vector_clock;
-mod vector_clock_actor;
+pub mod vector_clock_actor;
 pub mod workspace;
 
 use std::{
