@@ -1,13 +1,13 @@
 // test_discovery.rs - Example test file
+use std::collections::HashSet;
+
 use bytemuck::Zeroable;
 use xaeroflux_actors::networking::{
     discovery::DHTDiscovery,
     iroh::{IrohState, XaeroDHTDiscovery},
 };
-use xaeroflux_core::{P2P_RUNTIME, init_p2p_runtime};
+use xaeroflux_core::{P2P_RUNTIME, date_time::emit_secs, init_p2p_runtime};
 use xaeroid::XaeroID;
-use std::collections::HashSet;
-use xaeroflux_core::date_time::emit_secs;
 
 pub fn main() {
     // Initialize logging
@@ -60,11 +60,12 @@ pub fn main() {
                             let peer_id = hex::encode(&peer.xaero_id_hash[..8]);
 
                             if known_peers.insert(peer_id.clone()) {
-                                println!("  🆕 NEW Peer {}: XaeroID={}, ",
-                                         i + 1,
-                                         peer_id,
-                                         // peer.sync_state.event_count,
-                                         // peer.bootstrap_priority
+                                println!(
+                                    "  🆕 NEW Peer {}: XaeroID={}, ",
+                                    i + 1,
+                                    peer_id,
+                                    // peer.sync_state.event_count,
+                                    // peer.bootstrap_priority
                                 );
                             } else {
                                 println!("  ♻️  Known Peer {}: XaeroID={}", i + 1, peer_id);

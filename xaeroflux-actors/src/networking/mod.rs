@@ -1,10 +1,10 @@
 use xaeroid::{XaeroCredential, XaeroProof};
 
+pub mod discovery;
 pub mod iroh;
 mod p2p;
 mod pool;
 mod state;
-pub mod discovery;
 
 pub fn xaero_id_zero() -> XaeroID {
     let xaero_proofs = [
@@ -31,17 +31,14 @@ pub fn xaero_id_zero() -> XaeroID {
 // Core traits and structs for XaeroFlux P2P networking
 use std::{collections::HashMap, time::SystemTime};
 
-use ::iroh::{endpoint::Connection, Endpoint, NodeId};
-use iroh_gossip::api::GossipTopic;
-use iroh_gossip::net::{Gossip};
+use ::iroh::{Endpoint, NodeId, endpoint::Connection};
+use iroh_gossip::{api::GossipTopic, net::Gossip};
 use rkyv::{Archive, Deserialize, Serialize};
 use rusted_ring_new::PooledEvent;
 use xaeroflux_core::pool::XaeroPeerEvent;
 use xaeroid::XaeroID;
 
 use crate::aof::storage::format::SegmentMeta;
-
-
 
 // =============================================================================
 // GOSSIPSUB COLLABORATION LAYER

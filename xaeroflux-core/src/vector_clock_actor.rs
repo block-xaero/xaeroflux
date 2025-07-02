@@ -7,7 +7,7 @@ use crate::date_time::emit_secs;
 
 // Better approach: Use repr(C) with manual size control
 #[repr(C)]
-#[derive(Debug,Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct XaeroClock {
     pub base_ts: u64,          // 8 bytes
     pub latest_timestamp: u16, // 2 bytes
@@ -18,7 +18,7 @@ unsafe impl Pod for XaeroClock {}
 unsafe impl Zeroable for XaeroClock {}
 
 #[repr(C)]
-#[derive(Debug,Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct XaeroVectorClockEntry([u8; 32], XaeroClock); // 32 + 16 = 48 bytes
 unsafe impl Pod for XaeroVectorClockEntry {}
 unsafe impl Zeroable for XaeroVectorClockEntry {}
@@ -47,7 +47,7 @@ impl XaeroClock {
 
 // Support 10 peers - increase structure size
 #[repr(C)]
-#[derive(Debug,Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct XaeroVectorClock {
     pub clock: XaeroClock,                  // 16 bytes
     pub peers: [XaeroVectorClockEntry; 10], // 10 * 48 = 480 bytes
