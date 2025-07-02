@@ -27,7 +27,7 @@ pub fn main() {
 
         // Create Iroh state
         println!("🌐 Initializing Iroh endpoint...");
-        let iroh_state = IrohState::new(&xaero_id).await.expect("Failed to create Iroh state");
+        let iroh_state = IrohState::new(&xaero_id).await;
         println!("📡 Node ID: {}", iroh_state.endpoint.node_id());
 
         // Create discovery
