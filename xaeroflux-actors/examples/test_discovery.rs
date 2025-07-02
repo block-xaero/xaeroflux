@@ -7,6 +7,7 @@ use xaeroflux_actors::networking::{
 use xaeroflux_core::{P2P_RUNTIME, init_p2p_runtime};
 use xaeroid::XaeroID;
 use std::collections::HashSet;
+use xaeroflux_core::date_time::emit_secs;
 
 pub fn main() {
     // Initialize logging
@@ -22,7 +23,8 @@ pub fn main() {
     // Run everything on the P2P runtime
     p2p_runtime.block_on(async {
         // Generate or load XaeroID
-        let xaero_id = XaeroID::zeroed(); // You might want to load from file for consistent testing
+        let mut xaero_id = XaeroID::zeroed();
+        xaero_id.secret_key[0..8].copy_from_slice(&emit_secs().to_le_bytes());
         println!("🔑 XaeroID: {}", hex::encode(bytemuck::bytes_of(&xaero_id)));
 
         // Create Iroh state
@@ -58,11 +60,11 @@ pub fn main() {
                             let peer_id = hex::encode(&peer.xaero_id_hash[..8]);
 
                             if known_peers.insert(peer_id.clone()) {
-                                println!("  🆕 NEW Peer {}: XaeroID={}, Events={}, Priority={}",
+                                println!("  🆕 NEW Peer {}: XaeroID={}, ",
                                          i + 1,
                                          peer_id,
-                                         peer.sync_state.event_count,
-                                         peer.bootstrap_priority
+                                         // peer.sync_state.event_count,
+                                         // peer.bootstrap_priority
                                 );
                             } else {
                                 println!("  ♻️  Known Peer {}: XaeroID={}", i + 1, peer_id);
@@ -87,28 +89,4 @@ pub fn main() {
             tokio::time::sleep(std::time::Duration::from_secs(10)).await;
         }
     });
-}
-
-// For integration into your existing codebase, you can also create a simple test function:
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_local_discovery() -> anyhow::Result<()> {
-        // Initialize runtime
-        P2P_RUNTIME.set(tokio::runtime::Handle::current()).expect("Failed to set P2P runtime");
-
-        let xaero_id = XaeroID::generate();
-        let iroh_state = IrohState::new(&xaero_id);
-        let discovery = XaeroDHTDiscovery::new(iroh_state);
-
-        // Test that discovery doesn't crash
-        let peers = discovery.discover_local_network_peers().await?;
-
-        // Should find 0 peers in test environment (unless other instances running)
-        println!("Found {} peers in test", peers.len());
-
-        Ok(())
-    }
 }

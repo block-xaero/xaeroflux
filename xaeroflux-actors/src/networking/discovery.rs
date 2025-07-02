@@ -1,13 +1,39 @@
 // discovery.rs
 use bytemuck::{Pod, Zeroable};
 use xaeroid::XaeroProof;
+#[derive(Debug, Clone, Copy)]
+#[repr(C, align(64))]
+pub struct XaeroDHTId{
+    pub xaero_id_hash: [u8; 32],
+    pub node_id_hash: [u8; 32],
+}
+impl XaeroDHTId{
+    pub fn to_bytes(&self) -> &[u8] {
+        bytemuck::bytes_of(self) // Zero-copy, respects your repr(C)
+    }
+
+    pub fn from_bytes(data: &[u8]) -> anyhow::Result<&Self> {
+        Ok(bytemuck::from_bytes(data))
+    }
+
+    pub fn to_discovery_string(&self) -> String {
+        hex::encode(self.to_bytes())
+    }
+
+    pub fn from_discovery_string(s: &str) -> anyhow::Result<Self> {
+        let bytes = hex::decode(s)?;
+        let record_ref = Self::from_bytes(&bytes)?;
+        Ok(*record_ref) // Copy the record
+    }
+}
+unsafe impl Pod for XaeroDHTId {}
+unsafe impl Zeroable for XaeroDHTId {}
 
 /// DHT record for XaeroID discovery and capability advertisement
 #[derive(Debug, Clone, Copy)]
 #[repr(C, align(64))]
 pub struct XaeroDHTRecord {
-    pub xaero_id_hash: [u8; 32],
-    pub node_id_hash: [u8; 32],
+    pub id: XaeroDHTId,
     pub zk_proofs: [XaeroProof; 4],
     pub groups: [[u8; 32]; 10], // evict the oldest record.
     pub last_seen: u64,
@@ -25,9 +51,6 @@ impl XaeroDHTRecord {
     }
 
     pub fn from_bytes(data: &[u8]) -> anyhow::Result<&Self> {
-        if data.len() != std::mem::size_of::<XaeroDHTRecord>() {
-            return Err(anyhow::anyhow!("Invalid data length for XaeroDHTRecord"));
-        }
         Ok(bytemuck::from_bytes(data))
     }
 
@@ -91,7 +114,7 @@ pub trait DHTDiscovery {
     async fn find_peers_with_zk_proof(&self, capability: XaeroProof) -> anyhow::Result<Vec<XaeroDHTRecord>>;
 
     /// Network-aware discovery for same WiFi/VPN optimization
-    async fn discover_local_network_peers(&self) -> anyhow::Result<Vec<XaeroDHTRecord>>;
+    async fn discover_local_network_peers(&self) -> anyhow::Result<Vec<XaeroDHTId>>;
 
     /// Discover peers within network latency threshold (for relay selection)
     async fn discover_nearby_peers(&self, max_latency_ms: u32) -> anyhow::Result<Vec<XaeroDHTRecord>>;
