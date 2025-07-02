@@ -1,13 +1,9 @@
 use std::sync::Arc;
 
-use iroh::Endpoint;
 
-use crate::networking::BufferStatus;
 
 pub struct XaeroPeerState {
-    pub endpoint: Arc<Endpoint>,
     pub current_phase: XaeroProtocolPhase,
-    pub buffer_status: BufferStatus,
 }
 pub struct XaeroPeer {
     pub xaero_id: [u8; 32],
