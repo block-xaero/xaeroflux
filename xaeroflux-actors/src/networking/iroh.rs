@@ -5,21 +5,21 @@ use bytemuck::Zeroable;
 use futures::{FutureExt, StreamExt, TryFutureExt};
 use hex::FromHexError;
 use iroh::{
-    discovery::{Discovery, UserData}, endpoint::BindError,
-    Endpoint,
-    SecretKey,
+    Endpoint, SecretKey,
+    discovery::{Discovery, UserData},
+    endpoint::BindError,
 };
 use iroh_gossip::net::Gossip;
 use rkyv::rancor::Failure;
 use xaeroflux_core::{
+    P2P_RUNTIME,
     date_time::emit_secs,
     hash::{blake_hash, blake_hash_slice},
     vector_clock_actor::XaeroVectorClock,
-    P2P_RUNTIME,
 };
 use xaeroid::{XaeroID, XaeroProof};
 
-use crate::networking::discovery::{DHTDiscovery, SyncAssessment, XaeroDHTRecord, XaeroSyncState};
+use crate::networking::discovery::{DHTDiscovery, SyncAssessment, XaeroDHTId, XaeroDHTRecord, XaeroSyncState};
 
 #[derive(Debug)]
 pub struct IrohState {
@@ -51,8 +51,10 @@ impl IrohState {
         let xaero_id_hash = blake_hash_slice(bytemuck::bytes_of(xid));
         let node_id_hash = *endpoint.node_id().as_bytes(); // de-ref copy
         let x_dht_record = XaeroDHTRecord {
-            xaero_id_hash,
-            node_id_hash,
+            id: XaeroDHTId {
+                xaero_id_hash,
+                node_id_hash,
+            },
             zk_proofs: xid.credential.proofs,
             groups: [[0u8; 32]; 10], // TODO: at most and atleast median
             last_seen: emit_secs(),
@@ -85,8 +87,10 @@ impl IrohState {
         let node_id_hash = *self.endpoint.node_id().as_bytes();
 
         let updated_record = XaeroDHTRecord {
-            xaero_id_hash,
-            node_id_hash,
+            id: XaeroDHTId {
+                xaero_id_hash,
+                node_id_hash,
+            },
             zk_proofs: self.xaero_id.credential.proofs,
             groups: [[0u8; 32]; 10], // TODO: update with actual groups
             last_seen: emit_secs(),
@@ -116,8 +120,10 @@ impl XaeroDHTDiscovery {
         let node_id_hash = *iroh_state.endpoint.node_id().as_bytes();
 
         let dht_record = XaeroDHTRecord {
-            xaero_id_hash,
-            node_id_hash,
+            id: XaeroDHTId {
+                xaero_id_hash,
+                node_id_hash,
+            },
             zk_proofs: iroh_state.xaero_id.credential.proofs,
             groups: [[0u8; 32]; 10],
             last_seen: emit_secs(),
@@ -159,32 +165,34 @@ impl DHTDiscovery for XaeroDHTDiscovery {
     }
 
     async fn discover_group_members(&self, group_id: [u8; 32]) -> anyhow::Result<Vec<XaeroDHTRecord>> {
-        let peers = self.discover_local_network_peers().await?;
-        let group_members: Vec<XaeroDHTRecord> = peers
-            .into_iter()
-            .filter(|peer| peer.groups.contains(&group_id))
-            .collect();
-
-        tracing::info!(
-            "Found {} members in group {:?}",
-            group_members.len(),
-            hex::encode(&group_id[..8])
-        );
-        Ok(group_members)
+        // let peers = self.discover_local_network_peers().await?;
+        // let group_members: Vec<XaeroDHTRecord> = peers
+        //     .into_iter()
+        //     .filter(|peer| peer.groups.contains(&group_id))
+        //     .collect();
+        //
+        // tracing::info!(
+        //     "Found {} members in group {:?}",
+        //     group_members.len(),
+        //     hex::encode(&group_id[..8])
+        // );
+        // Ok(group_members)
+        todo!()
     }
 
     async fn find_peers_with_zk_proof(&self, capability: XaeroProof) -> anyhow::Result<Vec<XaeroDHTRecord>> {
-        let peers = self.discover_local_network_peers().await?;
-        let capable_peers: Vec<XaeroDHTRecord> = peers
-            .into_iter()
-            .filter(|peer| true /* peer.zk_proofs.contains(&capability) */)
-            .collect();
-        // TODO: add compare
-        tracing::info!("Found {} peers with required ZK proof capability", capable_peers.len());
-        Ok(capable_peers)
+        // let peers = self.discover_local_network_peers().await?;
+        // let capable_peers: Vec<XaeroDHTRecord> = peers
+        //     .into_iter()
+        //     .filter(|peer| true /* peer.zk_proofs.contains(&capability) */)
+        //     .collect();
+        // // TODO: add compare
+        // tracing::info!("Found {} peers with required ZK proof capability", capable_peers.len());
+        // Ok(capable_peers)
+        todo!()
     }
 
-    async fn discover_local_network_peers(&self) -> anyhow::Result<Vec<XaeroDHTRecord>> {
+    async fn discover_local_network_peers(&self) -> anyhow::Result<Vec<XaeroDHTId>> {
         let mut peers = Vec::new();
         let mut seen_nodes = HashSet::new();
         let mut discovery_stream = self.iroh_state.endpoint.discovery_stream();
@@ -215,7 +223,7 @@ impl DHTDiscovery for XaeroDHTDiscovery {
                             Some(user_data) => {
                                 let data_str = user_data.to_string();
                                 match hex::decode(&data_str) {
-                                    Ok(bytes) => match XaeroDHTRecord::from_bytes(&bytes) {
+                                    Ok(bytes) => match XaeroDHTId::from_bytes(&bytes) {
                                         Ok(peer_record) => {
                                             tracing::info!(
                                                 "✅ Found XaeroFlux peer: {} with XaeroID: {}",
@@ -270,8 +278,9 @@ impl DHTDiscovery for XaeroDHTDiscovery {
     async fn discover_nearby_peers(&self, max_latency_ms: u32) -> anyhow::Result<Vec<XaeroDHTRecord>> {
         // For now, just return local network peers
         // TODO: Add actual latency measurement
-        tracing::warn!("discover_nearby_peers not fully implemented, returning local network peers");
-        self.discover_local_network_peers().await
+        // tracing::warn!("discover_nearby_peers not fully implemented, returning local network peers");
+        // self.discover_local_network_peers().await
+        todo!()
     }
 
     async fn update_sync_state(&self, sync_state: XaeroSyncState) -> anyhow::Result<()> {
