@@ -3,11 +3,11 @@ use bytemuck::{Pod, Zeroable};
 use xaeroid::XaeroProof;
 #[derive(Debug, Clone, Copy)]
 #[repr(C, align(64))]
-pub struct XaeroDHTId{
+pub struct XaeroDHTId {
     pub xaero_id_hash: [u8; 32],
     pub node_id_hash: [u8; 32],
 }
-impl XaeroDHTId{
+impl XaeroDHTId {
     pub fn to_bytes(&self) -> &[u8] {
         bytemuck::bytes_of(self) // Zero-copy, respects your repr(C)
     }

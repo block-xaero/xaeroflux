@@ -14,9 +14,9 @@ use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 use xaeroflux_core::{
+    XaeroPoolManager,
     event::ScanWindow, // Import from xaeroflux_core
     pipe::{BusKind, Pipe},
-    XaeroPoolManager,
 };
 
 use crate::subject::Subscription;
@@ -38,30 +38,31 @@ mod tests {
         time::Duration,
     };
 
-    use super::*;
-    use crate::{
-        aof::storage::{
-            format::SegmentMeta,
-            lmdb::{push_xaero_event, LmdbEnv},
-        },
-        indexing::storage::{
-            actors::{segment_reader_actor::SegmentReaderActor, segment_writer_actor::SegmentConfig},
-            format::{archive_xaero_event, PAGE_SIZE},
-        },
-        subject::SubjectHash,
-    };
     use bytemuck::bytes_of;
     use crossbeam::channel::unbounded;
     use memmap2::MmapMut;
     use tempfile::tempdir;
-    use xaeroflux_core::hash::{blake_hash, blake_hash_const, blake_hash_slice};
     use xaeroflux_core::{
         date_time::emit_secs,
         event::{EventType, SystemEventKind},
+        hash::{blake_hash, blake_hash_const, blake_hash_slice},
         init_xaero_pool, initialize, shutdown_all_pools,
         system_paths::emit_data_path_with_subject_hash,
     };
     use xaeroflux_macros::subject;
+
+    use super::*;
+    use crate::{
+        aof::storage::{
+            format::SegmentMeta,
+            lmdb::{LmdbEnv, push_xaero_event},
+        },
+        indexing::storage::{
+            actors::{segment_reader_actor::SegmentReaderActor, segment_writer_actor::SegmentConfig},
+            format::{PAGE_SIZE, archive_xaero_event},
+        },
+        subject::SubjectHash,
+    };
 
     #[test]
     fn test_subject_macro() {

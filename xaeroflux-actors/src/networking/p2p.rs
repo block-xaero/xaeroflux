@@ -1,7 +1,5 @@
 use std::sync::Arc;
 
-
-
 pub struct XaeroPeerState {
     pub current_phase: XaeroProtocolPhase,
 }
