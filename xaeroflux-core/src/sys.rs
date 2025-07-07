@@ -3,7 +3,7 @@ use libc;
 use memmap2::MmapMut;
 pub const FILE_SIZE: usize = 1024 * 1024;
 
-pub fn get_page_size() -> usize {
+pub fn get_page_size() -> u32 {
     unsafe {
         libc::sysconf(libc::_SC_PAGESIZE)
             .try_into()

@@ -95,7 +95,7 @@ impl<'a> Iterator for PageEventIterator<'a> {
 /// Each yielded `&[u8]` contains a complete event frame that can be processed
 /// with `unarchive_to_xaero_event()` or `unarchive_to_raw_data()`.
 pub fn iter_all_events(mmap: &Mmap) -> impl Iterator<Item = &'_ [u8]> + '_ {
-    mmap.chunks_exact(PAGE_SIZE).flat_map(PageEventIterator::new)
+    mmap.chunks_exact(PAGE_SIZE as usize).flat_map(PageEventIterator::new)
 }
 
 /// Helper function to validate event frame integrity
@@ -157,7 +157,8 @@ mod tests {
             .truncate(true)
             .open(&path)
             .expect("open file");
-        file.set_len((n_pages * PAGE_SIZE) as u64).expect("failed_to_wrap");
+        file.set_len((n_pages * PAGE_SIZE as usize) as u64)
+            .expect("failed_to_wrap");
         let mm = unsafe { MmapMut::map_mut(&file).expect("failed_to_wrap") };
         (tmp, path, mm)
     }
@@ -197,7 +198,7 @@ mod tests {
 
         // Read back and iterate
         let mmap = read_segment_file(path.to_str().expect("failed_to_wrap")).expect("failed_to_wrap");
-        let page = &mmap[..PAGE_SIZE];
+        let page = &mmap[..PAGE_SIZE as usize];
         let mut iter = PageEventIterator::new(page);
 
         // Get first event frame
@@ -250,7 +251,7 @@ mod tests {
 
         // Place in different pages
         mm[0..f1.len()].copy_from_slice(&f1);
-        mm[PAGE_SIZE..PAGE_SIZE + f2.len()].copy_from_slice(&f2);
+        mm[PAGE_SIZE as usize..PAGE_SIZE as usize + f2.len()].copy_from_slice(&f2);
         mm.flush().expect("failed_to_wrap");
 
         // Read back and iterate all events

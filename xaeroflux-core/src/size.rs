@@ -13,15 +13,15 @@ use crate::sys;
 ///
 /// Uses `OnceLock` to ensure the page size is determined exactly once
 /// via `sys::get_page_size()`.
-pub static PAGE_SIZE: OnceLock<usize> = OnceLock::new();
+pub static PAGE_SIZE: OnceLock<u32> = OnceLock::new();
 /// Number of pages that constitute a single segment.
 ///
 /// A segment comprises this many pages for storage partitioning.
-const PAGES_PER_SEGMENT: usize = 1_024;
+const PAGES_PER_SEGMENT: u32 = 1_024;
 /// Global, lazily-initialized segment size in bytes.
 ///
 /// Calculated as `PAGE_SIZE * PAGES_PER_SEGMENT` and stored once.
-pub static SEGMENT_SIZE: OnceLock<usize> = OnceLock::new();
+pub static SEGMENT_SIZE: OnceLock<u32> = OnceLock::new();
 
 /// Initialize the global `PAGE_SIZE`.
 ///

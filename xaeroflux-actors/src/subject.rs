@@ -24,7 +24,7 @@ use crate::{
     XFluxHandle,
     aof::actor::AOFActor,
     indexing::storage::actors::{
-        mmr_actor::MmrIndexingActor,
+        mmr_actor::MmrActor,
         secondary_index_actor::SecondaryIndexActor,
         segment_reader_actor::SegmentReaderActor,
         segment_writer_actor::{SegmentConfig, SegmentWriterActor},
@@ -327,27 +327,46 @@ impl Subject {
         self.subscribe_with(ThreadPoolForSubjectMaterializer::new(), handler)
     }
 
-    pub(crate) fn setup_system_actors(self: Arc<Self>) -> SystemActors {
+    pub(crate) fn setup_system_actors(self: Arc<Self>) -> Result<SystemActors, Box<dyn std::error::Error>> {
         if self.system_actor_materialized.load(Ordering::SeqCst) {
-            panic!("System actor materialized is already initialized");
+            return Err("System actor materialized is already initialized".into());
         }
-        tracing::debug!("unsafe_run called for Subject: {}", self.name);
-        tracing::debug!("initializing control bus");
-        // 4) hook up the actor against the same project_root
-        tracing::debug!("control bus initialized");
+
+        tracing::debug!("Setting up system actors for Subject: {}", self.name);
+        tracing::debug!("Initializing ring buffer actors");
+
         self.system_actor_materialized.store(true, Ordering::SeqCst);
-        // Instantiate system actors
+
+        // Get subject hash for actor initialization
         let subject_hash = self.hash;
+
+        // Create AOF actors (still using old Pipe system for now)
         let control_aof = Arc::new(AOFActor::new(self.hash, self.control.clone()));
         let data_aof = Arc::new(AOFActor::new(self.hash, self.data.clone()));
-        let control_seg_writer = Arc::new(SegmentWriterActor::new(self.hash, self.control.clone()));
-        let data_seg_writer = Arc::new(SegmentWriterActor::new(self.hash, self.data.clone()));
-        let data_mmr = Arc::new(MmrIndexingActor::new(self.hash, self.data.clone(), None));
-        // Create the secondary-index actor
-        // Reuse the same LMDB environment used by AOFActor:
+
+        // Create NEW ring buffer segment writer actors
+        let control_seg_writer =
+            SegmentWriterActor::spin(subject_hash, BusKind::Control, Some(SegmentConfig::default()))?;
+        let data_seg_writer = SegmentWriterActor::spin(subject_hash, BusKind::Data, Some(SegmentConfig::default()))?;
+
+        // Create NEW ring buffer MMR actor for data bus (with segment writer integration)
+        let data_mmr = MmrActor::spin(
+            subject_hash,
+            BusKind::Data,
+            Some(SegmentConfig::default()), // Include segment writer integration
+        )?;
+
+        // Create NEW ring buffer secondary index actor
+        // Reuse the same LMDB environment used by AOFActor
         let secondary_lmdb_env = data_aof.env.clone();
-        let data_secondary_indexer =
-            SecondaryIndexActor::new(self.data.clone(), secondary_lmdb_env, Duration::from_secs(60));
+        let data_secondary_indexer = SecondaryIndexActor::spin(
+            subject_hash,
+            BusKind::Data,
+            secondary_lmdb_env,
+            Some(Duration::from_secs(300)), // 5 minute TTL
+        )?;
+
+        // Create segment reader actors (still using old system for now)
         let control_seg_reader = Arc::new(SegmentReaderActor::new(
             subject_hash,
             self.control.clone(),
@@ -358,7 +377,12 @@ impl Subject {
             self.data.clone(),
             SegmentConfig::default(),
         ));
-        SystemActors {
+
+        tracing::info!("System actors initialized successfully for Subject: {}", self.name);
+        tracing::info!("Ring buffer actors: MMR, Segment Writers (Control/Data), Secondary Index - ✅");
+        tracing::info!("Legacy Pipe actors: AOF (Control/Data), Segment Readers (Control/Data) - 🚧");
+
+        Ok(SystemActors {
             control_aof,
             data_aof,
             control_seg_writer,
@@ -367,6 +391,6 @@ impl Subject {
             data_secondary_indexer,
             control_seg_reader,
             data_seg_reader,
-        }
+        })
     }
 }

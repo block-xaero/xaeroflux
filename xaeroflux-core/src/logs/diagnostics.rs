@@ -142,7 +142,7 @@ mod diag_tests {
             .read(true)
             .open(&file_path)
             .expect("open segment file");
-        let page1 = vec![0xAA; page_size];
+        let page1 = vec![0xAA; page_size as usize];
         file.write_all(&page1).expect("write page1");
         file.flush().expect("flush");
 
@@ -153,7 +153,7 @@ mod diag_tests {
         thread::sleep(Duration::from_millis(50));
 
         // 4) append second page
-        let page2 = vec![0xBB; page_size];
+        let page2 = vec![0xBB; page_size as usize];
         file.write_all(&page2).expect("write page2");
         file.flush().expect("flush");
 

@@ -20,11 +20,11 @@ use bytemuck::{Pod, Zeroable};
 #[repr(C, packed)]
 #[derive(Debug, Clone, Default, Copy)]
 pub struct SegmentMeta {
-    pub page_index: usize,
-    pub segment_index: usize,
-    pub write_pos: usize,
-    pub byte_offset: usize,
-    pub latest_segment_id: usize,
+    pub page_index: u32,
+    pub segment_index: u32,
+    pub write_pos: u32,
+    pub byte_offset: u32,
+    pub latest_segment_id: u32,
     pub ts_start: u64, // Timestamp of the first event in this segment
     pub ts_end: u64,   // Timestamp of the last event in this segment
 }
