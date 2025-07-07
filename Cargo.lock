@@ -6746,6 +6746,7 @@ dependencies = [
  "liblmdb",
  "memmap2",
  "multihash",
+ "paste",
  "rand 0.8.5",
  "rkyv 0.8.10",
  "rkyv_dyn",
@@ -6764,7 +6765,7 @@ dependencies = [
  "tracing-subscriber 0.3.19",
  "xaeroflux-core 0.8.1-m5",
  "xaeroflux-crdts 0.8.1-m5 (registry+https://github.com/rust-lang/crates.io-index)",
- "xaeroflux-macros 0.8.1-m5 (registry+https://github.com/rust-lang/crates.io-index)",
+ "xaeroflux-macros 0.8.1-m5",
  "xaeroid",
 ]
 
@@ -6924,6 +6925,7 @@ name = "xaeroflux-macros"
 version = "0.8.1-m5"
 dependencies = [
  "blake3",
+ "paste",
  "proc-macro2",
  "quote",
  "syn 2.0.103",

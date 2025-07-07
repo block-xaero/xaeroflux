@@ -173,11 +173,11 @@ mod meta_tests {
     /// Helper to build a SegmentMeta with predictable fields.
     fn make_meta(ts_start: u64, ts_end: u64, idx: usize) -> SegmentMeta {
         SegmentMeta {
-            page_index: idx * 10,
-            segment_index: idx,
-            write_pos: idx * 100,
-            byte_offset: idx * 1000,
-            latest_segment_id: idx,
+            page_index: idx as u32 * 10,
+            segment_index: idx as u32,
+            write_pos: idx as u32 * 100,
+            byte_offset: idx as u32 * 1000,
+            latest_segment_id: idx as u32,
             ts_start,
             ts_end,
         }

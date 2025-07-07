@@ -15,6 +15,7 @@ readme = "README.md"
 proc-macro = true
 
 [dependencies]
+paste = "1.0"
 xaeroflux-core = { version = "0.8.1-m5" }
 trybuild = "1.0.105"
 proc-macro2 = "1.0.95"

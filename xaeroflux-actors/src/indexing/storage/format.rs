@@ -10,22 +10,22 @@ use std::{mem, sync::Arc};
 
 use bytemuck::{Pod, Zeroable};
 use rusted_ring::AllocationError;
-use xaeroflux_core::{XaeroPoolManager, event::XaeroEvent};
+use xaeroflux_core::{XaeroPoolManager, event::XaeroEvent, pool::XaeroInternalEvent};
 
 /// Magic prefix used at the start of all on-disk pages and events.
 pub const XAERO_MAGIC: [u8; 4] = *b"XAER";
 /// Size in bytes of the `XaeroOnDiskEventHeader`.
 pub const EVENT_HEADER_SIZE: usize = mem::size_of::<XaeroOnDiskEventHeader>(); // 24 bytes
 /// Total header size (magic, type, padding, and timestamp) in bytes.
-pub const HEADER_SIZE: usize = 4 + 1 + 7 + 8 + 8 + 8; // = 36
+pub const HEADER_SIZE: u32 = 4 + 1 + 7 + 8 + 8 + 8; // = 36
 /// Size in bytes of a single on-disk MMR node entry.
-pub const NODE_SIZE: usize = 32 + 1 + 7; // = 40
+pub const NODE_SIZE: u32 = 32 + 1 + 7; // = 40
 /// Size of each on-disk page (16 KiB).
-pub const PAGE_SIZE: usize = 16 * 1024; // 16 KiB
+pub const PAGE_SIZE: u32 = 16 * 1024; // 16 KiB
 /// Number of MMR nodes that fit in one page after accounting for headers.
-pub const NODES_PER_PAGE: usize = (PAGE_SIZE - HEADER_SIZE) / NODE_SIZE;
+pub const NODES_PER_PAGE: u32 = (PAGE_SIZE - HEADER_SIZE) / NODE_SIZE;
 /// Number of pages per segment file.
-pub const PAGES_PER_SEGMENT: usize = 1_024;
+pub const PAGES_PER_SEGMENT: u32 = 1_024;
 
 /// On-disk representation of a single Merkle Mountain Range node.
 ///
@@ -58,11 +58,15 @@ pub struct MmrOnDiskPage {
     pub version: u64,     // format version
     pub leaf_start: u64,  // offset in leaf_hashes of this page's first leaf
     pub total_nodes: u64, // total nodes in entire MMR at this point
-    pub nodes: [MmrOnDiskNode; NODES_PER_PAGE],
-    _pad: [u8; PAGE_SIZE - HEADER_SIZE - NODE_SIZE * NODES_PER_PAGE],
+    pub nodes: [MmrOnDiskNode; NODES_PER_PAGE as usize],
+    _pad: [u8; (PAGE_SIZE - HEADER_SIZE - NODE_SIZE * NODES_PER_PAGE) as usize],
 }
 unsafe impl Zeroable for MmrOnDiskPage {}
 unsafe impl Pod for MmrOnDiskPage {}
+
+const fn archive_buffer_size<const SIZE: usize>() -> usize {
+    EVENT_HEADER_SIZE + SIZE
+}
 
 /// Header for an archived event stored on disk.
 ///
@@ -86,6 +90,40 @@ pub struct XaeroOnDiskEventHeader {
 unsafe impl Pod for XaeroOnDiskEventHeader {}
 unsafe impl Zeroable for XaeroOnDiskEventHeader {}
 const _: () = assert!(std::mem::size_of::<XaeroOnDiskEventHeader>() == 24);
+
+pub use paste::paste;
+macro_rules! impl_archive_for_size {
+    ($size:expr) => {
+        paste::paste! {
+            pub fn [<archive_xaero_internal_event_ $size>](event: XaeroInternalEvent<$size>) -> [u8; EVENT_HEADER_SIZE + $size] {
+                let mut result = [0u8; EVENT_HEADER_SIZE + $size];
+
+                // Header section (32 bytes)
+                result[0..32].copy_from_slice(&event.xaero_id_hash);
+                result[32..64].copy_from_slice(&event.vector_clock_hash);
+
+                // Event data section - handle size correctly
+                let event_data = &event.evt.data;
+                let copy_len = std::cmp::min(event_data.len(), $size);
+                result[EVENT_HEADER_SIZE..EVENT_HEADER_SIZE + copy_len].copy_from_slice(&event_data[..copy_len]);
+
+                // Set remaining bytes to zero if event_data is smaller than $size
+                if copy_len < $size {
+                    result[EVENT_HEADER_SIZE + copy_len..].fill(0);
+                }
+
+                result
+            }
+        }
+    };
+}
+
+// Generate functions for your T-shirt sizes
+impl_archive_for_size!(64); // XS
+impl_archive_for_size!(256); // S
+impl_archive_for_size!(1024); // M
+impl_archive_for_size!(4096); // L
+impl_archive_for_size!(16384); // XL
 
 /// Serialize an Arc<XaeroEvent> to a byte vector ready for paging.
 ///
@@ -133,6 +171,12 @@ pub fn archive_xaero_event(xaero_event: &Arc<XaeroEvent>) -> Vec<u8> {
     bytes
 }
 
+// What your macro should generate:
+pub const ARCHIVE_SIZE_64: usize = EVENT_HEADER_SIZE + std::mem::size_of::<XaeroInternalEvent<64>>();
+pub const ARCHIVE_SIZE_256: usize = EVENT_HEADER_SIZE + std::mem::size_of::<XaeroInternalEvent<256>>();
+pub const ARCHIVE_SIZE_1024: usize = EVENT_HEADER_SIZE + std::mem::size_of::<XaeroInternalEvent<1024>>();
+pub const ARCHIVE_SIZE_4096: usize = EVENT_HEADER_SIZE + std::mem::size_of::<XaeroInternalEvent<4096>>();
+pub const ARCHIVE_SIZE_16384: usize = EVENT_HEADER_SIZE + std::mem::size_of::<XaeroInternalEvent<16384>>();
 /// Parse a memory slice into an event header and raw event data.
 ///
 /// Validates the magic prefix and payload length,

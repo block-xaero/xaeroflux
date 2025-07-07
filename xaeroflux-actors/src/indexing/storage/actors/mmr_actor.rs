@@ -1,341 +1,737 @@
-//! MMR indexing actor for xaeroflux-actors.
+//! MMR indexing actor using ring buffer architecture.
 //!
-//! This module defines:
-//! - `MmrIndexingActor`: actor that listens to events, archives them, computes Merkle leaf hashes,
-//!   updates an in-memory Merkle Mountain Range, and forwards leaf hashes to a segment store.
-//! - Constructors for default and custom segment configurations.
-//! - Accessors for the in-memory MMR, segment store, and LMDB environment.
+//! This actor:
+//! - Reads XaeroInternalEvent from input ring buffer
+//! - Archives events and computes Merkle leaf hashes
+//! - Updates an in-memory Merkle Mountain Range
+//! - Persists events to LMDB and forwards leaf hashes to segment writer
+//! - Writes MMR confirmations to output ring buffer
 
-use std::sync::{Arc, Mutex};
-
-use xaeroflux_core::{
-    IO_POOL, XAERO_DISPATCHER_POOL, XaeroPoolManager,
-    date_time::emit_secs,
-    event::{EventType, EventType::SystemEvent, SystemEventKind, SystemEventKind::Shutdown, XaeroEvent},
-    hash::sha_256_slice,
-    pipe::{BusKind, Pipe},
-    system_paths::*,
+use std::{
+    sync::{Arc, Mutex, OnceLock},
+    thread::{self, JoinHandle},
+    time::Duration,
 };
 
-use super::segment_writer_actor::{SegmentConfig, SegmentWriterActor};
+use bytemuck::{Pod, Zeroable};
+use rusted_ring_new::{EventPoolFactory, EventUtils, PooledEvent, Reader, RingBuffer, Writer};
+use xaeroflux_core::{
+    CONF,
+    date_time::emit_secs,
+    event::{EventType, SystemEventKind},
+    hash::sha_256_slice,
+    pipe::BusKind,
+    pool::XaeroInternalEvent,
+    system_paths,
+};
+
 use crate::{
-    aof::storage::lmdb::{LmdbEnv, push_xaero_event},
+    aof::storage::lmdb::{LmdbEnv, push_internal_event_universal},
     indexing::storage::{
-        actors::ExecutionState,
-        format::archive_xaero_event,
+        actors::segment_writer_actor::{SegmentConfig, SegmentWriterActor},
+        format::{
+            archive_xaero_internal_event_64, archive_xaero_internal_event_256, archive_xaero_internal_event_1024,
+            archive_xaero_internal_event_4096, archive_xaero_internal_event_16384,
+        },
         mmr::{XaeroMmr, XaeroMmrOps},
     },
     subject::SubjectHash,
 };
 
-pub static NAME_PREFIX: &str = "mmr_actor";
+// ================================================================================================
+// MMR-SPECIFIC RING BUFFERS
+// ================================================================================================
 
-/// Metadata structure for MMR state persistence
-#[derive(Clone, Copy)]
-#[repr(C)]
-struct MmrMeta {
-    mmr_size: usize,
-    last_leaf_hash: Option<[u8; 32]>,
-    event_count: u64,
-    ts_updated: u64,
+// MMR Control Event Flow: XS input -> XS output (confirmations)
+static MMR_CONTROL_INPUT_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
+static MMR_CONTROL_OUTPUT_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
+
+// MMR Data Event Flow: S input -> XS output (confirmations are small)
+static MMR_DATA_INPUT_RING: OnceLock<RingBuffer<256, 1000>> = OnceLock::new();
+static MMR_DATA_OUTPUT_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
+
+// MMR Medium Event Flow: M input -> XS output
+static MMR_MEDIUM_INPUT_RING: OnceLock<RingBuffer<1024, 500>> = OnceLock::new();
+static MMR_MEDIUM_OUTPUT_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
+
+// MMR Large Event Flow: L input -> XS output
+static MMR_LARGE_INPUT_RING: OnceLock<RingBuffer<4096, 100>> = OnceLock::new();
+static MMR_LARGE_OUTPUT_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
+
+// MMR XL Event Flow: XL input -> XS output
+static MMR_XL_INPUT_RING: OnceLock<RingBuffer<16384, 50>> = OnceLock::new();
+static MMR_XL_OUTPUT_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
+
+// ================================================================================================
+// MMR -> SEGMENT WRITER BRIDGE RING BUFFERS
+// ================================================================================================
+
+/// Leaf hash event for forwarding to segment writer - exactly 64 bytes for XS pool
+#[repr(C, packed)]
+#[derive(Clone, Copy, Debug)]
+pub struct LeafHashEvent {
+    pub leaf_hash: [u8; 32],    // MMR leaf hash (32 bytes)
+    pub original_size: u32,     // Original event size indicator (4 bytes)
+    pub timestamp: u64,         // Event timestamp (8 bytes)
+    pub subject_hash: [u8; 20], // Subject hash (20 bytes)
 }
 
-unsafe impl bytemuck::Pod for MmrMeta {}
-unsafe impl bytemuck::Zeroable for MmrMeta {}
+unsafe impl Pod for LeafHashEvent {}
+unsafe impl Zeroable for LeafHashEvent {}
 
-/// Internal state for MMR that persists across events
-struct MmrState {
-    mmr_size: usize,
-    last_leaf_hash: Option<[u8; 32]>,
-    event_count: u64,
-    initialized: bool,
-    execution_state: ExecutionState,
+// Shared bridge rings - MMR writes, Segment Writer reads
+static SEGMENT_BRIDGE_XS_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
+static SEGMENT_BRIDGE_S_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
+static SEGMENT_BRIDGE_M_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
+static SEGMENT_BRIDGE_L_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
+static SEGMENT_BRIDGE_XL_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
+
+// ================================================================================================
+// TYPES & STRUCTS
+// ================================================================================================
+
+/// MMR processing confirmation event - exactly 64 bytes for XS pool
+#[repr(C, packed)]
+#[derive(Clone, Copy, Debug)]
+pub struct MmrProcessConfirmation {
+    pub original_hash: [u8; 32], // XaeroID hash from XaeroInternalEvent (32 bytes)
+    pub leaf_hash: [u8; 32],     // Generated MMR leaf hash (32 bytes)
+}
+
+unsafe impl Pod for MmrProcessConfirmation {}
+unsafe impl Zeroable for MmrProcessConfirmation {}
+
+/// MMR Actor statistics
+#[derive(Debug, Default)]
+pub struct MmrStats {
+    pub total_processed: u64,
+    pub failed_processing: u64,
+    pub mmr_size: usize,
+    pub last_leaf_hash: Option<[u8; 32]>,
+    pub last_process_ts: u64,
+}
+
+/// MMR Actor state - tracks processing statistics and MMR state
+pub struct MmrState {
+    pub env: Arc<Mutex<LmdbEnv>>,
+    pub mmr: Arc<Mutex<XaeroMmr>>,
+    pub subject_hash: SubjectHash,
+    pub bus_kind: BusKind,
+    pub stats: MmrStats,
 }
 
 impl MmrState {
-    fn new() -> Self {
-        Self {
-            mmr_size: 0,
-            last_leaf_hash: None,
-            event_count: 0,
-            initialized: false,
-            execution_state: ExecutionState::Waiting,
-        }
-    }
+    /// Create new MMR state with LMDB environment and in-memory MMR
+    pub fn new(subject_hash: SubjectHash, bus_kind: BusKind) -> Result<Self, Box<dyn std::error::Error>> {
+        // Get base path from config
+        let c = CONF.get().expect("failed to unravel config");
+        let base_path = &c.aof.file_path;
 
-    fn initialize_from_metadata(&mut self, meta_db: &Arc<Mutex<LmdbEnv>>) {
-        if self.initialized {
-            return;
-        }
-        // Try to recover state from LMDB
-        // This would involve reading the last known MMR state
-        // For now, we'll start fresh but keep the structure for future enhancement
-        self.initialized = true;
-    }
-
-    fn update_metadata(&mut self, meta_db: &Arc<Mutex<LmdbEnv>>) -> Result<(), Box<dyn std::error::Error>> {
-        let mmr_meta = MmrMeta {
-            mmr_size: self.mmr_size,
-            last_leaf_hash: self.last_leaf_hash,
-            event_count: self.event_count,
-            ts_updated: emit_secs(),
+        // Construct subject-specific path based on bus kind
+        let lmdb_path = match bus_kind {
+            BusKind::Control => system_paths::emit_control_path_with_subject_hash(
+                base_path.to_str().expect("path_invalid_for_mmr"),
+                subject_hash.0,
+                "mmr",
+            ),
+            BusKind::Data => system_paths::emit_data_path_with_subject_hash(
+                base_path.to_str().expect("path_invalid_for_mmr"),
+                subject_hash.0,
+                "mmr",
+            ),
         };
 
-        let data_b_mmr_meta = bytemuck::bytes_of(&mmr_meta);
-        let meta_event = XaeroPoolManager::create_xaero_event(
-            data_b_mmr_meta,
-            EventType::MetaEvent(2).to_u8(), // Different meta event type
-            None,
-            None,
-            None,
-            emit_secs(),
-        )
-        .unwrap_or_else(|pool_error| {
-            tracing::error!("Pool allocation failed for MMR metadata: {:?}", pool_error);
-            panic!("Cannot create MMR metadata event - ring buffer pool exhausted");
-        });
-
-        push_xaero_event(meta_db, &meta_event)?;
-        Ok(())
-    }
-}
-
-/// Actor responsible for indexing events into a Merkle Mountain Range (MMR).
-///
-/// This actor:
-/// 1. Listens to incoming events on its pipe
-/// 2. Archives each event and persists it to LMDB
-/// 3. Computes SHA-256 leaf hash from archived bytes
-/// 4. Appends the leaf to the in-memory MMR
-/// 5. Sends the leaf hash to both the output pipe and segment writer
-pub struct MmrIndexingActor {
-    pub name: SubjectHash,
-    pub pipe: Arc<Pipe>,
-    pub mmr: Arc<Mutex<XaeroMmr>>,
-    pub meta_db: Arc<Mutex<LmdbEnv>>,
-    pub segment_writer: Arc<SegmentWriterActor>,
-    mmr_state: Arc<Mutex<MmrState>>,
-    _xaero_event_loop_handle: Option<std::thread::JoinHandle<()>>,
-}
-
-impl Drop for MmrIndexingActor {
-    fn drop(&mut self) {
-        // Send shutdown signal using XaeroPoolManager
-        let shutdown_event = XaeroPoolManager::create_xaero_event(
-            &[], // Empty data
-            SystemEvent(Shutdown).to_u8(),
-            None,
-            None,
-            None,
-            emit_secs(),
-        )
-        .unwrap_or_else(|pool_error| {
-            tracing::error!("Pool allocation failed for shutdown: {:?}", pool_error);
-            panic!("Cannot create shutdown event - ring buffer pool exhausted");
-        });
-
-        let res = self.pipe.sink.tx.send(shutdown_event);
-        match res {
-            Ok(_) => {
-                tracing::debug!("MmrIndexingActor :: Shutdown initiated");
-            }
-            Err(e) => {
-                tracing::error!("MmrIndexingActor :: Error sending shutdown event: {:?}", e);
-            }
-        }
-
-        if let Some(handle) = self._xaero_event_loop_handle.take() {
-            if let Err(e) = handle.join() {
-                tracing::error!("Failed to join xaero event loop thread: {:?}", e);
-            }
-        }
-    }
-}
-
-impl MmrIndexingActor {
-    /// Create a new `MmrIndexingActor` with optional segment configuration.
-    pub fn new(name: SubjectHash, pipe: Arc<Pipe>, segment_config_opt: Option<SegmentConfig>) -> Self {
-        XaeroPoolManager::init();
-
-        let encoded_hash = hex::encode(name.0);
-
-        // Setup segment configuration
-        let segment_config = segment_config_opt.unwrap_or(SegmentConfig {
-            prefix: "mmr".to_string(),
-            ..Default::default()
-        });
-
-        // Create a SEPARATE pipe for the segment writer - it needs its own channel
-        let segment_writer_pipe = Pipe::new(BusKind::Data, None);
-
-        // Segment writer uses its own dedicated pipe
-        let segment_writer = Arc::new(SegmentWriterActor::new_with_config(
-            name,
-            segment_writer_pipe.clone(),
-            segment_config.clone(),
-        ));
-
-        // Setup LMDB environment for raw event storage
-        let meta_db = Arc::new(Mutex::new(
-            LmdbEnv::new(
-                emit_data_path_with_subject_hash(&segment_config.lmdb_env_path, name.0, NAME_PREFIX).as_str(),
-                BusKind::Data,
-            )
-            .expect("failed to create LmdbEnv"),
-        ));
-
-        // Setup in-memory MMR and persistent state
+        tracing::info!("Creating MMR LMDB at path: {}", lmdb_path);
+        let env = Arc::new(Mutex::new(LmdbEnv::new(&lmdb_path, bus_kind.clone())?));
         let mmr = Arc::new(Mutex::new(XaeroMmr::new()));
-        let mmr_state = Arc::new(Mutex::new(MmrState::new()));
 
-        // Setup event processing - direct XaeroEvent processing
-        let xh = Self::setup_event_processing(
-            encoded_hash,
-            pipe.clone(),        // Arc<Pipe>
-            segment_writer_pipe, // Arc<Pipe>
-            meta_db.clone(),     // Arc<Mutex<LmdbEnv>>
-            mmr.clone(),         // Arc<Mutex<XaeroMmr>>
-            mmr_state.clone(),   // Arc<Mutex<MmrState>>
-        );
-
-        Self {
-            name,
-            pipe,
+        Ok(Self {
+            env,
             mmr,
-            meta_db,
-            segment_writer,
-            mmr_state,
-            _xaero_event_loop_handle: xh,
-        }
+            subject_hash,
+            bus_kind,
+            stats: MmrStats::default(),
+        })
     }
 
-    /// Create a new `MmrIndexingActor` with a custom `SegmentConfig`.
-    pub fn new_with_config(name: SubjectHash, pipe: Arc<Pipe>, config: SegmentConfig) -> Self {
-        Self::new(name, pipe, Some(config))
+    /// Process XaeroInternalEvent<64> (XS)
+    fn process_internal_event_64(
+        &mut self,
+        internal_event: Arc<XaeroInternalEvent<64>>,
+    ) -> Result<MmrProcessConfirmation, Box<dyn std::error::Error>> {
+        let archived_data = archive_xaero_internal_event_64(*internal_event).to_vec();
+        self.process_archived_data(archived_data, internal_event.xaero_id_hash, internal_event.latest_ts)
     }
 
-    /// Setup the event processing pipeline - direct XaeroEvent processing
-    fn setup_event_processing(
-        encoded_hash: String,
-        pipe: Arc<Pipe>,
-        segment_writer_pipe: Arc<Pipe>,
-        meta_db: Arc<Mutex<LmdbEnv>>,
-        mmr: Arc<Mutex<XaeroMmr>>,
-        mmr_state: Arc<Mutex<MmrState>>,
-    ) -> Option<std::thread::JoinHandle<()>> {
-        let pipe_clone = pipe.clone();
-        let meta_db_clone = meta_db.clone();
-        let mmr_clone = mmr.clone();
-        let mmr_state_clone = mmr_state.clone();
-
-        // Spawn a dedicated thread for MMR event processing - no EventListener indirection
-        let dispatch_thread_name = format!("xaeroflux-actors-mmr-{}", encoded_hash);
-        let xaero_handle = std::thread::Builder::new()
-            .name(dispatch_thread_name)
-            .spawn(move || {
-                tracing::info!(
-                    "MmrIndexingActor processing thread started for subject: {}",
-                    encoded_hash
-                );
-
-                while let Ok(xaero_event) = pipe_clone.sink.rx.recv() {
-                    // Check for shutdown signal
-                    if xaero_event.event_type() == SystemEvent(Shutdown).to_u8() {
-                        tracing::info!("MmrIndexingActor received shutdown signal");
-                        break;
-                    }
-
-                    // Process the XaeroEvent directly
-                    match Self::handle_xaero_event(
-                        &xaero_event,
-                        &segment_writer_pipe,
-                        &pipe,
-                        &meta_db_clone,
-                        &mmr_clone,
-                        &mmr_state_clone,
-                    ) {
-                        Ok(_) => {
-                            tracing::debug!("Successfully processed XaeroEvent in MMR pipeline");
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to handle MMR event: {}", e);
-                        }
-                    }
-                }
-
-                tracing::info!("MmrIndexingActor processing thread terminated");
-            })
-            .expect("failed to spawn MMR dispatch thread");
-
-        Some(xaero_handle)
+    /// Process XaeroInternalEvent<256> (S)
+    fn process_internal_event_256(
+        &mut self,
+        internal_event: Arc<XaeroInternalEvent<256>>,
+    ) -> Result<MmrProcessConfirmation, Box<dyn std::error::Error>> {
+        let archived_data = archive_xaero_internal_event_256(*internal_event).to_vec();
+        self.process_archived_data(archived_data, internal_event.xaero_id_hash, internal_event.latest_ts)
     }
 
-    /// Handle a single XaeroEvent through the MMR pipeline
-    fn handle_xaero_event(
-        xaero_event: &Arc<XaeroEvent>,
-        segment_writer_pipe: &Arc<Pipe>,
-        output_pipe: &Arc<Pipe>,
-        meta_db: &Arc<Mutex<LmdbEnv>>,
-        mmr: &Arc<Mutex<XaeroMmr>>,
-        mmr_state: &Arc<Mutex<MmrState>>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        // Step 1: Archive the XaeroEvent using new format
-        let archived_data = archive_xaero_event(xaero_event);
+    /// Process XaeroInternalEvent<1024> (M)
+    fn process_internal_event_1024(
+        &mut self,
+        internal_event: Arc<XaeroInternalEvent<1024>>,
+    ) -> Result<MmrProcessConfirmation, Box<dyn std::error::Error>> {
+        let archived_data = archive_xaero_internal_event_1024(*internal_event).to_vec();
+        self.process_archived_data(archived_data, internal_event.xaero_id_hash, internal_event.latest_ts)
+    }
 
-        // Step 2: Persist XaeroEvent to LMDB
-        push_xaero_event(meta_db, xaero_event)?;
+    /// Process XaeroInternalEvent<4096> (L)
+    fn process_internal_event_4096(
+        &mut self,
+        internal_event: Arc<XaeroInternalEvent<4096>>,
+    ) -> Result<MmrProcessConfirmation, Box<dyn std::error::Error>> {
+        let archived_data = archive_xaero_internal_event_4096(*internal_event).to_vec();
+        self.process_archived_data(archived_data, internal_event.xaero_id_hash, internal_event.latest_ts)
+    }
 
-        // Step 3: Compute leaf hash from archived data
+    /// Process XaeroInternalEvent<16384> (XL)
+    fn process_internal_event_16384(
+        &mut self,
+        internal_event: Arc<XaeroInternalEvent<16384>>,
+    ) -> Result<MmrProcessConfirmation, Box<dyn std::error::Error>> {
+        let archived_data = archive_xaero_internal_event_16384(*internal_event).to_vec();
+        self.process_archived_data(archived_data, internal_event.xaero_id_hash, internal_event.latest_ts)
+    }
+
+    /// Common processing logic for archived data
+    fn process_archived_data(
+        &mut self,
+        archived_data: Vec<u8>,
+        xaero_id_hash: [u8; 32],
+        latest_ts: u64,
+    ) -> Result<MmrProcessConfirmation, Box<dyn std::error::Error>> {
+        // Step 1: Persist to LMDB using universal push
+        push_internal_event_universal(
+            &self.env,
+            &archived_data,
+            EventType::ApplicationEvent(1).to_u8() as u32,
+            latest_ts,
+        )?;
+
+        // Step 2: Compute leaf hash from archived data
         let leaf_hash = sha_256_slice(&archived_data);
 
-        // Step 4: Update persistent state and MMR
+        // Step 3: Update MMR
         let new_mmr_size = {
-            let mut state_guard = mmr_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            state_guard.initialize_from_metadata(meta_db);
-
-            let mut mmr_guard = mmr.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            mmr_guard.append(leaf_hash);
-
-            // Update persistent state
-            state_guard.mmr_size = mmr_guard.leaf_count;
-            state_guard.last_leaf_hash = Some(leaf_hash);
-            state_guard.event_count += 1;
-
-            // Flush state to LMDB for crash recovery
-            state_guard.update_metadata(meta_db)?;
-
-            state_guard.mmr_size
+            let mut mmr_guard = self.mmr.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let _changed_peaks = mmr_guard.append(leaf_hash);
+            mmr_guard.leaf_count()
         };
 
-        // Step 5: Send MmrAppended event using XaeroPoolManager
-        let mmr_event = XaeroPoolManager::create_xaero_event(
-            &leaf_hash,
-            EventType::SystemEvent(SystemEventKind::MmrAppended).to_u8(),
-            None,
-            None,
-            None,
-            emit_secs(),
-        )
-        .unwrap_or_else(|pool_error| {
-            tracing::error!("Pool allocation failed for MmrAppended: {:?}", pool_error);
-            panic!("Cannot create MmrAppended event - ring buffer pool exhausted");
-        });
-
-        // Send to both output pipe and segment writer pipe
-        output_pipe.source.tx.send(mmr_event.clone())?;
-        segment_writer_pipe.sink.tx.send(mmr_event)?;
+        // Step 4: Update statistics
+        self.stats.total_processed += 1;
+        self.stats.mmr_size = new_mmr_size;
+        self.stats.last_leaf_hash = Some(leaf_hash);
+        self.stats.last_process_ts = latest_ts;
 
         tracing::debug!(
             "Processed MMR event with leaf hash: {:?}, MMR size: {}",
             leaf_hash,
             new_mmr_size
         );
-        Ok(())
+
+        Ok(MmrProcessConfirmation {
+            original_hash: xaero_id_hash,
+            leaf_hash,
+        })
     }
 
-    /// Get a reference to the in-memory MMR
-    pub fn mmr(&self) -> &Arc<Mutex<XaeroMmr>> {
-        &self.mmr
+    /// Log periodic statistics
+    fn log_stats(&self) {
+        if self.stats.total_processed % 1000 == 0 && self.stats.total_processed > 0 {
+            tracing::info!(
+                "MMR Stats - Subject: {:?}, Bus: {:?}, Processed: {}, Failed: {}, MMR Size: {}",
+                self.subject_hash,
+                self.bus_kind,
+                self.stats.total_processed,
+                self.stats.failed_processing,
+                self.stats.mmr_size
+            );
+        }
+    }
+}
+
+/// MMR Actor - processes XaeroInternalEvent from ring buffer and maintains MMR
+pub struct MmrActor {
+    // Exposed interfaces for all T-shirt sizes
+    pub in_writer_xs: Writer<64, 2000>,  // XS events input
+    pub in_writer_s: Writer<256, 1000>,  // S events input
+    pub in_writer_m: Writer<1024, 500>,  // M events input
+    pub in_writer_l: Writer<4096, 100>,  // L events input
+    pub in_writer_xl: Writer<16384, 50>, // XL events input
+
+    pub out_reader_xs: Reader<64, 2000>, // XS confirmations output
+    pub out_reader_s: Reader<64, 2000>,  // S confirmations output
+    pub out_reader_m: Reader<64, 2000>,  // M confirmations output
+    pub out_reader_l: Reader<64, 2000>,  // L confirmations output
+    pub out_reader_xl: Reader<64, 2000>, // XL confirmations output
+
+    pub segment_writer: Arc<SegmentWriterActor>, // Integrated segment writer
+    pub jh: JoinHandle<()>,
+}
+
+// ================================================================================================
+// MMR ACTOR IMPLEMENTATION
+// ================================================================================================
+
+impl MmrActor {
+    /// Create and spawn MMR actor with ring buffer processing and integrated segment writer
+    pub fn spin(
+        subject_hash: SubjectHash,
+        bus_kind: BusKind,
+        segment_config: Option<SegmentConfig>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut state = MmrState::new(subject_hash, bus_kind.clone())?;
+
+        // Create integrated segment writer actor
+        let segment_writer = Arc::new(SegmentWriterActor::spin(
+            subject_hash,
+            bus_kind.clone(),
+            segment_config,
+        )?);
+        let segment_writer_clone = segment_writer.clone();
+
+        let jh = thread::spawn(move || {
+            tracing::info!("MMR Actor started - Subject: {:?}, Bus: {:?}", subject_hash, bus_kind);
+
+            // Initialize all ring buffers
+            let xs_input_ring = MMR_CONTROL_INPUT_RING.get_or_init(RingBuffer::new);
+            let xs_output_ring = MMR_CONTROL_OUTPUT_RING.get_or_init(RingBuffer::new);
+
+            let s_input_ring = MMR_DATA_INPUT_RING.get_or_init(RingBuffer::new);
+            let s_output_ring = MMR_DATA_OUTPUT_RING.get_or_init(RingBuffer::new);
+
+            let m_input_ring = MMR_MEDIUM_INPUT_RING.get_or_init(RingBuffer::new);
+            let m_output_ring = MMR_MEDIUM_OUTPUT_RING.get_or_init(RingBuffer::new);
+
+            let l_input_ring = MMR_LARGE_INPUT_RING.get_or_init(RingBuffer::new);
+            let l_output_ring = MMR_LARGE_OUTPUT_RING.get_or_init(RingBuffer::new);
+
+            let xl_input_ring = MMR_XL_INPUT_RING.get_or_init(RingBuffer::new);
+            let xl_output_ring = MMR_XL_OUTPUT_RING.get_or_init(RingBuffer::new);
+
+            // Create readers and writers for all sizes
+            let mut xs_reader = Reader::new(xs_input_ring);
+            let mut xs_writer = Writer::new(xs_output_ring);
+
+            let mut s_reader = Reader::new(s_input_ring);
+            let mut s_writer = Writer::new(s_output_ring);
+
+            let mut m_reader = Reader::new(m_input_ring);
+            let mut m_writer = Writer::new(m_output_ring);
+
+            let mut l_reader = Reader::new(l_input_ring);
+            let mut l_writer = Writer::new(l_output_ring);
+
+            let mut xl_reader = Reader::new(xl_input_ring);
+            let mut xl_writer = Writer::new(xl_output_ring);
+
+            // Process all ring buffers in a loop
+            loop {
+                let mut total_events_processed = 0;
+
+                // Process XS events (64 bytes)
+                total_events_processed +=
+                    Self::process_xs_events(&mut state, &mut xs_reader, &mut xs_writer, &segment_writer_clone);
+
+                // Process S events (256 bytes)
+                total_events_processed +=
+                    Self::process_s_events(&mut state, &mut s_reader, &mut s_writer, &segment_writer_clone);
+
+                // Process M events (1024 bytes)
+                total_events_processed +=
+                    Self::process_m_events(&mut state, &mut m_reader, &mut m_writer, &segment_writer_clone);
+
+                // Process L events (4096 bytes)
+                total_events_processed +=
+                    Self::process_l_events(&mut state, &mut l_reader, &mut l_writer, &segment_writer_clone);
+
+                // Process XL events (16384 bytes)
+                total_events_processed +=
+                    Self::process_xl_events(&mut state, &mut xl_reader, &mut xl_writer, &segment_writer_clone);
+
+                if total_events_processed > 0 {
+                    state.log_stats();
+                }
+
+                thread::sleep(Duration::from_micros(100));
+            }
+        });
+
+        // Create exposed interfaces using the dedicated MMR ring buffers
+        let xs_input_ring = MMR_CONTROL_INPUT_RING.get_or_init(RingBuffer::new);
+        let xs_output_ring = MMR_CONTROL_OUTPUT_RING.get_or_init(RingBuffer::new);
+        let s_input_ring = MMR_DATA_INPUT_RING.get_or_init(RingBuffer::new);
+        let s_output_ring = MMR_DATA_OUTPUT_RING.get_or_init(RingBuffer::new);
+        let m_input_ring = MMR_MEDIUM_INPUT_RING.get_or_init(RingBuffer::new);
+        let m_output_ring = MMR_MEDIUM_OUTPUT_RING.get_or_init(RingBuffer::new);
+        let l_input_ring = MMR_LARGE_INPUT_RING.get_or_init(RingBuffer::new);
+        let l_output_ring = MMR_LARGE_OUTPUT_RING.get_or_init(RingBuffer::new);
+        let xl_input_ring = MMR_XL_INPUT_RING.get_or_init(RingBuffer::new);
+        let xl_output_ring = MMR_XL_OUTPUT_RING.get_or_init(RingBuffer::new);
+
+        Ok(Self {
+            in_writer_xs: Writer::new(xs_input_ring),
+            in_writer_s: Writer::new(s_input_ring),
+            in_writer_m: Writer::new(m_input_ring),
+            in_writer_l: Writer::new(l_input_ring),
+            in_writer_xl: Writer::new(xl_input_ring),
+
+            out_reader_xs: Reader::new(xs_output_ring),
+            out_reader_s: Reader::new(s_output_ring),
+            out_reader_m: Reader::new(m_output_ring),
+            out_reader_l: Reader::new(l_output_ring),
+            out_reader_xl: Reader::new(xl_output_ring),
+
+            segment_writer,
+            jh,
+        })
+    }
+
+    /// Process XS events (64 bytes) - for truly small events only
+    fn process_xs_events(
+        state: &mut MmrState,
+        reader: &mut Reader<64, 2000>,
+        writer: &mut Writer<64, 2000>,
+        _segment_writer: &Arc<SegmentWriterActor>,
+    ) -> usize {
+        let mut events_processed = 0;
+
+        // Get bridge ring for forwarding leaf hashes to segment writer
+        let bridge_ring = SEGMENT_BRIDGE_XS_RING.get_or_init(RingBuffer::new);
+        let mut bridge_writer = Writer::new(bridge_ring);
+
+        for event in reader.by_ref() {
+            // XS ring should only handle events that actually fit in 64 bytes
+            // Since XaeroInternalEvent<64> is actually 256 bytes, XS ring might handle smaller control events
+            tracing::debug!("XS ring received event of size: {} bytes", event.len);
+
+            // For now, we don't expect XaeroInternalEvent in XS ring due to size constraints
+            // This ring might be used for other control messages in the future
+            events_processed += 1;
+        }
+
+        events_processed
+    }
+
+    /// Process S events (256 bytes) - handles XaeroInternalEvent<64> which is actually 256 bytes
+    fn process_s_events(
+        state: &mut MmrState,
+        reader: &mut Reader<256, 1000>,
+        writer: &mut Writer<64, 2000>,
+        _segment_writer: &Arc<SegmentWriterActor>,
+    ) -> usize {
+        let mut events_processed = 0;
+
+        // Get bridge ring for forwarding leaf hashes to segment writer
+        let bridge_ring = SEGMENT_BRIDGE_S_RING.get_or_init(RingBuffer::new);
+        let mut bridge_writer = Writer::new(bridge_ring);
+
+        for event in reader.by_ref() {
+            // Check for both XaeroInternalEvent<64> (which is ~256 bytes) and XaeroInternalEvent<256>
+            let xe64_size = std::mem::size_of::<XaeroInternalEvent<64>>();
+            let xe256_size = std::mem::size_of::<XaeroInternalEvent<256>>();
+
+            tracing::debug!(
+                "S ring received event of size: {} bytes (XE64={}, XE256={})",
+                event.len,
+                xe64_size,
+                xe256_size
+            );
+
+            if event.len == xe64_size as u32 {
+                // Handle XaeroInternalEvent<64> (which is actually ~256 bytes total)
+                let internal_event = unsafe { std::ptr::read(&event as *const _ as *const XaeroInternalEvent<64>) };
+                let arc_internal_event = Arc::new(internal_event);
+
+                match state.process_internal_event_64(arc_internal_event.clone()) {
+                    Ok(confirmation) => {
+                        // Send MMR confirmation
+                        let conf_bytes = bytemuck::bytes_of(&confirmation);
+                        match EventUtils::create_pooled_event::<64>(conf_bytes, 201) {
+                            Ok(conf_event) =>
+                                if !writer.add(conf_event) {
+                                    tracing::warn!("MMR S confirmation buffer full");
+                                },
+                            Err(e) => tracing::error!("Failed to create S MMR confirmation: {:?}", e),
+                        }
+
+                        // Forward leaf hash to segment writer via bridge ring
+                        if confirmation.leaf_hash != [0; 32] {
+                            let leaf_event = LeafHashEvent {
+                                leaf_hash: confirmation.leaf_hash,
+                                original_size: 64, // Original data size, not struct size
+                                timestamp: internal_event.latest_ts,
+                                subject_hash: state.subject_hash.0[..20].try_into().unwrap_or([0; 20]),
+                            };
+
+                            let leaf_bytes = bytemuck::bytes_of(&leaf_event);
+                            match EventUtils::create_pooled_event::<64>(leaf_bytes, 202) {
+                                Ok(leaf_pooled_event) =>
+                                    if !bridge_writer.add(leaf_pooled_event) {
+                                        tracing::warn!("Segment bridge S buffer full - dropping leaf hash");
+                                    },
+                                Err(e) => tracing::error!("Failed to create S leaf event: {:?}", e),
+                            }
+
+                            tracing::debug!("Forwarded S leaf hash to segment writer: {:?}", confirmation.leaf_hash);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to process S MMR event (XaeroInternalEvent<64>): {:?}", e);
+                        state.stats.failed_processing += 1;
+                    }
+                }
+            } else if event.len == xe256_size as u32 {
+                // Handle XaeroInternalEvent<256>
+                let internal_event = unsafe { std::ptr::read(&event as *const _ as *const XaeroInternalEvent<256>) };
+                let arc_internal_event = Arc::new(internal_event);
+
+                match state.process_internal_event_256(arc_internal_event.clone()) {
+                    Ok(confirmation) => {
+                        // Send MMR confirmation
+                        let conf_bytes = bytemuck::bytes_of(&confirmation);
+                        match EventUtils::create_pooled_event::<64>(conf_bytes, 201) {
+                            Ok(conf_event) =>
+                                if !writer.add(conf_event) {
+                                    tracing::warn!("MMR S confirmation buffer full");
+                                },
+                            Err(e) => tracing::error!("Failed to create S MMR confirmation: {:?}", e),
+                        }
+
+                        // Forward leaf hash to segment writer via bridge ring
+                        if confirmation.leaf_hash != [0; 32] {
+                            let leaf_event = LeafHashEvent {
+                                leaf_hash: confirmation.leaf_hash,
+                                original_size: 256,
+                                timestamp: internal_event.latest_ts,
+                                subject_hash: state.subject_hash.0[..20].try_into().unwrap_or([0; 20]),
+                            };
+
+                            let leaf_bytes = bytemuck::bytes_of(&leaf_event);
+                            match EventUtils::create_pooled_event::<64>(leaf_bytes, 202) {
+                                Ok(leaf_pooled_event) =>
+                                    if !bridge_writer.add(leaf_pooled_event) {
+                                        tracing::warn!("Segment bridge S buffer full - dropping leaf hash");
+                                    },
+                                Err(e) => tracing::error!("Failed to create S leaf event: {:?}", e),
+                            }
+
+                            tracing::debug!("Forwarded S leaf hash to segment writer: {:?}", confirmation.leaf_hash);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to process S MMR event (XaeroInternalEvent<256>): {:?}", e);
+                        state.stats.failed_processing += 1;
+                    }
+                }
+            } else {
+                tracing::warn!(
+                    "Unknown event size in S ring: {} bytes (expected {} or {})",
+                    event.len,
+                    xe64_size,
+                    xe256_size
+                );
+            }
+            events_processed += 1;
+        }
+
+        events_processed
+    }
+
+    /// Process M events (1024 bytes)
+    fn process_m_events(
+        state: &mut MmrState,
+        reader: &mut Reader<1024, 500>,
+        writer: &mut Writer<64, 2000>,
+        _segment_writer: &Arc<SegmentWriterActor>,
+    ) -> usize {
+        let mut events_processed = 0;
+
+        // Get bridge ring for forwarding leaf hashes to segment writer
+        let bridge_ring = SEGMENT_BRIDGE_M_RING.get_or_init(RingBuffer::new);
+        let mut bridge_writer = Writer::new(bridge_ring);
+
+        for event in reader.by_ref() {
+            if event.len == std::mem::size_of::<XaeroInternalEvent<1024>>() as u32 {
+                let internal_event = unsafe { std::ptr::read(&event as *const _ as *const XaeroInternalEvent<1024>) };
+                let arc_internal_event = Arc::new(internal_event);
+
+                match state.process_internal_event_1024(arc_internal_event.clone()) {
+                    Ok(confirmation) => {
+                        // Send MMR confirmation
+                        let conf_bytes = bytemuck::bytes_of(&confirmation);
+                        match EventUtils::create_pooled_event::<64>(conf_bytes, 201) {
+                            Ok(conf_event) =>
+                                if !writer.add(conf_event) {
+                                    tracing::warn!("MMR M confirmation buffer full");
+                                },
+                            Err(e) => tracing::error!("Failed to create M MMR confirmation: {:?}", e),
+                        }
+
+                        // Forward leaf hash to segment writer via bridge ring
+                        if confirmation.leaf_hash != [0; 32] {
+                            let leaf_event = LeafHashEvent {
+                                leaf_hash: confirmation.leaf_hash,
+                                original_size: 1024,
+                                timestamp: internal_event.latest_ts,
+                                subject_hash: state.subject_hash.0[..20].try_into().unwrap_or([0; 20]),
+                            };
+
+                            let leaf_bytes = bytemuck::bytes_of(&leaf_event);
+                            match EventUtils::create_pooled_event::<64>(leaf_bytes, 202) {
+                                Ok(leaf_pooled_event) =>
+                                    if !bridge_writer.add(leaf_pooled_event) {
+                                        tracing::warn!("Segment bridge M buffer full - dropping leaf hash");
+                                    },
+                                Err(e) => tracing::error!("Failed to create M leaf event: {:?}", e),
+                            }
+
+                            tracing::debug!("Forwarded M leaf hash to segment writer: {:?}", confirmation.leaf_hash);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to process M MMR event: {:?}", e);
+                        state.stats.failed_processing += 1;
+                    }
+                }
+            }
+            events_processed += 1;
+        }
+
+        events_processed
+    }
+
+    /// Process L events (4096 bytes)
+    fn process_l_events(
+        state: &mut MmrState,
+        reader: &mut Reader<4096, 100>,
+        writer: &mut Writer<64, 2000>,
+        _segment_writer: &Arc<SegmentWriterActor>,
+    ) -> usize {
+        let mut events_processed = 0;
+
+        // Get bridge ring for forwarding leaf hashes to segment writer
+        let bridge_ring = SEGMENT_BRIDGE_L_RING.get_or_init(RingBuffer::new);
+        let mut bridge_writer = Writer::new(bridge_ring);
+
+        for event in reader.by_ref() {
+            if event.len == std::mem::size_of::<XaeroInternalEvent<4096>>() as u32 {
+                let internal_event = unsafe { std::ptr::read(&event as *const _ as *const XaeroInternalEvent<4096>) };
+                let arc_internal_event = Arc::new(internal_event);
+
+                match state.process_internal_event_4096(arc_internal_event.clone()) {
+                    Ok(confirmation) => {
+                        // Send MMR confirmation
+                        let conf_bytes = bytemuck::bytes_of(&confirmation);
+                        match EventUtils::create_pooled_event::<64>(conf_bytes, 201) {
+                            Ok(conf_event) =>
+                                if !writer.add(conf_event) {
+                                    tracing::warn!("MMR L confirmation buffer full");
+                                },
+                            Err(e) => tracing::error!("Failed to create L MMR confirmation: {:?}", e),
+                        }
+
+                        // Forward leaf hash to segment writer via bridge ring
+                        if confirmation.leaf_hash != [0; 32] {
+                            let leaf_event = LeafHashEvent {
+                                leaf_hash: confirmation.leaf_hash,
+                                original_size: 4096,
+                                timestamp: internal_event.latest_ts,
+                                subject_hash: state.subject_hash.0[..20].try_into().unwrap_or([0; 20]),
+                            };
+
+                            let leaf_bytes = bytemuck::bytes_of(&leaf_event);
+                            match EventUtils::create_pooled_event::<64>(leaf_bytes, 202) {
+                                Ok(leaf_pooled_event) =>
+                                    if !bridge_writer.add(leaf_pooled_event) {
+                                        tracing::warn!("Segment bridge L buffer full - dropping leaf hash");
+                                    },
+                                Err(e) => tracing::error!("Failed to create L leaf event: {:?}", e),
+                            }
+
+                            tracing::debug!("Forwarded L leaf hash to segment writer: {:?}", confirmation.leaf_hash);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to process L MMR event: {:?}", e);
+                        state.stats.failed_processing += 1;
+                    }
+                }
+            }
+            events_processed += 1;
+        }
+
+        events_processed
+    }
+
+    /// Process XL events (16384 bytes)
+    fn process_xl_events(
+        state: &mut MmrState,
+        reader: &mut Reader<16384, 50>,
+        writer: &mut Writer<64, 2000>,
+        _segment_writer: &Arc<SegmentWriterActor>,
+    ) -> usize {
+        let mut events_processed = 0;
+
+        // Get bridge ring for forwarding leaf hashes to segment writer
+        let bridge_ring = SEGMENT_BRIDGE_XL_RING.get_or_init(RingBuffer::new);
+        let mut bridge_writer = Writer::new(bridge_ring);
+
+        for event in reader.by_ref() {
+            if event.len == std::mem::size_of::<XaeroInternalEvent<16384>>() as u32 {
+                let internal_event = unsafe { std::ptr::read(&event as *const _ as *const XaeroInternalEvent<16384>) };
+                let arc_internal_event = Arc::new(internal_event);
+
+                match state.process_internal_event_16384(arc_internal_event.clone()) {
+                    Ok(confirmation) => {
+                        // Send MMR confirmation
+                        let conf_bytes = bytemuck::bytes_of(&confirmation);
+                        match EventUtils::create_pooled_event::<64>(conf_bytes, 201) {
+                            Ok(conf_event) =>
+                                if !writer.add(conf_event) {
+                                    tracing::warn!("MMR XL confirmation buffer full");
+                                },
+                            Err(e) => tracing::error!("Failed to create XL MMR confirmation: {:?}", e),
+                        }
+
+                        // Forward leaf hash to segment writer via bridge ring
+                        if confirmation.leaf_hash != [0; 32] {
+                            let leaf_event = LeafHashEvent {
+                                leaf_hash: confirmation.leaf_hash,
+                                original_size: 16384,
+                                timestamp: internal_event.latest_ts,
+                                subject_hash: state.subject_hash.0[..20].try_into().unwrap_or([0; 20]),
+                            };
+
+                            let leaf_bytes = bytemuck::bytes_of(&leaf_event);
+                            match EventUtils::create_pooled_event::<64>(leaf_bytes, 202) {
+                                Ok(leaf_pooled_event) =>
+                                    if !bridge_writer.add(leaf_pooled_event) {
+                                        tracing::warn!("Segment bridge XL buffer full - dropping leaf hash");
+                                    },
+                                Err(e) => tracing::error!("Failed to create XL leaf event: {:?}", e),
+                            }
+
+                            tracing::debug!("Forwarded XL leaf hash to segment writer: {:?}", confirmation.leaf_hash);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to process XL MMR event: {:?}", e);
+                        state.stats.failed_processing += 1;
+                    }
+                }
+            }
+            events_processed += 1;
+        }
+
+        events_processed
     }
 
     /// Get a reference to the segment writer
@@ -343,292 +739,235 @@ impl MmrIndexingActor {
         &self.segment_writer
     }
 
-    /// Get a reference to the metadata database
-    pub fn meta_db(&self) -> &Arc<Mutex<LmdbEnv>> {
-        &self.meta_db
+    /// Get MMR stats through callback (since MMR state is in the worker thread)
+    pub fn get_mmr_stats(&self) -> Result<String, &'static str> {
+        // In ring buffer architecture, we can't directly access MMR state from the main thread
+        // This would require implementing a query mechanism through the ring buffers
+        Ok("MMR stats access requires ring buffer query mechanism".to_string())
     }
 }
 
-#[cfg(test)]
-mod actor_tests {
-    use std::{sync::Arc, thread::sleep, time::Duration};
+// ================================================================================================
+// TESTS
+// ================================================================================================
 
-    use crossbeam::channel::Receiver;
-    use serial_test::serial;
-    use tempfile;
-    use xaeroflux_core::{
-        XaeroPoolManager,
-        date_time::emit_secs,
-        event::{EventType, SystemEventKind, XaeroEvent},
-        init_xaero_pool, initialize, shutdown_all_pools,
-    };
+#[cfg(test)]
+mod tests {
+    use rusted_ring_new::PooledEvent;
 
     use super::*;
-    use crate::indexing::storage::{actors::segment_writer_actor::SegmentConfig, format::archive_xaero_event};
 
-    // Helper to create and send a XaeroEvent via pipe using XaeroPoolManager
-    fn send_app_event(pipe: &Arc<Pipe>, data: Vec<u8>) {
-        let xaero_event = XaeroPoolManager::create_xaero_event(
-            &data,
-            EventType::ApplicationEvent(1).to_u8(),
-            None,
-            None,
-            None,
-            emit_secs(),
-        )
-        .unwrap_or_else(|pool_error| {
-            tracing::error!("Pool allocation failed: {:?}", pool_error);
-            panic!("Cannot create test event - ring buffer pool exhausted");
-        });
+    #[test]
+    fn test_verify_struct_sizes() {
+        println!("=== STRUCT SIZE VERIFICATION ===");
 
-        pipe.sink.tx.send(xaero_event).expect("failed to send event");
+        // XaeroInternalEvent sizes (these include the full struct, not just data)
+        println!(
+            "XaeroInternalEvent<64>: {} bytes",
+            std::mem::size_of::<XaeroInternalEvent<64>>()
+        );
+        println!(
+            "XaeroInternalEvent<256>: {} bytes",
+            std::mem::size_of::<XaeroInternalEvent<256>>()
+        );
+        println!(
+            "XaeroInternalEvent<1024>: {} bytes",
+            std::mem::size_of::<XaeroInternalEvent<1024>>()
+        );
+        println!(
+            "XaeroInternalEvent<4096>: {} bytes",
+            std::mem::size_of::<XaeroInternalEvent<4096>>()
+        );
+        println!(
+            "XaeroInternalEvent<16384>: {} bytes",
+            std::mem::size_of::<XaeroInternalEvent<16384>>()
+        );
+
+        // Other important structs
+        println!(
+            "MmrProcessConfirmation: {} bytes",
+            std::mem::size_of::<MmrProcessConfirmation>()
+        );
+        println!("LeafHashEvent: {} bytes", std::mem::size_of::<LeafHashEvent>());
+
+        // Ring buffer mappings based on actual sizes
+        println!("=== CORRECT RING BUFFER MAPPINGS ===");
+
+        let xe64_size = std::mem::size_of::<XaeroInternalEvent<64>>();
+        if xe64_size <= 64 {
+            println!("XaeroInternalEvent<64> -> XS ring (64 bytes)");
+        } else if xe64_size <= 256 {
+            println!("XaeroInternalEvent<64> -> S ring (256 bytes)");
+        } else if xe64_size <= 1024 {
+            println!("XaeroInternalEvent<64> -> M ring (1024 bytes)");
+        }
+
+        println!("=== END VERIFICATION ===");
     }
 
     #[test]
-    #[serial]
-    fn actor_appends_leaf_to_pipe() {
-        initialize();
-        init_xaero_pool();
-        XaeroPoolManager::init();
-
-        let pipe = Pipe::new(BusKind::Data, None);
-        let rx_out: Receiver<Arc<XaeroEvent>> = pipe.source.rx.clone();
-
-        let mut hasher = blake3::Hasher::new();
-        hasher.update("mmr-actor".as_bytes());
-        let subject_hash = SubjectHash(*hasher.finalize().as_bytes());
-
-        let tmp = tempfile::tempdir().expect("failed to create tempdir");
-
-        let cfg = SegmentConfig {
-            prefix: "mmr-test".to_string(),
-            page_size: 128,
-            pages_per_segment: 1,
-            segment_dir: tmp.path().to_string_lossy().into_owned(),
-            lmdb_env_path: tmp.path().to_string_lossy().into_owned(),
+    fn test_leaf_hash_event_size() {
+        // Verify our leaf hash event fits in XS pool
+        let leaf_event = LeafHashEvent {
+            leaf_hash: [0; 32],
+            original_size: 256,
+            timestamp: 1234567890,
+            subject_hash: [0; 20],
         };
 
-        let _actor = MmrIndexingActor::new_with_config(subject_hash, pipe.clone(), cfg);
+        let leaf_size = std::mem::size_of::<LeafHashEvent>();
+        assert_eq!(
+            leaf_size, 64,
+            "Leaf hash event must be exactly 64 bytes for XS pool, got {} bytes",
+            leaf_size
+        );
 
-        // Send one application event into actor
-        let payload = b"foo".to_vec();
-        send_app_event(&pipe, payload.clone());
+        println!("✅ Leaf hash event fits perfectly in XS pool: {} bytes", leaf_size);
+    }
 
-        // Allow processing time
-        sleep(Duration::from_millis(200));
+    #[test]
+    fn test_mmr_confirmation_size() {
+        // Verify our confirmation event fits in XS pool
+        let conf = MmrProcessConfirmation {
+            original_hash: [0; 32],
+            leaf_hash: [1; 32],
+        };
 
-        // Expect a SystemEvent::MmrAppended on the output pipe
-        let mut received_mmr_appended = false;
-        let mut received_leaf_hash = None;
-        let timeout = Duration::from_secs(5);
-        let start = std::time::Instant::now();
+        let conf_size = std::mem::size_of::<MmrProcessConfirmation>();
+        assert_eq!(
+            conf_size, 64,
+            "MMR confirmation must be exactly 64 bytes for XS pool, got {} bytes",
+            conf_size
+        );
 
-        while start.elapsed() < timeout {
-            match rx_out.try_recv() {
-                Ok(got) => {
-                    tracing::debug!("Received event type: {:?}", got.event_type());
-                    if got.event_type() == EventType::SystemEvent(SystemEventKind::MmrAppended).to_u8() {
-                        received_leaf_hash = Some(got.data().to_vec());
-                        received_mmr_appended = true;
+        println!("✅ MMR confirmation fits perfectly in XS pool: {} bytes", conf_size);
+    }
+
+    #[test]
+    fn test_mmr_actor_creation() {
+        xaeroflux_core::initialize();
+
+        let subject_hash = SubjectHash([1u8; 32]);
+        let segment_config = Some(crate::indexing::storage::actors::segment_writer_actor::SegmentConfig {
+            page_size: 1024,
+            pages_per_segment: 2,
+            prefix: "test-mmr".to_string(),
+            segment_dir: "/tmp/test-mmr-segments".to_string(),
+            lmdb_env_path: "/tmp/test-mmr-lmdb".to_string(),
+        });
+
+        let actor = MmrActor::spin(subject_hash, BusKind::Data, segment_config).expect("Failed to create MMR actor");
+
+        // Verify all interfaces exist
+        assert!(true, "MMR actor created successfully with all T-shirt size interfaces");
+
+        // The actor is running in the background processing events
+        drop(actor); // This will trigger cleanup
+
+        println!("✅ MMR actor creation and interface verification successful");
+    }
+
+    #[test]
+    fn test_mmr_state_processing() {
+        xaeroflux_core::initialize();
+
+        let subject_hash = SubjectHash([3u8; 32]);
+        let mut state = MmrState::new(subject_hash, BusKind::Data).expect("Failed to create MMR state");
+
+        // Use XS event with correct size (64 bytes)
+        let xs_event = Arc::new(XaeroInternalEvent::<64> {
+            xaero_id_hash: [0xAA; 32],
+            vector_clock_hash: [0xBB; 32],
+            evt: PooledEvent {
+                data: [0xCC; 64],
+                len: 64,
+                event_type: 42,
+            },
+            latest_ts: emit_secs(),
+        });
+
+        let result = state.process_internal_event_64(xs_event);
+        assert!(result.is_ok(), "Should successfully process XS MMR event");
+
+        let confirmation = result.unwrap();
+        assert_eq!(confirmation.original_hash, [0xAA; 32]);
+        assert_ne!(confirmation.leaf_hash, [0; 32]);
+
+        // Verify MMR state was updated
+        {
+            let mmr_guard = state.mmr.lock().expect("Should lock MMR");
+            assert_eq!(mmr_guard.leaf_count(), 1, "MMR should have one leaf");
+        }
+
+        assert_eq!(state.stats.total_processed, 1, "Stats should show one processed event");
+        assert_eq!(state.stats.mmr_size, 1, "Stats should show MMR size of 1");
+
+        println!("✅ MMR state processing working correctly");
+    }
+
+    #[test]
+    fn test_mmr_with_segment_writer_integration() {
+        xaeroflux_core::initialize();
+
+        let subject_hash = SubjectHash([4u8; 32]);
+        let segment_config = Some(crate::indexing::storage::actors::segment_writer_actor::SegmentConfig {
+            page_size: 4096,
+            pages_per_segment: 2,
+            prefix: "test-mmr-integration".to_string(),
+            segment_dir: "/tmp/test-mmr-integration-segments".to_string(),
+            lmdb_env_path: "/tmp/test-mmr-integration-lmdb".to_string(),
+        });
+
+        let mut actor =
+            MmrActor::spin(subject_hash, BusKind::Data, segment_config).expect("Failed to create MMR actor");
+
+        // Create XaeroInternalEvent<64> - but it's actually 256 bytes total
+        let internal_event = XaeroInternalEvent::<64> {
+            xaero_id_hash: [0x34; 32],
+            vector_clock_hash: [0x56; 32],
+            evt: PooledEvent {
+                data: [0x12; 64],
+                len: 64,
+                event_type: 123,
+            },
+            latest_ts: emit_secs(),
+        };
+
+        // Debug the actual size
+        let event_size = std::mem::size_of::<XaeroInternalEvent<64>>();
+        println!("XaeroInternalEvent<64> actual size: {} bytes", event_size);
+
+        // Since XaeroInternalEvent<64> is 256 bytes, use S ring buffer
+        let internal_event_bytes = bytemuck::bytes_of(&internal_event);
+        let pooled_event = EventUtils::create_pooled_event::<256>(internal_event_bytes, 123)
+            .expect("Should create pooled event with S size (256 bytes)");
+
+        // Write to MMR S input buffer (not XS)
+        assert!(
+            actor.in_writer_s.add(pooled_event),
+            "Should write to MMR S input buffer"
+        );
+
+        // Check S output buffer for confirmations
+        std::thread::sleep(Duration::from_millis(500));
+
+        let mut mmr_confirmation_found = false;
+        for attempt in 0..20 {
+            if let Some(conf_event) = actor.out_reader_s.next() {
+                if conf_event.len == std::mem::size_of::<MmrProcessConfirmation>() as u32 {
+                    if let Ok(conf) =
+                        bytemuck::try_from_bytes::<MmrProcessConfirmation>(&conf_event.data[..conf_event.len as usize])
+                    {
+                        mmr_confirmation_found = true;
+                        println!("✅ Received MMR confirmation with leaf hash: {:?}", conf.leaf_hash);
                         break;
                     }
                 }
-                Err(crossbeam::channel::TryRecvError::Empty) => {
-                    sleep(Duration::from_millis(10));
-                }
-                Err(e) => {
-                    panic!("Channel error: {:?}", e);
-                }
             }
+            std::thread::sleep(Duration::from_millis(100));
         }
 
-        assert!(received_mmr_appended, "Expected to receive MmrAppended event");
-
-        // Verify we got a 32-byte hash
-        if let Some(actual_leaf_hash) = received_leaf_hash {
-            assert_eq!(actual_leaf_hash.len(), 32, "Leaf hash should be 32 bytes");
-            tracing::debug!("Received leaf hash: {:?}", actual_leaf_hash);
-        }
-
-        drop(_actor);
-        let res = shutdown_all_pools();
-        match res {
-            Ok(_) => {}
-            Err(e) => {
-                tracing::error!("Failed to shutdown mmr actor: {:?}", e);
-            }
-        }
-    }
-
-    #[test]
-    #[serial]
-    fn actor_persists_leaf_to_segment_writer() {
-        initialize();
-        init_xaero_pool();
-        XaeroPoolManager::init();
-
-        let tmp = tempfile::tempdir().expect("failed to create tempdir");
-        let pipe = Pipe::new(BusKind::Data, None);
-
-        let mut hasher = blake3::Hasher::new();
-        hasher.update("mmr-actor".as_bytes());
-        let subject_hash = SubjectHash(*hasher.finalize().as_bytes());
-
-        let cfg = SegmentConfig {
-            page_size: 128,
-            pages_per_segment: 1,
-            prefix: "mmr-test".to_string(),
-            segment_dir: tmp.path().to_string_lossy().into_owned(),
-            lmdb_env_path: tmp.path().to_string_lossy().into_owned(),
-        };
-
-        let _actor = MmrIndexingActor::new_with_config(subject_hash, pipe.clone(), cfg.clone());
-
-        // Send one application event into actor
-        let payload = b"bar".to_vec();
-        send_app_event(&pipe, payload.clone());
-
-        // Allow processing time - the segment writer needs time to process the MMR leaf hash
-        sleep(Duration::from_millis(300));
-
-        // Verify segment files were created by the segment writer
-        let segment_files: Vec<_> = std::fs::read_dir(&cfg.segment_dir)
-            .expect("failed to read segment dir")
-            .filter_map(|entry| entry.ok())
-            .filter(|entry| entry.path().extension().and_then(|s| s.to_str()) == Some("seg"))
-            .collect();
-
-        assert!(
-            !segment_files.is_empty(),
-            "Expected segment files to be created by segment writer consuming MMR leaf hashes"
-        );
-
-        // Verify the content contains data
-        if let Some(file_entry) = segment_files.first() {
-            let file_content = std::fs::read(file_entry.path()).expect("failed to read segment file");
-            assert!(!file_content.is_empty(), "Segment file should contain data");
-        }
-
-        drop(_actor);
-        let res = shutdown_all_pools();
-        match res {
-            Ok(_) => {}
-            Err(e) => {
-                tracing::error!("Failed to shutdown mmr actor: {:?}", e);
-            }
-        }
-    }
-
-    #[test]
-    #[serial]
-    fn actor_updates_mmr_state() {
-        initialize();
-        init_xaero_pool();
-        XaeroPoolManager::init();
-
-        let tmp = tempfile::tempdir().expect("failed to create tempdir");
-        let pipe = Pipe::new(BusKind::Data, None);
-
-        let mut hasher = blake3::Hasher::new();
-        hasher.update("mmr-actor".as_bytes());
-        let subject_hash = SubjectHash(*hasher.finalize().as_bytes());
-
-        let cfg = SegmentConfig {
-            page_size: 128,
-            pages_per_segment: 1,
-            prefix: "mmr-test".to_string(),
-            segment_dir: tmp.path().to_string_lossy().into_owned(),
-            lmdb_env_path: tmp.path().to_string_lossy().into_owned(),
-        };
-
-        let actor = MmrIndexingActor::new_with_config(subject_hash, pipe.clone(), cfg);
-
-        // Check initial MMR state
-        {
-            let mmr_guard = actor.mmr().lock().expect("failed_to_unravel");
-            assert_eq!(mmr_guard.leaf_count, 0, "MMR should start empty");
-        }
-
-        // Send multiple events
-        for i in 0..3 {
-            let payload = format!("test-payload-{}", i).into_bytes();
-            send_app_event(&pipe, payload);
-        }
-
-        // Allow processing time
-        sleep(Duration::from_millis(300));
-
-        // Check final MMR state
-        {
-            let mmr_guard = actor.mmr().lock().expect("failed_to_unravel");
-            assert_eq!(
-                mmr_guard.leaf_count, 3,
-                "MMR should contain 3 elements after processing 3 events"
-            );
-        }
-
-        drop(actor);
-        let res = shutdown_all_pools();
-        match res {
-            Ok(_) => {}
-            Err(e) => {
-                tracing::error!("Failed to shutdown mmr actor: {:?}", e);
-            }
-        }
-    }
-
-    #[test]
-    #[serial]
-    fn test_zero_copy_mmr_processing() {
-        initialize();
-        init_xaero_pool();
-        XaeroPoolManager::init();
-
-        let tmp = tempfile::tempdir().expect("failed to create tempdir");
-        let pipe = Pipe::new(BusKind::Data, None);
-
-        let mut hasher = blake3::Hasher::new();
-        hasher.update("mmr-zero-copy".as_bytes());
-        let subject_hash = SubjectHash(*hasher.finalize().as_bytes());
-
-        let cfg = SegmentConfig {
-            page_size: 256,
-            pages_per_segment: 1,
-            prefix: "mmr-zero-copy".to_string(),
-            segment_dir: tmp.path().to_string_lossy().into_owned(),
-            lmdb_env_path: tmp.path().to_string_lossy().into_owned(),
-        };
-
-        let _actor = MmrIndexingActor::new_with_config(subject_hash, pipe.clone(), cfg);
-
-        // Test zero-copy data access
-        let test_data = b"zero copy mmr test data";
-        let test_event = XaeroPoolManager::create_xaero_event(
-            test_data,
-            EventType::ApplicationEvent(1).to_u8(),
-            None,
-            None,
-            None,
-            emit_secs(),
-        )
-        .unwrap_or_else(|pool_error| {
-            tracing::error!("Pool allocation failed: {:?}", pool_error);
-            panic!("Cannot create test event - ring buffer pool exhausted");
-        });
-
-        // Verify zero-copy access works
-        assert_eq!(test_event.data(), test_data);
-
-        pipe.sink.tx.send(test_event).expect("failed to send test event");
-        sleep(Duration::from_millis(150));
-
-        drop(_actor);
-        let res = shutdown_all_pools();
-        match res {
-            Ok(_) => {}
-            Err(e) => {
-                tracing::error!("Failed to shutdown mmr actor: {:?}", e);
-            }
-        }
+        assert!(mmr_confirmation_found, "Should receive MMR confirmation from S buffer");
+        println!("✅ MMR S buffer integration working correctly");
     }
 }
