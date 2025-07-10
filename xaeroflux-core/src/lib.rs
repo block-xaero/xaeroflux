@@ -13,7 +13,6 @@ pub mod hash;
 pub mod keys;
 pub mod logs;
 pub mod merkle_tree;
-mod namespacing;
 pub mod network;
 pub mod pipe;
 pub mod pool;
@@ -49,7 +48,7 @@ use threadpool::ThreadPool;
 use tracing::info;
 
 use crate as xaeroflux_core;
-pub use crate::{config::Config, logs::init_logging, pool::XaeroPoolManager};
+pub use crate::{config::Config, logs::init_logging};
 
 pub static EVENT_ALLOCATOR: OnceLock<EventAllocator> = OnceLock::new();
 
@@ -59,17 +58,6 @@ pub static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 pub fn next_id() -> u64 {
     NEXT_ID.fetch_add(1, Ordering::SeqCst)
 }
-/// Marker trait for types that can be stored as xaeroflux events.
-///
-/// Requirements:
-/// - `Any` for downcasting support.
-/// - `Send + Sync` for safe cross-thread use.
-/// - `Clone` for duplicating payloads.
-/// - `Debug` for logging and diagnostics.
-pub trait XaeroData: Any + Send + Sync + Clone + Debug {}
-
-impl<T> XaeroData for T where T: Any + Send + Sync + Clone + Debug {}
-
 /// Global, singleton configuration instance.
 ///
 /// Initialized by `load_config` and reused thereafter.
@@ -87,9 +75,6 @@ pub static XAERO_DISPATCHER_POOL: OnceLock<ThreadPool> = OnceLock::new();
 /// Global runtime for peer-to-peer networking tasks.
 pub static P2P_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 
-pub static XEPM: LazyLock<()> = LazyLock::new(|| {
-    XaeroPoolManager::init();
-});
 
 // Automatically initializes on first access
 pub fn shutdown_all_pools() -> Result<(), Box<dyn std::error::Error>> {
@@ -206,45 +191,6 @@ pub fn initialize() {
     info!("XaeroFlux initialized");
 }
 
-/// Serialize a data payload into a zero-copy `AlignedVec`.
-///
-/// Uses the `rkyv` framework with the `rancor` sharing strategy.
-///
-/// # Errors
-/// Returns `Failure` if serialization fails.
-pub fn serialize<T>(data: &T) -> Result<AlignedVec, Failure>
-where
-    T: XaeroData
-        + for<'a> rkyv::Serialize<
-            rkyv::rancor::Strategy<
-                rkyv::ser::Serializer<
-                    rkyv::util::AlignedVec,
-                    rkyv::ser::allocator::ArenaHandle<'a>,
-                    rkyv::ser::sharing::Share,
-                >,
-                rkyv::rancor::Failure,
-            >,
-        >,
-{
-    rkyv::to_bytes::<Failure>(data)
-}
-
-/// Deserialize bytes back into a data type.
-///
-/// Uses `rkyv` zero-copy deserialization with validation.
-///
-/// # Errors
-/// Returns `Failure` if validation or deserialization fails.
-pub fn deserialize<T>(data: &[u8]) -> Result<T, Failure>
-where
-    T: XaeroData + rkyv::Archive,
-    for<'a> <T as Archive>::Archived: CheckBytes<
-        Strategy<Validator<ArchiveValidator<'a>, SharedValidator>, rkyv::rancor::Failure>,
-    >,
-    <T as Archive>::Archived: rkyv::Deserialize<T, Strategy<Pool, Failure>>,
-{
-    rkyv::from_bytes::<T, Failure>(data)
-}
 /// Load or retrieve the global configuration.
 ///
 /// Reads the `XAERO_CONFIG` environment variable or defaults to

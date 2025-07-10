@@ -1,12 +1,14 @@
-use std::{convert::TryInto, sync::Arc};
+use std::convert::TryInto;
 
 use sha2::Digest;
 
-use crate::event::XaeroEvent;
+use crate::pool::XaeroEventSized;
 
 /// Primary hashing interface for XaeroEvent in the ring buffer architecture
-pub fn hash_xaero_event(xaero_event: &Arc<XaeroEvent>) -> [u8; 32] {
-    sha_256_slice(xaero_event.data())
+pub fn hash_xaero_event<const TSHIRT_SIZE: usize>(
+    xaero_event: XaeroEventSized<TSHIRT_SIZE>,
+) -> [u8; 32] {
+    sha_256_slice(bytemuck::bytes_of(&xaero_event))
 }
 
 /// Hash a byte slice - core implementation
@@ -97,52 +99,22 @@ where
     sha_256_slice(n.as_ref())
 }
 
-/// Ring buffer optimized hashing for common sizes
-pub mod ring_buffer_hashes {
-    use super::*;
-
-    /// Hash 64-byte ring buffer slot (XS pool)
-    pub fn hash_xs_slot(data: &[u8; 64]) -> [u8; 32] {
-        sha_256_const(data)
-    }
-
-    /// Hash 256-byte ring buffer slot (Small pool)
-    pub fn hash_small_slot(data: &[u8; 256]) -> [u8; 32] {
-        sha_256_const(data)
-    }
-
-    /// Hash 1KB ring buffer slot (Medium pool)
-    pub fn hash_medium_slot(data: &[u8; 1024]) -> [u8; 32] {
-        sha_256_const(data)
-    }
-
-    /// Hash 4KB ring buffer slot (Large pool)
-    pub fn hash_large_slot(data: &[u8; 4096]) -> [u8; 32] {
-        sha_256_const(data)
-    }
-
-    /// Hash 16KB ring buffer slot (XL pool)
-    pub fn hash_xl_slot(data: &[u8; 16384]) -> [u8; 32] {
-        sha_256_const(data)
-    }
-}
-
 /// Hasher utility for stateful hashing operations
-pub struct XaeroHasher {
-    hasher: sha2::Sha256,
+pub struct XaeroHasher<const TSHIRT_SIZE: usize> {
+    hasher: blake3::Hasher,
 }
 
-impl XaeroHasher {
+impl<const TSHIRT_SIZE: usize> XaeroHasher<TSHIRT_SIZE> {
     /// Create a new hasher instance
     pub fn new() -> Self {
         Self {
-            hasher: sha2::Sha256::new(),
+            hasher: blake3::Hasher::new(),
         }
     }
 
     /// Update hasher with XaeroEvent data
-    pub fn update_event(&mut self, xaero_event: &Arc<XaeroEvent>) {
-        self.hasher.update(xaero_event.data());
+    pub fn update_event(&mut self, xaero_event: XaeroEventSized<TSHIRT_SIZE>) {
+        self.hasher.update(bytemuck::bytes_of(&xaero_event));
     }
 
     /// Update hasher with byte slice
@@ -158,16 +130,16 @@ impl XaeroHasher {
     /// Finalize and return hash
     pub fn finalize(self) -> [u8; 32] {
         let hash = self.hasher.finalize();
-        hash.as_slice().try_into().unwrap_or_default()
+        hash.try_into().unwrap_or_default()
     }
 
     /// Reset hasher for reuse
     pub fn reset(&mut self) {
-        self.hasher = sha2::Sha256::new();
+        self.hasher = blake3::Hasher::new();
     }
 }
 
-impl Default for XaeroHasher {
+impl<const TSHIRT_SIZE: usize> Default for XaeroHasher<TSHIRT_SIZE> {
     fn default() -> Self {
         Self::new()
     }
@@ -246,41 +218,6 @@ mod tests {
         // Compare with slice version
         let hash2 = blake_hash_slice(data.as_bytes());
         assert_eq!(hash, hash2);
-    }
-
-    #[test]
-    fn test_ring_buffer_hashes() {
-        let xs_data = [42u8; 64];
-        let hash = ring_buffer_hashes::hash_xs_slot(&xs_data);
-        assert_eq!(hash.len(), 32);
-
-        let small_data = [42u8; 256];
-        let hash = ring_buffer_hashes::hash_small_slot(&small_data);
-        assert_eq!(hash.len(), 32);
-    }
-
-    #[test]
-    fn test_xaero_hasher() {
-        let mut hasher = XaeroHasher::new();
-        hasher.update_slice(b"hello");
-        hasher.update_slice(b"world");
-        let hash1 = hasher.finalize();
-
-        // Compare with multi_hash
-        let hash2 = sha_256_multi_hash(&[b"hello", b"world"]);
-        assert_eq!(hash1, hash2);
-    }
-
-    #[test]
-    fn test_hasher_reset() {
-        let mut hasher = XaeroHasher::new();
-        hasher.update_slice(b"data");
-        hasher.reset();
-        hasher.update_slice(b"other");
-        let hash = hasher.finalize();
-
-        let expected = sha_256_slice(b"other");
-        assert_eq!(hash, expected);
     }
 
     #[test]

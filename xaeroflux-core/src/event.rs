@@ -9,15 +9,20 @@
 use std::{
     cmp::Ordering,
     fmt::{Debug, Formatter},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, AtomicUsize},
+    },
     time::Duration,
 };
 
 use bytemuck::{Pod, Zeroable};
 use rkyv::{Archive, Deserialize, Serialize};
 use rusted_ring::AllocationError;
+use rusted_ring_new::{PooledEvent, RingBuffer};
 
 pub use crate::{pool::XaeroEvent, vector_clock::VectorClock};
+use crate::pool::XaeroEventSized;
 
 /// Magic bytes prefix for event headers in paged segments.
 /// Used to identify and slice raw event bytes from storage pages.
@@ -238,89 +243,35 @@ pub struct ScanWindow {
 unsafe impl Pod for ScanWindow {}
 unsafe impl Zeroable for ScanWindow {}
 
-#[derive(Clone, Debug)]
-pub enum SubjectExecutionMode {
-    Streaming,
-    Buffer,
-}
-#[allow(clippy::type_complexity)]
-/// Defines per-event pipeline operations.
-#[derive(Clone)]
-pub enum Operator {
-    // Mode operators
-    StreamingMode, // ALWAYS ON, UNLESS IN BatchMode
-    // Stream Operators
-    Scan(Arc<ScanWindow>),
-    /// Transform the event into another event.
-    Map(Arc<dyn Fn(Arc<XaeroEvent>) -> Arc<XaeroEvent> + Send + Sync>),
-    /// Keep only events matching the predicate.
-    Filter(Arc<dyn Fn(&Arc<XaeroEvent>) -> bool + Send + Sync>),
-    /// Drop events without a Merkle proof.
-    FilterMerkleProofs,
-
-    // Batch Mode operators
-    /// Buffer operator (encodes a pipeline of Operators that is added sequentially)
-    BufferMode(
-        Duration,
-        Option<usize>,
-        Vec<Operator>,
-        Arc<dyn Fn(&Arc<XaeroEvent>) -> bool + Send + Sync + 'static>,
-    ),
-    /// Causal, temporal ordering for events for example or anything in between.
-    Sort(Arc<dyn Fn(&Arc<XaeroEvent>, &Arc<XaeroEvent>) -> Ordering + Send + Sync>),
-    /// Folds vector of xaero events to a single xaero event.
-    // Fold: Streaming by default, combines events into single event
-    Fold(
-        Arc<
-            dyn Fn(
-                    Arc<Option<XaeroEvent>>,
-                    Vec<Arc<XaeroEvent>>,
-                ) -> Result<Arc<XaeroEvent>, AllocationError>
-                + Send
-                + Sync,
-        >,
-    ),
-
-    // Reduce: Also returns XaeroEvent (stays in event domain), not raw Vec<u8>
-    Reduce(
-        Arc<dyn Fn(Vec<Arc<XaeroEvent>>) -> Result<Arc<XaeroEvent>, AllocationError> + Send + Sync>,
-    ),
-
-    // Systemic operators
-    /// Initializes and calls `unsafe_run` that subscribes all system actors to current pipeline
-    /// or workspace/object namespace to write segments and maintain indexes appropriately!
-    SystemActors,
-    /// Terminal op: drop all events.
-    Blackhole,
-
-    /// Transition To from allows to switch from buffer to streaming mode
-    TransitionTo(SubjectExecutionMode, SubjectExecutionMode),
+pub trait RingOperator<const SIZE: usize> {
+    fn process(&self, event: PooledEvent<SIZE>) -> Option<PooledEvent<SIZE>>;
 }
 
-impl Debug for Operator {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Operator::StreamingMode => write!(f, "StreamingMode"),
-            Operator::Scan(window) =>
-                write!(f, "Scan(start: {}, end: {})", window.start, window.end),
-            Operator::Map(_) => write!(f, "Map(<function>)"),
-            Operator::Filter(_) => write!(f, "Filter(<predicate>)"),
-            Operator::FilterMerkleProofs => write!(f, "FilterMerkleProofs"),
-            Operator::BufferMode(duration, count, pipeline, _) => {
-                write!(
-                    f,
-                    "BatchMode(duration: {:?}, count: {:?}, pipeline: {:?} with route_filter)",
-                    duration, count, pipeline
-                )
-            }
-            Operator::Sort(_) => write!(f, "Sort(<comparator>)"),
-            Operator::Fold(_) => write!(f, "Fold(<folder>)"),
-            Operator::Reduce(_) => write!(f, "Reduce(<reducer>)"),
-            Operator::SystemActors => write!(f, "SystemActors"),
-            Operator::Blackhole => write!(f, "Blackhole"),
-            Operator::TransitionTo(current, to) => {
-                write!(f, "TransitionTo({current:?}, {to:?})")
-            }
-        }
-    }
+pub struct MapOperator<const SIZE: usize, F>
+where
+    F: Fn(XaeroEventSized<SIZE>) -> PooledEvent<SIZE> + Send + Sync,
+{
+    pub handler: F,
+}
+
+pub struct FilterOperator<const SIZE: usize, P>
+where
+    P: Fn(&PooledEvent<SIZE>) -> bool + Send + Sync,
+{
+    pub predicate: P,
+}
+
+
+pub struct SortOperator<const SIZE: usize, P>
+where
+    P: Fn(PooledEvent<SIZE>) -> PooledEvent<SIZE> + Send + Sync,
+{
+    predicate: P,
+}
+
+pub struct BufferOperator<const SIZE: usize, const BUFFER_CAPACITY: usize> {
+    buffer: [Option<PooledEvent<SIZE>>; BUFFER_CAPACITY],
+    count: AtomicUsize,
+    duration: Duration,
+    last_flush: AtomicU64,
 }

@@ -6994,7 +6994,7 @@ dependencies = [
  "xaeroflux-core 0.8.1-m5 (registry+https://github.com/rust-lang/crates.io-index)",
  "xaeroflux-crdts 0.8.1-m5 (registry+https://github.com/rust-lang/crates.io-index)",
  "xaeroflux-macros 0.8.1-m5 (registry+https://github.com/rust-lang/crates.io-index)",
- "xaeroid",
+ "xaeroid 0.4.0",
 ]
 
 [[package]]
@@ -7039,7 +7039,7 @@ dependencies = [
  "xaeroflux-core 0.8.1-m5",
  "xaeroflux-crdts 0.8.1-m5 (registry+https://github.com/rust-lang/crates.io-index)",
  "xaeroflux-macros 0.8.1-m5",
- "xaeroid",
+ "xaeroid 0.4.0",
 ]
 
 [[package]]
@@ -7082,7 +7082,7 @@ dependencies = [
  "xaeroflux-core 0.8.1-m5 (registry+https://github.com/rust-lang/crates.io-index)",
  "xaeroflux-crdts 0.8.1-m5 (registry+https://github.com/rust-lang/crates.io-index)",
  "xaeroflux-macros 0.8.1-m5 (registry+https://github.com/rust-lang/crates.io-index)",
- "xaeroid",
+ "xaeroid 0.3.2-rc3",
 ]
 
 [[package]]
@@ -7116,7 +7116,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber 0.3.19",
- "xaeroid",
+ "xaeroid 0.4.0",
 ]
 
 [[package]]
@@ -7151,7 +7151,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber 0.3.19",
- "xaeroid",
+ "xaeroid 0.3.2-rc3",
 ]
 
 [[package]]
@@ -7165,7 +7165,7 @@ dependencies = [
  "rusted-ring 0.5.4",
  "serde",
  "xaeroflux-core 0.8.1-m5 (registry+https://github.com/rust-lang/crates.io-index)",
- "xaeroid",
+ "xaeroid 0.4.0",
  "yrs",
 ]
 
@@ -7181,7 +7181,7 @@ dependencies = [
  "rusted-ring 0.4.0",
  "serde",
  "xaeroflux-core 0.8.1-m5 (registry+https://github.com/rust-lang/crates.io-index)",
- "xaeroid",
+ "xaeroid 0.3.2-rc3",
  "yrs",
 ]
 
@@ -7244,6 +7244,32 @@ dependencies = [
  "rand_chacha 0.3.1",
  "rkyv 0.8.10",
  "rusted-ring 0.4.0",
+ "thiserror 2.0.12",
+]
+
+[[package]]
+name = "xaeroid"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2592856e823efa84e8c3eda3f09aba1d19369c877dff606707ec3f4071898300"
+dependencies = [
+ "ark-bn254",
+ "ark-ff",
+ "ark-groth16",
+ "ark-r1cs-std",
+ "ark-relations",
+ "ark-serialize",
+ "ark-snark",
+ "ark-std",
+ "blake3",
+ "bytecheck 0.8.1",
+ "bytemuck",
+ "multibase",
+ "pqcrypto-falcon",
+ "pqcrypto-traits",
+ "rand 0.8.5",
+ "rand_chacha 0.3.1",
+ "rkyv 0.8.10",
  "thiserror 2.0.12",
 ]
 
