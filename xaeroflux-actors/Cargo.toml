@@ -37,6 +37,7 @@ serial_test = "0.10.0"
 libc = "0.2.172"
 
 [dependencies]
+hnsw_rs = "0.3.2"
 paste = "1.0.15"
 rusted-ring-new = {package = "rusted-ring", workspace = true}
 rusted-ring = { workspace = true }

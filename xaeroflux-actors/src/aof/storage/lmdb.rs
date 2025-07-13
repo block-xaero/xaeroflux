@@ -21,7 +21,7 @@ use xaeroflux_core::{
     hash::{sha_256, sha_256_slice},
     pool::XaeroInternalEvent,
 };
-
+use xaeroflux_core::hash::blake_hash_slice;
 use super::format::{EventKey, SegmentMeta};
 use crate::{BusKind, indexing::storage::format::archive_xaero_event};
 
@@ -447,7 +447,7 @@ pub fn generate_event_key(
         vector_clock_hash,
         ts: timestamp.to_be(),
         kind: event_type as u8,
-        hash: sha_256_slice(event_data),
+        hash: blake_hash_slice(event_data),
     }
 }
 
