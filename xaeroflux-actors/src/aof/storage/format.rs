@@ -98,7 +98,7 @@ unsafe impl Zeroable for LeafLocation {}
 unsafe impl Pod for LeafLocation {}
 
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Ord, PartialOrd, PartialEq, Eq, Hash)]
 pub struct EventKey {
     pub xaero_id_hash: [u8; 32],
     pub vector_clock_hash: [u8; 32],
