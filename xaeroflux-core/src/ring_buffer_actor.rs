@@ -1,47 +1,6 @@
 use std::time::Duration;
 
-use rusted_ring_new::{Reader, RingBuffer, Writer};
-
-#[derive(Debug)]
-pub struct RingSource<const TSHIRT_SIZE: usize, const RING_CAPACITY: usize> {
-    writer: Writer<TSHIRT_SIZE, RING_CAPACITY>,
-}
-impl<const TSHIRT_SIZE: usize, const RING_CAPACITY: usize> RingSource<TSHIRT_SIZE, RING_CAPACITY> {
-    pub fn new(out_buffer: &'static RingBuffer<TSHIRT_SIZE, RING_CAPACITY>) -> Self {
-        RingSource {
-            writer: Writer::new(out_buffer),
-        }
-    }
-}
-#[derive(Debug, Clone)]
-pub struct RingSink<const TSHIRT_SIZE: usize, const RING_CAPACITY: usize> {
-    reader: Reader<TSHIRT_SIZE, RING_CAPACITY>,
-}
-
-impl<const TSHIRT_SIZE: usize, const RING_CAPACITY: usize> RingSink<TSHIRT_SIZE, RING_CAPACITY> {
-    pub fn new(in_buffer: &'static RingBuffer<TSHIRT_SIZE, RING_CAPACITY>) -> Self {
-        RingSink {
-            reader: Reader::new(in_buffer),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct RingPipe<const TSHIRT_SIZE: usize, const RING_CAPACITY: usize> {
-    source: RingSource<TSHIRT_SIZE, RING_CAPACITY>,
-    sink: RingSink<TSHIRT_SIZE, RING_CAPACITY>,
-}
-impl<const TSHIRT_SIZE: usize, const RING_CAPACITY: usize> RingPipe<TSHIRT_SIZE, RING_CAPACITY> {
-    pub fn new(
-        in_buffer: &'static RingBuffer<TSHIRT_SIZE, RING_CAPACITY>,
-        out_buffer: &'static RingBuffer<TSHIRT_SIZE, RING_CAPACITY>,
-    ) -> Self {
-        RingPipe {
-            sink: RingSink::new(in_buffer),
-            source: RingSource::new(out_buffer),
-        }
-    }
-}
+use rusted_ring_new::{Reader, RingBuffer, RingPipe, Writer};
 
 pub struct RingBufferActor<const TSHIRT_SIZE: usize, const RING_CAPACITY: usize> {
     pub jh: std::thread::JoinHandle<()>,
@@ -50,6 +9,18 @@ pub struct RingBufferActor<const TSHIRT_SIZE: usize, const RING_CAPACITY: usize>
 impl<const TSHIRT_SIZE: usize, const RING_CAPACITY: usize>
     RingBufferActor<TSHIRT_SIZE, RING_CAPACITY>
 {
+    /// # Arguments
+    ///
+    /// * `handler`:
+    /// * `in_buffer`:
+    /// * `out_buffer`:
+    ///
+    /// returns: RingBufferActor<{ TSHIRT_SIZE }, { RING_CAPACITY }>
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// ```
     pub fn init<F>(
         handler: &'static F,
         in_buffer: &'static rusted_ring_new::RingBuffer<TSHIRT_SIZE, RING_CAPACITY>,
@@ -95,7 +66,7 @@ mod ring_actor_tests {
         atomic::{AtomicU32, Ordering},
     };
 
-    use rusted_ring_new::EventUtils;
+    use rusted_ring_new::{EventUtils, RingSink, RingSource};
 
     use super::*;
 
@@ -354,7 +325,6 @@ mod ring_actor_tests {
         let output_buf = output_ring.get_or_init(RingBuffer::new);
 
         let _pipe = RingPipe::new(input_buf, output_buf);
-
         println!("✅ RingPipe creation working");
     }
 

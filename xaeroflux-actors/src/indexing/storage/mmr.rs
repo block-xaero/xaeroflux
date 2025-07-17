@@ -81,10 +81,7 @@ impl XaeroMmr {
 }
 impl XaeroMmrOps for XaeroMmr {
     fn append(&mut self, leaf_hash: [u8; 32]) -> Vec<Peak> {
-        let mut carry = Peak {
-            height: 0,
-            root: leaf_hash,
-        };
+        let mut carry = Peak { height: 0, root: leaf_hash };
         self.leaf_hashes.push(leaf_hash);
         let mut changed = vec![];
         changed.push(carry);
@@ -155,10 +152,7 @@ impl XaeroMmrOps for XaeroMmr {
         // 2) Compute the start index of that peak in leaf_hashes
         let start = self.peaks[..peak_idx].iter().map(|p| 1 << p.height).sum::<usize>();
 
-        let mut proof = XaeroMerkleProof {
-            leaf_index,
-            value: Vec::new(),
-        };
+        let mut proof = XaeroMerkleProof { leaf_index, value: Vec::new() };
 
         // 3) **Only** build a per‐peak Merkle proof if height > 0
         if peak.height > 0 {
@@ -171,9 +165,7 @@ impl XaeroMmrOps for XaeroMmr {
 
         // 4) Bag‐of‐peaks proof (always)
         let roots = self.peaks.iter().map(|p| p.root).collect::<Vec<_>>();
-        let mut bag_proof = XaeroMerkleTree::neo(roots)
-            .generate_proof(peak.root)
-            .expect("peak root must exist in bag");
+        let mut bag_proof = XaeroMerkleTree::neo(roots).generate_proof(peak.root).expect("peak root must exist in bag");
         proof.value.append(&mut bag_proof.value);
 
         Some(proof)
@@ -307,11 +299,7 @@ mod tests {
         let root = mmr.root();
         for (idx, _) in leaves.iter().enumerate() {
             let proof = mmr.proof(idx).expect("proof must exist");
-            assert!(
-                mmr.verify(leaves[idx], &proof, root),
-                "proof should verify for leaf {}",
-                idx
-            );
+            assert!(mmr.verify(leaves[idx], &proof, root), "proof should verify for leaf {}", idx);
         }
         // out‐of‐bounds proof request returns None
         assert!(mmr.proof(leaves.len()).is_none());

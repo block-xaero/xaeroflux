@@ -5,7 +5,7 @@
 edition = "2024"
 
 # Basic formatting preferences
-max_width = 120
+max_width = 180
 tab_spaces = 4
 hard_tabs = false
 newline_style = "Unix"

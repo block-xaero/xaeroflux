@@ -119,6 +119,13 @@ impl<T> Sink<T> {
 }
 
 #[repr(C)]
+#[derive(Debug)]
+pub struct GenPipe<T> {
+    pub source: Arc<Source<T>>,
+    pub sink: Arc<Sink<T>>,
+}
+
+#[repr(C)]
 #[derive(Debug, Clone)]
 pub struct Pipe {
     pub source: Arc<Source<Arc<XaeroEvent>>>,
@@ -147,6 +154,13 @@ impl SignalPipe {
         Arc::new(SignalPipe {
             source: Arc::new(Source::new(bounds, kind)),
             sink: Arc::new(Sink::new(bounds, kind)),
+        })
+    }
+
+    pub fn single() -> Arc<Self> {
+        Arc::new(SignalPipe {
+            source: Arc::new(Source::new(Some(1), BusKind::Control)),
+            sink: Arc::new(Sink::new(Some(1), BusKind::Control)),
         })
     }
 }

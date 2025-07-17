@@ -5047,9 +5047,9 @@ dependencies = [
 
 [[package]]
 name = "rusted-ring"
-version = "0.5.1"
+version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee3d34a789bde5b0609f04f583734e33be29dd514e18d9570866208f51c1103e"
+checksum = "1f87464826db83f34c30db2227e430a27520f3c18373cf54e28629e3c3b4705f"
 dependencies = [
  "bytemuck",
  "thiserror 2.0.12",
@@ -6989,7 +6989,7 @@ name = "xaeroflux"
 version = "0.8.1-m5"
 dependencies = [
  "rusted-ring 0.4.0",
- "rusted-ring 0.5.1",
+ "rusted-ring 0.5.4",
  "xaeroflux-actors 0.8.1-m5 (registry+https://github.com/rust-lang/crates.io-index)",
  "xaeroflux-core 0.8.1-m5 (registry+https://github.com/rust-lang/crates.io-index)",
  "xaeroflux-crdts 0.8.1-m5 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -7024,7 +7024,7 @@ dependencies = [
  "rkyv 0.8.10",
  "rkyv_dyn",
  "rusted-ring 0.4.0",
- "rusted-ring 0.5.1",
+ "rusted-ring 0.5.4",
  "rustfix",
  "serde",
  "serial_test",
@@ -7104,7 +7104,7 @@ dependencies = [
  "rkyv 0.8.10",
  "rkyv_dyn",
  "rusted-ring 0.4.0",
- "rusted-ring 0.5.1",
+ "rusted-ring 0.5.4",
  "rustfix",
  "serde",
  "sha2",
@@ -7162,7 +7162,7 @@ dependencies = [
  "crdts",
  "rkyv 0.8.10",
  "rusted-ring 0.4.0",
- "rusted-ring 0.5.1",
+ "rusted-ring 0.5.4",
  "serde",
  "xaeroflux-core 0.8.1-m5 (registry+https://github.com/rust-lang/crates.io-index)",
  "xaeroid",

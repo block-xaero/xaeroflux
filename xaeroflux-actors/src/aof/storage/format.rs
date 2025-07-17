@@ -113,12 +113,6 @@ use std::fmt::Debug;
 
 impl Debug for EventKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "EventKey {{ ts: {}, kind: {}, hash: {} }}",
-            self.ts,
-            self.kind,
-            hex::encode(self.hash)
-        )
+        write!(f, "EventKey {{ ts: {}, kind: {}, hash: {} }}", self.ts, self.kind, hex::encode(self.hash))
     }
 }

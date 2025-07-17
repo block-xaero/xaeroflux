@@ -3,10 +3,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use liblmdb::{
-    MDB_RDONLY, MDB_txn, MDB_val, mdb_cursor_close, mdb_cursor_get, mdb_cursor_open, mdb_get, mdb_txn_abort,
-    mdb_txn_begin,
-};
+use liblmdb::{MDB_RDONLY, MDB_txn, MDB_val, mdb_cursor_close, mdb_cursor_get, mdb_cursor_open, mdb_get, mdb_txn_abort, mdb_txn_begin};
 use rkyv::util::AlignedVec;
 use xaeroflux_core::{XaeroPoolManager, event::EventType};
 
@@ -61,11 +58,7 @@ pub unsafe fn get_meta_val(env: &Arc<Mutex<LmdbEnv>>, key: &[u8]) -> AlignedVec 
 /// `[ts_start (8 bytes BE) ‖ segment_index (8 bytes BE)]` is in `[start, end)`.
 ///
 /// Returns a `Vec<SegmentMeta>` in ascending `ts_start` order.
-pub fn iterate_segment_meta_by_range(
-    env: &Arc<Mutex<LmdbEnv>>,
-    start: u64,
-    end: Option<u64>,
-) -> Result<Vec<SegmentMeta>, Box<dyn std::error::Error>> {
+pub fn iterate_segment_meta_by_range(env: &Arc<Mutex<LmdbEnv>>, start: u64, end: Option<u64>) -> Result<Vec<SegmentMeta>, Box<dyn std::error::Error>> {
     use liblmdb::MDB_cursor_op_MDB_NEXT;
     let mut results = Vec::<SegmentMeta>::new();
     let g = env.lock().expect("failed to lock env");
@@ -105,12 +98,7 @@ pub fn iterate_segment_meta_by_range(
         };
 
         // 4) Position to first key ≥ start_key
-        let rc = mdb_cursor_get(
-            cursor,
-            &mut key_val,
-            &mut data_val,
-            liblmdb::MDB_cursor_op_MDB_SET_RANGE,
-        );
+        let rc = mdb_cursor_get(cursor, &mut key_val, &mut data_val, liblmdb::MDB_cursor_op_MDB_SET_RANGE);
         if rc != 0 {
             // MDB_NOTFOUND or error: no items ≥ start_key
             mdb_txn_abort(rtxn);
@@ -211,15 +199,7 @@ mod meta_tests {
         let meta = make_meta(ts, ts + 5, 42);
 
         // Create XaeroEvent with SegmentMeta data
-        let xaero_event = XaeroPoolManager::create_xaero_event(
-            bytes_of(&meta),
-            EventType::MetaEvent(1).to_u8(),
-            None,
-            None,
-            None,
-            ts,
-        )
-        .expect("Failed to create meta event");
+        let xaero_event = XaeroPoolManager::create_xaero_event(bytes_of(&meta), EventType::MetaEvent(1).to_u8(), None, None, None, ts).expect("Failed to create meta event");
 
         push_xaero_event(&env, &xaero_event).expect("failed to push meta");
 
@@ -247,15 +227,8 @@ mod meta_tests {
         // create three metas at t=10,20,30
         let metas = [make_meta(10, 15, 0), make_meta(20, 25, 1), make_meta(30, 35, 2)];
         for meta in metas.iter() {
-            let xaero_event = XaeroPoolManager::create_xaero_event(
-                bytes_of(meta),
-                EventType::MetaEvent(1).to_u8(),
-                None,
-                None,
-                None,
-                meta.ts_start,
-            )
-            .expect("Failed to create meta event");
+            let xaero_event =
+                XaeroPoolManager::create_xaero_event(bytes_of(meta), EventType::MetaEvent(1).to_u8(), None, None, None, meta.ts_start).expect("Failed to create meta event");
 
             push_xaero_event(&env, &xaero_event).expect("failed to push meta");
         }

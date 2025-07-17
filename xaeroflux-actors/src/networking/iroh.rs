@@ -51,10 +51,7 @@ impl IrohState {
         let xaero_id_hash = blake_hash_slice(bytemuck::bytes_of(xid));
         let node_id_hash = *endpoint.node_id().as_bytes(); // de-ref copy
         let x_dht_record = XaeroDHTRecord {
-            id: XaeroDHTId {
-                xaero_id_hash,
-                node_id_hash,
-            },
+            id: XaeroDHTId { xaero_id_hash, node_id_hash },
             zk_proofs: xid.credential.proofs,
             groups: [[0u8; 32]; 10], // TODO: at most and atleast median
             last_seen: emit_secs(),
@@ -87,10 +84,7 @@ impl IrohState {
         let node_id_hash = *self.endpoint.node_id().as_bytes();
 
         let updated_record = XaeroDHTRecord {
-            id: XaeroDHTId {
-                xaero_id_hash,
-                node_id_hash,
-            },
+            id: XaeroDHTId { xaero_id_hash, node_id_hash },
             zk_proofs: self.xaero_id.credential.proofs,
             groups: [[0u8; 32]; 10], // TODO: update with actual groups
             last_seen: emit_secs(),
@@ -102,8 +96,7 @@ impl IrohState {
 
         let record_bytes = bytemuck::bytes_of(&updated_record);
         let user_data = hex::encode(record_bytes);
-        self.endpoint
-            .set_user_data_for_discovery(Some(user_data.parse().expect("Cannot parse")));
+        self.endpoint.set_user_data_for_discovery(Some(user_data.parse().expect("Cannot parse")));
 
         tracing::debug!("Updated discovery data with new sync state");
     }
@@ -120,10 +113,7 @@ impl XaeroDHTDiscovery {
         let node_id_hash = *iroh_state.endpoint.node_id().as_bytes();
 
         let dht_record = XaeroDHTRecord {
-            id: XaeroDHTId {
-                xaero_id_hash,
-                node_id_hash,
-            },
+            id: XaeroDHTId { xaero_id_hash, node_id_hash },
             zk_proofs: iroh_state.xaero_id.credential.proofs,
             groups: [[0u8; 32]; 10],
             last_seen: emit_secs(),
@@ -156,9 +146,7 @@ impl DHTDiscovery for XaeroDHTDiscovery {
 
         let record_bytes = bytemuck::bytes_of(&updated_record);
         let user_data = hex::encode(record_bytes);
-        self.iroh_state
-            .endpoint
-            .set_user_data_for_discovery(Some(user_data.parse().expect("cannot parse")));
+        self.iroh_state.endpoint.set_user_data_for_discovery(Some(user_data.parse().expect("cannot parse")));
 
         tracing::info!("Published XaeroID with {} groups", groups.len());
         Ok(())
@@ -225,27 +213,15 @@ impl DHTDiscovery for XaeroDHTDiscovery {
                                 match hex::decode(&data_str) {
                                     Ok(bytes) => match XaeroDHTId::from_bytes(&bytes) {
                                         Ok(peer_record) => {
-                                            tracing::info!(
-                                                "✅ Found XaeroFlux peer: {} with XaeroID: {}",
-                                                node_id,
-                                                hex::encode(&peer_record.xaero_id_hash[..8])
-                                            );
+                                            tracing::info!("✅ Found XaeroFlux peer: {} with XaeroID: {}", node_id, hex::encode(&peer_record.xaero_id_hash[..8]));
                                             peers.push(*peer_record);
                                         }
                                         Err(e) => {
-                                            tracing::warn!(
-                                                "❌ Failed to parse XaeroDHTRecord from peer {}: {}",
-                                                node_id,
-                                                e
-                                            );
+                                            tracing::warn!("❌ Failed to parse XaeroDHTRecord from peer {}: {}", node_id, e);
                                         }
                                     },
                                     Err(e) => {
-                                        tracing::debug!(
-                                            "⚠️ Peer {} has non-hex user data (not XaeroFlux): {}",
-                                            node_id,
-                                            e
-                                        );
+                                        tracing::debug!("⚠️ Peer {} has non-hex user data (not XaeroFlux): {}", node_id, e);
                                     }
                                 }
                             }

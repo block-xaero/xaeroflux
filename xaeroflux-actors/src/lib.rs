@@ -79,10 +79,7 @@ mod tests {
         let workspace_created_event = subject.control.sink.rx.recv().expect("attempt_to_unwrap_failed");
 
         // Access event type through Arc<XaeroEvent>
-        assert_eq!(
-            workspace_created_event.event_type(),
-            EventType::SystemEvent(SystemEventKind::WorkspaceCreated).to_u8()
-        );
+        assert_eq!(workspace_created_event.event_type(), EventType::SystemEvent(SystemEventKind::WorkspaceCreated).to_u8());
         assert_eq!(expected_sha256.as_ref(), subject.workspace_id.as_slice());
     }
 
@@ -129,15 +126,8 @@ mod tests {
             let mut mmap = unsafe { MmapMut::map_mut(&file).expect("mmap") };
 
             // Create XaeroEvent using new architecture
-            let test_event = XaeroPoolManager::create_xaero_event(
-                b"hello",
-                EventType::ApplicationEvent(1).to_u8(),
-                None,
-                None,
-                None,
-                emit_secs(),
-            )
-            .expect("Failed to create test event");
+            let test_event =
+                XaeroPoolManager::create_xaero_event(b"hello", EventType::ApplicationEvent(1).to_u8(), None, None, None, emit_secs()).expect("Failed to create test event");
 
             // Use new archive format
             let frame = archive_xaero_event(&test_event);
@@ -146,9 +136,7 @@ mod tests {
         }
 
         // Create LMDB environment in the correct location
-        let meta_env = Arc::new(Mutex::new(
-            LmdbEnv::new(&lmdb_path, BusKind::Data).expect("create lmdb"),
-        ));
+        let meta_env = Arc::new(Mutex::new(LmdbEnv::new(&lmdb_path, BusKind::Data).expect("create lmdb")));
 
         // Push metadata using new XaeroEvent format
         let seg_meta = SegmentMeta {
@@ -161,15 +149,8 @@ mod tests {
             latest_segment_id: 0,
         };
 
-        let meta_event = XaeroPoolManager::create_xaero_event(
-            bytes_of(&seg_meta),
-            EventType::MetaEvent(1).to_u8(),
-            None,
-            None,
-            None,
-            emit_secs(),
-        )
-        .expect("Failed to create meta event");
+        let meta_event =
+            XaeroPoolManager::create_xaero_event(bytes_of(&seg_meta), EventType::MetaEvent(1).to_u8(), None, None, None, emit_secs()).expect("Failed to create meta event");
 
         push_xaero_event(&meta_env, &meta_event).expect("push_xaero_event");
 
@@ -224,8 +205,7 @@ mod tests {
 
         // Compute expected SHA-256 for workspace and object
         let expected_ws_sha: [u8; 32] = xaeroflux_core::hash::sha_256_hash("cyan_workspace_123".as_bytes().to_vec());
-        let expected_obj_sha: [u8; 32] =
-            xaeroflux_core::hash::sha_256_hash("cyan_object_white_board_id_134".as_bytes().to_vec());
+        let expected_obj_sha: [u8; 32] = xaeroflux_core::hash::sha_256_hash("cyan_object_white_board_id_134".as_bytes().to_vec());
 
         // Now compute the combined Blake3 hash exactly as the macro does:
         let ws_blake = blake_hash_slice("cyan_workspace_123".as_bytes());
@@ -240,10 +220,7 @@ mod tests {
 
         // 1) First event was WorkspaceCreated; drain it - handle Arc<XaeroEvent>
         let ws_evt = subject.control.sink.rx.recv().expect("attempt_to_unwrap_failed");
-        assert_eq!(
-            ws_evt.event_type(),
-            EventType::SystemEvent(SystemEventKind::WorkspaceCreated).to_u8()
-        );
+        assert_eq!(ws_evt.event_type(), EventType::SystemEvent(SystemEventKind::WorkspaceCreated).to_u8());
         // Its payload should be the Blake3 of workspace (not SHA-256)
         let mut hasher_ws_payload = blake3::Hasher::new();
         hasher_ws_payload.update("cyan_workspace_123".as_bytes());
@@ -252,10 +229,7 @@ mod tests {
 
         // 2) Second event should be ObjectCreated - handle Arc<XaeroEvent>
         let obj_evt = subject.control.sink.rx.recv().expect("attempt_to_unwrap_failed");
-        assert_eq!(
-            obj_evt.event_type(),
-            EventType::SystemEvent(SystemEventKind::ObjectCreated).to_u8()
-        );
+        assert_eq!(obj_evt.event_type(), EventType::SystemEvent(SystemEventKind::ObjectCreated).to_u8());
         // Its payload should be the Blake3 of object (not SHA-256)
         let mut hasher_obj_payload = blake3::Hasher::new();
         hasher_obj_payload.update("cyan_object_white_board_id_134".as_bytes());
@@ -320,15 +294,7 @@ mod tests {
 
         // Test that we can access event data through PooledEventPtr without copying
         let test_data = b"zero-copy test data for ring buffer";
-        let event = XaeroPoolManager::create_xaero_event(
-            test_data,
-            EventType::ApplicationEvent(42).to_u8(),
-            None,
-            None,
-            None,
-            emit_secs(),
-        )
-        .expect("Failed to create test event");
+        let event = XaeroPoolManager::create_xaero_event(test_data, EventType::ApplicationEvent(42).to_u8(), None, None, None, emit_secs()).expect("Failed to create test event");
 
         // Access data through zero-copy interface
         let accessed_data = event.data(); // This should be zero-copy access
@@ -342,15 +308,7 @@ mod tests {
         XaeroPoolManager::init();
 
         let test_data = b"shared event data";
-        let event = XaeroPoolManager::create_xaero_event(
-            test_data,
-            EventType::ApplicationEvent(1).to_u8(),
-            None,
-            None,
-            None,
-            emit_secs(),
-        )
-        .expect("Failed to create shared event");
+        let event = XaeroPoolManager::create_xaero_event(test_data, EventType::ApplicationEvent(1).to_u8(), None, None, None, emit_secs()).expect("Failed to create shared event");
 
         let event_clone = event.clone();
 
@@ -380,35 +338,14 @@ mod tests {
         let large_data = vec![13u8; 2048];
 
         // Create events of different sizes to test pool allocation
-        let small_event = XaeroPoolManager::create_xaero_event(
-            small_data,
-            EventType::ApplicationEvent(1).to_u8(),
-            None,
-            None,
-            None,
-            emit_secs(),
-        )
-        .expect("Failed to create small event");
+        let small_event =
+            XaeroPoolManager::create_xaero_event(small_data, EventType::ApplicationEvent(1).to_u8(), None, None, None, emit_secs()).expect("Failed to create small event");
 
-        let medium_event = XaeroPoolManager::create_xaero_event(
-            &medium_data,
-            EventType::ApplicationEvent(2).to_u8(),
-            None,
-            None,
-            None,
-            emit_secs(),
-        )
-        .expect("Failed to create medium event");
+        let medium_event =
+            XaeroPoolManager::create_xaero_event(&medium_data, EventType::ApplicationEvent(2).to_u8(), None, None, None, emit_secs()).expect("Failed to create medium event");
 
-        let large_event = XaeroPoolManager::create_xaero_event(
-            &large_data,
-            EventType::ApplicationEvent(3).to_u8(),
-            None,
-            None,
-            None,
-            emit_secs(),
-        )
-        .expect("Failed to create large event");
+        let large_event =
+            XaeroPoolManager::create_xaero_event(&large_data, EventType::ApplicationEvent(3).to_u8(), None, None, None, emit_secs()).expect("Failed to create large event");
 
         // Verify data integrity
         assert_eq!(small_event.data(), small_data);
@@ -428,15 +365,8 @@ mod tests {
 
         // Test that the new archive format works correctly
         let test_data = b"archive format test data";
-        let original_event = XaeroPoolManager::create_xaero_event(
-            test_data,
-            EventType::ApplicationEvent(100).to_u8(),
-            None,
-            None,
-            None,
-            emit_secs(),
-        )
-        .expect("Failed to create original event");
+        let original_event =
+            XaeroPoolManager::create_xaero_event(test_data, EventType::ApplicationEvent(100).to_u8(), None, None, None, emit_secs()).expect("Failed to create original event");
 
         // Archive the event
         let archived_bytes = archive_xaero_event(&original_event);
@@ -454,9 +384,6 @@ mod tests {
         let reconstructed_event = unarchive_to_xaero_event(&archived_bytes).expect("Failed to reconstruct event");
 
         assert_eq!(reconstructed_event.data(), test_data);
-        assert_eq!(
-            reconstructed_event.event_type(),
-            EventType::ApplicationEvent(100).to_u8()
-        );
+        assert_eq!(reconstructed_event.event_type(), EventType::ApplicationEvent(100).to_u8());
     }
 }
