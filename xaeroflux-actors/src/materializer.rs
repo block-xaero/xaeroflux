@@ -29,11 +29,7 @@ use crate::{
 pub trait Materializer: Send + Sync {
     /// Materialize the pipeline, passing each processed event into `handler`.
     /// Updated to use Arc<XaeroEvent> for zero-copy ring buffer access.
-    fn materialize(
-        &self,
-        subject: Arc<Subject>,
-        handler: Arc<dyn Fn(Arc<XaeroEvent>) -> Arc<XaeroEvent> + Send + Sync + 'static>,
-    ) -> Subscription;
+    fn materialize(&self, subject: Arc<Subject>, handler: Arc<dyn Fn(Arc<XaeroEvent>) -> Arc<XaeroEvent> + Send + Sync + 'static>) -> Subscription;
 }
 
 /// Materializer using a shared thread pool per subject.
@@ -57,11 +53,7 @@ impl ThreadPoolForSubjectMaterializer {
 }
 
 impl Materializer for ThreadPoolForSubjectMaterializer {
-    fn materialize(
-        &self,
-        subject: Arc<Subject>,
-        handler: Arc<dyn Fn(Arc<XaeroEvent>) -> Arc<XaeroEvent> + Send + Sync + 'static>,
-    ) -> Subscription {
+    fn materialize(&self, subject: Arc<Subject>, handler: Arc<dyn Fn(Arc<XaeroEvent>) -> Arc<XaeroEvent> + Send + Sync + 'static>) -> Subscription {
         let ops_scan = subject.ops.clone();
 
         // Search for scan operations
@@ -73,13 +65,7 @@ impl Materializer for ThreadPoolForSubjectMaterializer {
             if ops_scan.iter().any(|op| matches!(&op, Operator::Scan(_))) {
                 let scan_window = ops_scan
                     .iter()
-                    .find_map(|op| {
-                        if let Operator::Scan(w) = op {
-                            Some(w.clone())
-                        } else {
-                            None
-                        }
-                    })
+                    .find_map(|op| if let Operator::Scan(w) = op { Some(w.clone()) } else { None })
                     .expect("scan_window_not_found");
 
                 let sw = &scan_window.start.to_be_bytes();
@@ -149,12 +135,7 @@ impl Materializer for ThreadPoolForSubjectMaterializer {
                     let router_handle = std::thread::Builder::new()
                         .name(format!("xaeroflux-event-router-{}", subject_name))
                         .spawn(move || {
-                            spawn_event_router(
-                                router_subject,
-                                streaming_control_tx,
-                                streaming_data_tx,
-                                router_shutdown_rx,
-                            );
+                            spawn_event_router(router_subject, streaming_control_tx, streaming_data_tx, router_shutdown_rx);
                         })
                         .expect("failed to spawn event router");
 
@@ -213,12 +194,7 @@ impl Materializer for ThreadPoolForSubjectMaterializer {
 
 // Event Router with graceful shutdown and bounded channels
 // Updated to handle Arc<XaeroEvent>
-fn spawn_event_router(
-    subject: Arc<Subject>,
-    streaming_control_tx: Sender<Arc<XaeroEvent>>,
-    streaming_data_tx: Sender<Arc<XaeroEvent>>,
-    shutdown_rx: Receiver<()>,
-) {
+fn spawn_event_router(subject: Arc<Subject>, streaming_control_tx: Sender<Arc<XaeroEvent>>, streaming_data_tx: Sender<Arc<XaeroEvent>>, shutdown_rx: Receiver<()>) {
     let control_rx = subject.control.sink.rx.clone();
     let data_rx = subject.data.sink.rx.clone();
 
@@ -692,12 +668,7 @@ fn process_streaming_event(
 }
 
 // Updated to handle Arc<XaeroEvent> and AllocationError
-fn spin_batch_loop(
-    subject: Arc<Subject>,
-    pool: Arc<ThreadPool>,
-    handler: Arc<dyn Fn(Arc<XaeroEvent>) -> Arc<XaeroEvent> + Send + Sync>,
-    shutdown_rx: Receiver<()>,
-) {
+fn spin_batch_loop(subject: Arc<Subject>, pool: Arc<ThreadPool>, handler: Arc<dyn Fn(Arc<XaeroEvent>) -> Arc<XaeroEvent> + Send + Sync>, shutdown_rx: Receiver<()>) {
     let batch_context = &subject.batch_context;
     let bc = match batch_context {
         None => {
@@ -923,19 +894,11 @@ fn apply_batch_ops(
         Ok(mut buff) => {
             // Early return for empty buffer or empty pipeline
             if pipeline.is_empty() || buff.is_empty() {
-                tracing::trace!(
-                    "Skipping batch processing: empty buffer ({} events) or pipeline ({} ops)",
-                    buff.len(),
-                    pipeline.len()
-                );
+                tracing::trace!("Skipping batch processing: empty buffer ({} events) or pipeline ({} ops)", buff.len(), pipeline.len());
                 return None;
             }
 
-            tracing::debug!(
-                "Processing batch with {} events and {} operations",
-                buff.len(),
-                pipeline.len()
-            );
+            tracing::debug!("Processing batch with {} events and {} operations", buff.len(), pipeline.len());
 
             let mut f_result: Option<Arc<XaeroEvent>> = None;
 
@@ -1022,22 +985,12 @@ mod materializer_tests {
 
     // Updated test helper functions to use XaeroPoolManager
     fn create_test_event(data: &[u8], event_type: u8) -> Arc<XaeroEvent> {
-        XaeroPoolManager::create_xaero_event(
-            data,
-            event_type,
-            None,
-            None,
-            None,
-            xaeroflux_core::date_time::emit_secs(),
-        )
-        .expect("Failed to create test event")
+        XaeroPoolManager::create_xaero_event(data, event_type, None, None, None, xaeroflux_core::date_time::emit_secs()).expect("Failed to create test event")
     }
 
     #[allow(clippy::type_complexity)]
     // Example updated CRDT fold operation for testing
-    fn create_test_fold_op()
-    -> Arc<dyn Fn(Arc<XaeroEvent>, Vec<Arc<XaeroEvent>>) -> Result<Arc<XaeroEvent>, AllocationError> + Send + Sync>
-    {
+    fn create_test_fold_op() -> Arc<dyn Fn(Arc<XaeroEvent>, Vec<Arc<XaeroEvent>>) -> Result<Arc<XaeroEvent>, AllocationError> + Send + Sync> {
         Arc::new(|_acc, events| {
             let count = events.len() as u32;
             XaeroPoolManager::create_xaero_event(
@@ -1054,8 +1007,7 @@ mod materializer_tests {
 
     #[allow(clippy::type_complexity)]
     // Example updated CRDT reduce operation for testing
-    fn create_test_reduce_op()
-    -> Arc<dyn Fn(Vec<Arc<XaeroEvent>>) -> Result<Arc<XaeroEvent>, AllocationError> + Send + Sync> {
+    fn create_test_reduce_op() -> Arc<dyn Fn(Vec<Arc<XaeroEvent>>) -> Result<Arc<XaeroEvent>, AllocationError> + Send + Sync> {
         Arc::new(|events| {
             let total_size: usize = events.iter().map(|e| e.data().len()).sum();
             XaeroPoolManager::create_xaero_event(
@@ -1115,24 +1067,22 @@ mod materializer_tests {
         let results = Arc::new(Mutex::new(Vec::new()));
 
         // Create a fold operation that might fail
-        let fold_op = Arc::new(
-            |_acc: Arc<Option<XaeroEvent>>, events: Vec<Arc<XaeroEvent>>| -> Result<Arc<XaeroEvent>, AllocationError> {
-                if events.len() > 5 {
-                    // Simulate allocation failure for large batches
-                    Err(AllocationError::PoolFull(PoolId::L))
-                } else {
-                    XaeroPoolManager::create_xaero_event(
-                        &(events.len() as u32).to_le_bytes(),
-                        EventType::ApplicationEvent(1).to_u8(),
-                        None,
-                        None,
-                        None,
-                        xaeroflux_core::date_time::emit_secs(),
-                    )
-                    .map_err(|e| AllocationError::EventCreation("failed to create test event"))
-                }
-            },
-        );
+        let fold_op = Arc::new(|_acc: Arc<Option<XaeroEvent>>, events: Vec<Arc<XaeroEvent>>| -> Result<Arc<XaeroEvent>, AllocationError> {
+            if events.len() > 5 {
+                // Simulate allocation failure for large batches
+                Err(AllocationError::PoolFull(PoolId::L))
+            } else {
+                XaeroPoolManager::create_xaero_event(
+                    &(events.len() as u32).to_le_bytes(),
+                    EventType::ApplicationEvent(1).to_u8(),
+                    None,
+                    None,
+                    None,
+                    xaeroflux_core::date_time::emit_secs(),
+                )
+                .map_err(|e| AllocationError::EventCreation("failed to create test event"))
+            }
+        });
 
         let buffered = subject.buffer(
             Duration::from_millis(100),

@@ -14,9 +14,7 @@ use std::{
 
 use bytemuck::{Pod, Zeroable};
 use rusted_ring_new::{EventPoolFactory, EventUtils, PooledEvent, Reader, RingBuffer, Writer};
-use xaeroflux_core::{
-    CONF, date_time::emit_secs, hash::sha_256_slice, pipe::BusKind, pool::XaeroInternalEvent, system_paths,
-};
+use xaeroflux_core::{CONF, date_time::emit_secs, hash::sha_256_slice, pipe::BusKind, pool::XaeroInternalEvent, system_paths};
 
 use crate::{
     aof::storage::{
@@ -98,16 +96,8 @@ impl AofState {
 
         // Construct subject-specific path based on bus kind
         let lmdb_path = match bus_kind {
-            BusKind::Control => system_paths::emit_control_path_with_subject_hash(
-                base_path.to_str().expect("path_invalid_for_aof"),
-                subject_hash.0,
-                "aof",
-            ),
-            BusKind::Data => system_paths::emit_data_path_with_subject_hash(
-                base_path.to_str().expect("path_invalid_for_aof"),
-                subject_hash.0,
-                "aof",
-            ),
+            BusKind::Control => system_paths::emit_control_path_with_subject_hash(base_path.to_str().expect("path_invalid_for_aof"), subject_hash.0, "aof"),
+            BusKind::Data => system_paths::emit_data_path_with_subject_hash(base_path.to_str().expect("path_invalid_for_aof"), subject_hash.0, "aof"),
         };
 
         tracing::info!("Creating AOF LMDB at path: {}", lmdb_path);
@@ -177,11 +167,7 @@ impl AofState {
     }
 
     /// Process a single event and persist to LMDB (legacy method)
-    fn process_legacy_event(
-        &mut self,
-        event_data: &[u8],
-        event_type: u8,
-    ) -> Result<AofWriteConfirmation, Box<dyn std::error::Error>> {
+    fn process_legacy_event(&mut self, event_data: &[u8], event_type: u8) -> Result<AofWriteConfirmation, Box<dyn std::error::Error>> {
         // Use empty hashes for legacy events
         self.process_event(
             event_data,
@@ -274,10 +260,7 @@ impl AofActor {
     }
 
     /// Process event from ring buffer with specific size
-    fn process_ring_event_sized<const SIZE: usize>(
-        state: &mut AofState,
-        event: &PooledEvent<SIZE>,
-    ) -> Result<AofWriteConfirmation, Box<dyn std::error::Error>> {
+    fn process_ring_event_sized<const SIZE: usize>(state: &mut AofState, event: &PooledEvent<SIZE>) -> Result<AofWriteConfirmation, Box<dyn std::error::Error>> {
         // Try to parse as XaeroInternalEvent first
         if event.len == std::mem::size_of::<XaeroInternalEvent<SIZE>>() as u32 {
             // Safety: We've verified the size matches exactly
@@ -338,14 +321,8 @@ impl AofActor {
     /// Data event processing loop (AOF data input -> AOF data output for confirmations)
     fn run_data_event_loop(state: &mut AofState, reader: &mut Reader<256, 1000>, writer: &mut Writer<64, 2000>) {
         tracing::warn!("🚀 AOF Data event loop STARTED");
-        tracing::warn!(
-            "🎯 Actor input ring buffer address: {:p}",
-            reader.ringbuffer as *const _
-        );
-        tracing::warn!(
-            "🎯 Actor output ring buffer address: {:p}",
-            writer.ringbuffer as *const _
-        );
+        tracing::warn!("🎯 Actor input ring buffer address: {:p}", reader.ringbuffer as *const _);
+        tracing::warn!("🎯 Actor output ring buffer address: {:p}", writer.ringbuffer as *const _);
         loop {
             let mut events_processed = 0;
 
@@ -401,16 +378,11 @@ mod tests {
         };
 
         let conf_size = std::mem::size_of::<AofWriteConfirmation>();
-        assert_eq!(
-            conf_size, 64,
-            "Confirmation must be exactly 64 bytes for XS pool, got {} bytes",
-            conf_size
-        );
+        assert_eq!(conf_size, 64, "Confirmation must be exactly 64 bytes for XS pool, got {} bytes", conf_size);
 
         // Test XS event creation
         let conf_bytes = bytemuck::bytes_of(&conf);
-        let xs_event =
-            EventUtils::create_pooled_event::<64>(conf_bytes, 200).expect("Confirmation should fit in XS event");
+        let xs_event = EventUtils::create_pooled_event::<64>(conf_bytes, 200).expect("Confirmation should fit in XS event");
 
         assert_eq!(xs_event.len as usize, conf_size);
         println!("✅ Confirmation fits perfectly in XS pool: {} bytes", conf_size);
@@ -436,19 +408,14 @@ mod tests {
             thread::sleep(Duration::from_millis(100));
 
             if let Some(conf_event) = actor.out_reader.next() {
-                if let Ok(_conf) =
-                    bytemuck::try_from_bytes::<AofWriteConfirmation>(&conf_event.data[..conf_event.len as usize])
-                {
+                if let Ok(_conf) = bytemuck::try_from_bytes::<AofWriteConfirmation>(&conf_event.data[..conf_event.len as usize]) {
                     confirmation_found = true;
                     break;
                 }
             }
         }
 
-        assert!(
-            confirmation_found,
-            "Should receive control confirmation from AOF output buffer"
-        );
+        assert!(confirmation_found, "Should receive control confirmation from AOF output buffer");
     }
 
     #[test]
@@ -458,27 +425,18 @@ mod tests {
         let mut actor = AofActor::spin(subject_hash, BusKind::Data).expect("Failed to create AOF actor");
         tracing::warn!(
             "🔍 Test input ring buffer address: {:p}",
-            AOF_DATA_INPUT_RING
-                .get()
-                .map(|r| r as *const _)
-                .unwrap_or(std::ptr::null())
+            AOF_DATA_INPUT_RING.get().map(|r| r as *const _).unwrap_or(std::ptr::null())
         );
         tracing::warn!(
             "🔍 Test output ring buffer address: {:p}",
-            AOF_DATA_OUTPUT_RING
-                .get()
-                .map(|r| r as *const _)
-                .unwrap_or(std::ptr::null())
+            AOF_DATA_OUTPUT_RING.get().map(|r| r as *const _).unwrap_or(std::ptr::null())
         );
         // Test S writer with CRDT operation (256 bytes for data events)
         let crdt_op = b"{'op':'insert','pos':42,'char':'a','user':'alice'}"; // CRDT operation
         let event = EventUtils::create_pooled_event::<256>(crdt_op, 100).expect("Failed to create S event");
         thread::sleep(Duration::from_millis(100));
         // Write to AOF data input buffer
-        assert!(
-            actor.in_writer_data.add(event),
-            "Should write CRDT op to AOF data input buffer"
-        );
+        assert!(actor.in_writer_data.add(event), "Should write CRDT op to AOF data input buffer");
 
         // Read confirmations from AOF data output buffer (separate ring buffer for confirmations)
         let mut confirmation_found = false;
@@ -503,10 +461,7 @@ mod tests {
             }
         }
 
-        assert!(
-            confirmation_found,
-            "Should receive data confirmation from AOF output buffer within timeout"
-        );
+        assert!(confirmation_found, "Should receive data confirmation from AOF output buffer within timeout");
     }
 
     #[test]
@@ -543,10 +498,7 @@ mod tests {
         let internal_size = std::mem::size_of::<XaeroInternalEvent<256>>();
 
         assert_ne!(regular_size, internal_size, "Sizes should be different");
-        println!(
-            "✅ XaeroInternalEvent detection logic working: regular={}, internal={}",
-            regular_size, internal_size
-        );
+        println!("✅ XaeroInternalEvent detection logic working: regular={}, internal={}", regular_size, internal_size);
     }
 
     #[test]
@@ -570,11 +522,7 @@ mod tests {
 
         assert_eq!(confirmation.status, 0, "Should succeed");
         assert_eq!(confirmation.event_type, 42, "Should preserve event type");
-        assert_eq!(
-            confirmation.original_hash,
-            sha_256_slice(test_data),
-            "Should hash correctly"
-        );
+        assert_eq!(confirmation.original_hash, sha_256_slice(test_data), "Should hash correctly");
 
         println!("✅ Enhanced event processing working");
     }

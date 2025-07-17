@@ -183,17 +183,11 @@ impl WriterState {
 
         std::fs::create_dir_all(&config.segment_dir)?;
 
-        self.filename =
-            Path::new(&config.segment_dir).join(format!("{}-{}-{:04}.seg", config.prefix, self.ts_start, self.seg_id));
+        self.filename = Path::new(&config.segment_dir).join(format!("{}-{}-{:04}.seg", config.prefix, self.ts_start, self.seg_id));
 
         let segment_bytes = (config.pages_per_segment * config.page_size) as u64;
 
-        let file = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(&self.filename)?;
+        let file = OpenOptions::new().create(true).truncate(false).read(true).write(true).open(&self.filename)?;
 
         if file.metadata()?.len() == 0 {
             file.set_len(segment_bytes)?;
@@ -225,12 +219,7 @@ impl WriterState {
         };
 
         let metadata_bytes = bytemuck::bytes_of(&seg_meta);
-        push_internal_event_universal(
-            meta_db,
-            metadata_bytes,
-            EventType::MetaEvent(1).to_u8() as u32,
-            emit_secs(),
-        )?;
+        push_internal_event_universal(meta_db, metadata_bytes, EventType::MetaEvent(1).to_u8() as u32, emit_secs())?;
 
         Ok(())
     }
@@ -243,11 +232,7 @@ impl WriterState {
         self.stats.current_page_index = self.page_index;
     }
 
-    fn rollover_to_next_segment(
-        &mut self,
-        config: &SegmentConfig,
-        meta_db: &Arc<Mutex<LmdbEnv>>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn rollover_to_next_segment(&mut self, config: &SegmentConfig, meta_db: &Arc<Mutex<LmdbEnv>>) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(ref mut mm) = self.memory_map {
             mm.flush()?;
         }
@@ -288,22 +273,13 @@ pub struct SegmentWriterState {
 
 impl SegmentWriterState {
     /// Create new segment writer state with LMDB environment
-    pub fn new(
-        subject_hash: SubjectHash,
-        bus_kind: BusKind,
-        config: SegmentConfig,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(subject_hash: SubjectHash, bus_kind: BusKind, config: SegmentConfig) -> Result<Self, Box<dyn std::error::Error>> {
         std::fs::create_dir_all(&config.lmdb_env_path)?;
         std::fs::create_dir_all(&config.segment_dir)?;
 
         let lmdb_path = match bus_kind {
-            BusKind::Control => system_paths::emit_control_path_with_subject_hash(
-                &config.lmdb_env_path,
-                subject_hash.0,
-                "segment_writer",
-            ),
-            BusKind::Data =>
-                system_paths::emit_data_path_with_subject_hash(&config.lmdb_env_path, subject_hash.0, "segment_writer"),
+            BusKind::Control => system_paths::emit_control_path_with_subject_hash(&config.lmdb_env_path, subject_hash.0, "segment_writer"),
+            BusKind::Data => system_paths::emit_data_path_with_subject_hash(&config.lmdb_env_path, subject_hash.0, "segment_writer"),
         };
 
         tracing::info!("Creating Segment Writer LMDB at path: {}", lmdb_path);
@@ -320,64 +296,41 @@ impl SegmentWriterState {
     }
 
     /// Process XaeroInternalEvent<64> (XS)
-    fn process_internal_event_64(
-        &mut self,
-        internal_event: Arc<XaeroInternalEvent<64>>,
-    ) -> Result<SegmentWriteConfirmation, Box<dyn std::error::Error>> {
+    fn process_internal_event_64(&mut self, internal_event: Arc<XaeroInternalEvent<64>>) -> Result<SegmentWriteConfirmation, Box<dyn std::error::Error>> {
         let archived_data = archive_xaero_internal_event_64(*internal_event).to_vec();
         self.process_archived_data(archived_data, internal_event.xaero_id_hash, internal_event.latest_ts)
     }
 
     /// Process XaeroInternalEvent<256> (S)
-    fn process_internal_event_256(
-        &mut self,
-        internal_event: Arc<XaeroInternalEvent<256>>,
-    ) -> Result<SegmentWriteConfirmation, Box<dyn std::error::Error>> {
+    fn process_internal_event_256(&mut self, internal_event: Arc<XaeroInternalEvent<256>>) -> Result<SegmentWriteConfirmation, Box<dyn std::error::Error>> {
         let archived_data = archive_xaero_internal_event_256(*internal_event).to_vec();
         self.process_archived_data(archived_data, internal_event.xaero_id_hash, internal_event.latest_ts)
     }
 
     /// Process XaeroInternalEvent<1024> (M)
-    fn process_internal_event_1024(
-        &mut self,
-        internal_event: Arc<XaeroInternalEvent<1024>>,
-    ) -> Result<SegmentWriteConfirmation, Box<dyn std::error::Error>> {
+    fn process_internal_event_1024(&mut self, internal_event: Arc<XaeroInternalEvent<1024>>) -> Result<SegmentWriteConfirmation, Box<dyn std::error::Error>> {
         let archived_data = archive_xaero_internal_event_1024(*internal_event).to_vec();
         self.process_archived_data(archived_data, internal_event.xaero_id_hash, internal_event.latest_ts)
     }
 
     /// Process XaeroInternalEvent<4096> (L)
-    fn process_internal_event_4096(
-        &mut self,
-        internal_event: Arc<XaeroInternalEvent<4096>>,
-    ) -> Result<SegmentWriteConfirmation, Box<dyn std::error::Error>> {
+    fn process_internal_event_4096(&mut self, internal_event: Arc<XaeroInternalEvent<4096>>) -> Result<SegmentWriteConfirmation, Box<dyn std::error::Error>> {
         let archived_data = archive_xaero_internal_event_4096(*internal_event).to_vec();
         self.process_archived_data(archived_data, internal_event.xaero_id_hash, internal_event.latest_ts)
     }
 
     /// Process XaeroInternalEvent<16384> (XL)
-    fn process_internal_event_16384(
-        &mut self,
-        internal_event: Arc<XaeroInternalEvent<16384>>,
-    ) -> Result<SegmentWriteConfirmation, Box<dyn std::error::Error>> {
+    fn process_internal_event_16384(&mut self, internal_event: Arc<XaeroInternalEvent<16384>>) -> Result<SegmentWriteConfirmation, Box<dyn std::error::Error>> {
         let archived_data = archive_xaero_internal_event_16384(*internal_event).to_vec();
         self.process_archived_data(archived_data, internal_event.xaero_id_hash, internal_event.latest_ts)
     }
 
     /// Common processing logic for archived data
-    fn process_archived_data(
-        &mut self,
-        archived_data: Vec<u8>,
-        xaero_id_hash: [u8; 32],
-        latest_ts: u64,
-    ) -> Result<SegmentWriteConfirmation, Box<dyn std::error::Error>> {
+    fn process_archived_data(&mut self, archived_data: Vec<u8>, xaero_id_hash: [u8; 32], latest_ts: u64) -> Result<SegmentWriteConfirmation, Box<dyn std::error::Error>> {
         let write_len = archived_data.len();
         let leaf_hash = sha_256_hash_b(&archived_data);
 
-        let mut state = self
-            .writer_state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut state = self.writer_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
 
         // Initialize state from metadata if this is the first event
         state.initialize_from_metadata(&self.env, &self.config);
@@ -463,20 +416,12 @@ pub struct SegmentWriterActor {
 
 impl SegmentWriterActor {
     /// Create and spawn segment writer actor with ring buffer processing for all T-shirt sizes
-    pub fn spin(
-        subject_hash: SubjectHash,
-        bus_kind: BusKind,
-        config: Option<SegmentConfig>,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn spin(subject_hash: SubjectHash, bus_kind: BusKind, config: Option<SegmentConfig>) -> Result<Self, Box<dyn std::error::Error>> {
         let config = config.unwrap_or_default();
         let mut state = SegmentWriterState::new(subject_hash, bus_kind.clone(), config)?;
 
         let jh = thread::spawn(move || {
-            tracing::info!(
-                "Segment Writer Actor started - Subject: {:?}, Bus: {:?}",
-                subject_hash,
-                bus_kind
-            );
+            tracing::info!("Segment Writer Actor started - Subject: {:?}, Bus: {:?}", subject_hash, bus_kind);
 
             // Initialize all ring buffers
             let xs_input_ring = SEGMENT_CONTROL_INPUT_RING.get_or_init(RingBuffer::new);
@@ -530,10 +475,7 @@ impl SegmentWriterActor {
                 total_events_processed += Self::process_xl_events(&mut state, &mut xl_reader, &mut xl_writer);
 
                 if total_events_processed > 0 {
-                    let state_guard = state
-                        .writer_state
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    let state_guard = state.writer_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                     state_guard.log_stats();
                 }
 
@@ -571,11 +513,7 @@ impl SegmentWriterActor {
     }
 
     /// Process XS events (64 bytes)
-    fn process_xs_events(
-        state: &mut SegmentWriterState,
-        reader: &mut Reader<64, 2000>,
-        writer: &mut Writer<64, 2000>,
-    ) -> usize {
+    fn process_xs_events(state: &mut SegmentWriterState, reader: &mut Reader<64, 2000>, writer: &mut Writer<64, 2000>) -> usize {
         let mut events_processed = 0;
 
         for event in reader.by_ref() {
@@ -596,10 +534,7 @@ impl SegmentWriterActor {
                     }
                     Err(e) => {
                         tracing::error!("Failed to process XS event: {:?}", e);
-                        let mut state_guard = state
-                            .writer_state
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        let mut state_guard = state.writer_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                         state_guard.stats.failed_writes += 1;
                     }
                 }
@@ -611,11 +546,7 @@ impl SegmentWriterActor {
     }
 
     /// Process S events (256 bytes)
-    fn process_s_events(
-        state: &mut SegmentWriterState,
-        reader: &mut Reader<256, 1000>,
-        writer: &mut Writer<64, 2000>,
-    ) -> usize {
+    fn process_s_events(state: &mut SegmentWriterState, reader: &mut Reader<256, 1000>, writer: &mut Writer<64, 2000>) -> usize {
         let mut events_processed = 0;
 
         for event in reader.by_ref() {
@@ -636,10 +567,7 @@ impl SegmentWriterActor {
                     }
                     Err(e) => {
                         tracing::error!("Failed to process S event: {:?}", e);
-                        let mut state_guard = state
-                            .writer_state
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        let mut state_guard = state.writer_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                         state_guard.stats.failed_writes += 1;
                     }
                 }
@@ -651,11 +579,7 @@ impl SegmentWriterActor {
     }
 
     /// Process M events (1024 bytes)
-    fn process_m_events(
-        state: &mut SegmentWriterState,
-        reader: &mut Reader<1024, 500>,
-        writer: &mut Writer<64, 2000>,
-    ) -> usize {
+    fn process_m_events(state: &mut SegmentWriterState, reader: &mut Reader<1024, 500>, writer: &mut Writer<64, 2000>) -> usize {
         let mut events_processed = 0;
 
         for event in reader.by_ref() {
@@ -676,10 +600,7 @@ impl SegmentWriterActor {
                     }
                     Err(e) => {
                         tracing::error!("Failed to process M event: {:?}", e);
-                        let mut state_guard = state
-                            .writer_state
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        let mut state_guard = state.writer_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                         state_guard.stats.failed_writes += 1;
                     }
                 }
@@ -691,11 +612,7 @@ impl SegmentWriterActor {
     }
 
     /// Process L events (4096 bytes)
-    fn process_l_events(
-        state: &mut SegmentWriterState,
-        reader: &mut Reader<4096, 100>,
-        writer: &mut Writer<64, 2000>,
-    ) -> usize {
+    fn process_l_events(state: &mut SegmentWriterState, reader: &mut Reader<4096, 100>, writer: &mut Writer<64, 2000>) -> usize {
         let mut events_processed = 0;
 
         for event in reader.by_ref() {
@@ -716,10 +633,7 @@ impl SegmentWriterActor {
                     }
                     Err(e) => {
                         tracing::error!("Failed to process L event: {:?}", e);
-                        let mut state_guard = state
-                            .writer_state
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        let mut state_guard = state.writer_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                         state_guard.stats.failed_writes += 1;
                     }
                 }
@@ -731,11 +645,7 @@ impl SegmentWriterActor {
     }
 
     /// Process XL events (16384 bytes)
-    fn process_xl_events(
-        state: &mut SegmentWriterState,
-        reader: &mut Reader<16384, 50>,
-        writer: &mut Writer<64, 2000>,
-    ) -> usize {
+    fn process_xl_events(state: &mut SegmentWriterState, reader: &mut Reader<16384, 50>, writer: &mut Writer<64, 2000>) -> usize {
         let mut events_processed = 0;
 
         for event in reader.by_ref() {
@@ -756,10 +666,7 @@ impl SegmentWriterActor {
                     }
                     Err(e) => {
                         tracing::error!("Failed to process XL event: {:?}", e);
-                        let mut state_guard = state
-                            .writer_state
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        let mut state_guard = state.writer_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                         state_guard.stats.failed_writes += 1;
                     }
                 }
@@ -789,10 +696,7 @@ mod tests {
         };
 
         let conf_size = std::mem::size_of::<SegmentWriteConfirmation>();
-        assert_eq!(
-            conf_size, 64,
-            "Segment confirmation must be exactly 64 bytes for XS pool"
-        );
+        assert_eq!(conf_size, 64, "Segment confirmation must be exactly 64 bytes for XS pool");
         println!("✅ Segment confirmation fits perfectly in XS pool: {} bytes", conf_size);
     }
 
@@ -809,8 +713,7 @@ mod tests {
             lmdb_env_path: "/tmp/test-all-sizes-lmdb".to_string(),
         };
 
-        let mut state = SegmentWriterState::new(subject_hash, BusKind::Data, config)
-            .expect("Failed to create segment writer state");
+        let mut state = SegmentWriterState::new(subject_hash, BusKind::Data, config).expect("Failed to create segment writer state");
 
         // Test XS event (64 bytes) - match data size to type parameter
         let xs_event = Arc::new(XaeroInternalEvent::<64> {
@@ -873,8 +776,7 @@ mod tests {
             lmdb_env_path: "/tmp/test-actor-lmdb".to_string(),
         };
 
-        let actor = SegmentWriterActor::spin(subject_hash, BusKind::Data, Some(config))
-            .expect("Failed to create segment writer actor");
+        let actor = SegmentWriterActor::spin(subject_hash, BusKind::Data, Some(config)).expect("Failed to create segment writer actor");
 
         // Verify all interfaces exist
         assert!(true, "Actor created successfully with all T-shirt size interfaces");

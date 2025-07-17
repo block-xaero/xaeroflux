@@ -48,11 +48,7 @@ use crate::aof::storage::format::SegmentMeta;
 #[async_trait::async_trait]
 pub trait GossipCollaboration {
     /// Join gossip topic for workspace collaboration
-    async fn join_workspace_topic(
-        &self,
-        workspace_id: [u8; 32],
-        bootstrap_peers: Vec<NodeId>,
-    ) -> anyhow::Result<GossipTopic>;
+    async fn join_workspace_topic(&self, workspace_id: [u8; 32], bootstrap_peers: Vec<NodeId>) -> anyhow::Result<GossipTopic>;
 
     /// Leave workspace topic
     async fn leave_workspace_topic(&self, workspace_id: [u8; 32]) -> anyhow::Result<()>;
@@ -80,8 +76,7 @@ pub trait DirectConnection {
     /// Establish direct connection with peer
     async fn connect_to_peer(&self, peer_id: NodeId, protocol: &[u8]) -> anyhow::Result<Connection>;
 
-    async fn send_crdt_event(&self, peer_id: NodeId, object_id: [u8; 32], event: PooledEvent<64>)
-    -> anyhow::Result<()>;
+    async fn send_crdt_event(&self, peer_id: NodeId, object_id: [u8; 32], event: PooledEvent<64>) -> anyhow::Result<()>;
 
     /// Request file/segment transfer from peer
     async fn request_file_transfer(&self, peer_id: NodeId, file_hash: [u8; 32]) -> anyhow::Result<Vec<u8>>;

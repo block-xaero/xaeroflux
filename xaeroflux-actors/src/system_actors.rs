@@ -6,8 +6,7 @@ use xaeroflux_core::{event::XaeroEvent, pool::XaeroInternalEvent};
 use crate::{
     aof::actor::AOFActor,
     indexing::storage::actors::{
-        mmr_actor::MmrActor, secondary_index_actor::SecondaryIndexActor, segment_reader_actor::SegmentReaderActor,
-        segment_writer_actor::SegmentWriterActor,
+        mmr_actor::MmrActor, secondary_index_actor::SecondaryIndexActor, segment_reader_actor::SegmentReaderActor, segment_writer_actor::SegmentWriterActor,
     },
     system_payload::SystemPayload,
 };
@@ -30,12 +29,7 @@ impl SystemActors {
     /// Send event to all control bus actors
     pub fn send_to_control(&mut self, event: &Arc<XaeroEvent>) {
         // Send to OLD pipe-based actors
-        self.control_aof
-            .pipe
-            .sink
-            .tx
-            .send(event.clone())
-            .expect("control AOF actor must not fail");
+        self.control_aof.pipe.sink.tx.send(event.clone()).expect("control AOF actor must not fail");
 
         self.control_seg_reader
             .pipe
@@ -53,19 +47,9 @@ impl SystemActors {
     /// Send event to all data bus actors
     pub fn send_to_data(&mut self, event: &Arc<XaeroEvent>) {
         // Send to OLD pipe-based actors
-        self.data_aof
-            .pipe
-            .sink
-            .tx
-            .send(event.clone())
-            .expect("data AOF actor must not fail");
+        self.data_aof.pipe.sink.tx.send(event.clone()).expect("data AOF actor must not fail");
 
-        self.data_seg_reader
-            .pipe
-            .sink
-            .tx
-            .send(event.clone())
-            .expect("data segment reader actor must not fail");
+        self.data_seg_reader.pipe.sink.tx.send(event.clone()).expect("data segment reader actor must not fail");
 
         // Send to NEW ring buffer actors (requires conversion)
         if let Some(internal_event) = self.convert_to_internal_event(event) {
@@ -109,10 +93,7 @@ impl SystemActors {
 
             Some(Arc::new(internal_event))
         } else {
-            tracing::warn!(
-                "Event too large for current conversion logic: {} bytes",
-                event_data.len()
-            );
+            tracing::warn!("Event too large for current conversion logic: {} bytes", event_data.len());
             None
         }
     }
@@ -209,9 +190,7 @@ impl SystemActors {
     }
 
     /// Read confirmations from ring buffer actors
-    pub fn read_mmr_confirmations(
-        &mut self,
-    ) -> Vec<crate::indexing::storage::actors::mmr_actor::MmrProcessConfirmation> {
+    pub fn read_mmr_confirmations(&mut self) -> Vec<crate::indexing::storage::actors::mmr_actor::MmrProcessConfirmation> {
         let mut confirmations = Vec::new();
 
         // Read from all MMR output readers
@@ -230,9 +209,7 @@ impl SystemActors {
         confirmations
     }
 
-    pub fn read_segment_confirmations(
-        &mut self,
-    ) -> Vec<crate::indexing::storage::actors::segment_writer_actor::SegmentWriteConfirmation> {
+    pub fn read_segment_confirmations(&mut self) -> Vec<crate::indexing::storage::actors::segment_writer_actor::SegmentWriteConfirmation> {
         let mut confirmations = Vec::new();
 
         // Read from all segment writer output readers
@@ -251,9 +228,7 @@ impl SystemActors {
         confirmations
     }
 
-    pub fn read_secondary_index_confirmations(
-        &mut self,
-    ) -> Vec<crate::indexing::storage::actors::secondary_index_actor::SecondaryIndexConfirmation> {
+    pub fn read_secondary_index_confirmations(&mut self) -> Vec<crate::indexing::storage::actors::secondary_index_actor::SecondaryIndexConfirmation> {
         let mut confirmations = Vec::new();
 
         while let Some(event) = self.data_secondary_indexer.out_reader.next() {

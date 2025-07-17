@@ -43,31 +43,16 @@ impl AOFActor {
         let fp = &c.aof.file_path;
         let fpc = fp.clone();
 
-        let control_path = emit_control_path_with_subject_hash(
-            fp.to_str().expect("path_invalid_for_aof"),
-            subject_hash.0,
-            NAME_PREFIX,
-        );
+        let control_path = emit_control_path_with_subject_hash(fp.to_str().expect("path_invalid_for_aof"), subject_hash.0, NAME_PREFIX);
         let cpc = control_path.clone();
 
-        let data_path =
-            emit_data_path_with_subject_hash(fpc.to_str().expect("path_invalid_for_aof"), subject_hash.0, NAME_PREFIX);
+        let data_path = emit_data_path_with_subject_hash(fpc.to_str().expect("path_invalid_for_aof"), subject_hash.0, NAME_PREFIX);
         let data_path_clone = data_path.clone();
 
         let (path, env) = if pipe.sink.kind == Control {
-            (
-                control_path,
-                Arc::new(Mutex::new(
-                    LmdbEnv::new(cpc.as_str(), BusKind::Control).expect("failed to unravel"),
-                )),
-            )
+            (control_path, Arc::new(Mutex::new(LmdbEnv::new(cpc.as_str(), BusKind::Control).expect("failed to unravel"))))
         } else if pipe.sink.kind == Data {
-            (
-                data_path,
-                Arc::new(Mutex::new(
-                    LmdbEnv::new(&data_path_clone, BusKind::Data).expect("failed to unravel"),
-                )),
-            )
+            (data_path, Arc::new(Mutex::new(LmdbEnv::new(&data_path_clone, BusKind::Data).expect("failed to unravel"))))
         } else {
             panic!("unravel unknown control type")
         };
@@ -90,11 +75,7 @@ impl AOFActor {
                         );
                     }
                     Err(e) => {
-                        tracing::error!(
-                            "Failed to persist XaeroEvent: type={}, error={:?}",
-                            xaero_event.event_type(),
-                            e
-                        );
+                        tracing::error!("Failed to persist XaeroEvent: type={}, error={:?}", xaero_event.event_type(), e);
                     }
                 }
             }
@@ -106,10 +87,7 @@ impl AOFActor {
     }
 
     /// Handle a single XaeroEvent by writing it to LMDB storage
-    fn handle_xaero_event(
-        env: &Arc<Mutex<LmdbEnv>>,
-        xaero_event: &Arc<XaeroEvent>,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    fn handle_xaero_event(env: &Arc<Mutex<LmdbEnv>>, xaero_event: &Arc<XaeroEvent>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         tracing::trace!(
             "Processing XaeroEvent: type={}, timestamp={:?}, data_len={}",
             xaero_event.event_type(),
@@ -216,12 +194,7 @@ mod tests {
             panic!("Cannot create test event - ring buffer pool exhausted");
         });
 
-        actor
-            .pipe
-            .sink
-            .tx
-            .send(xaero_event)
-            .expect("Failed to send XaeroEvent to AOFActor");
+        actor.pipe.sink.tx.send(xaero_event).expect("Failed to send XaeroEvent to AOFActor");
 
         // Give the background thread a moment to process. It will attempt to write into
         // the LMDB files under `<tempdir>/<subject_hash>/aof/control/...`
@@ -243,25 +216,13 @@ mod tests {
         // Send multiple events to test batch processing
         for i in 0..5 {
             let data = format!("test event {}", i);
-            let xaero_event = XaeroPoolManager::create_xaero_event(
-                data.as_bytes(),
-                EventType::ApplicationEvent(i as u8).to_u8(),
-                None,
-                None,
-                None,
-                emit_secs(),
-            )
-            .unwrap_or_else(|pool_error| {
-                tracing::error!("Pool allocation failed for event {}: {:?}", i, pool_error);
-                panic!("Cannot create test event {} - ring buffer pool exhausted", i);
-            });
+            let xaero_event =
+                XaeroPoolManager::create_xaero_event(data.as_bytes(), EventType::ApplicationEvent(i as u8).to_u8(), None, None, None, emit_secs()).unwrap_or_else(|pool_error| {
+                    tracing::error!("Pool allocation failed for event {}: {:?}", i, pool_error);
+                    panic!("Cannot create test event {} - ring buffer pool exhausted", i);
+                });
 
-            actor
-                .pipe
-                .sink
-                .tx
-                .send(xaero_event)
-                .unwrap_or_else(|_| panic!("Failed to send XaeroEvent {}", i));
+            actor.pipe.sink.tx.send(xaero_event).unwrap_or_else(|_| panic!("Failed to send XaeroEvent {}", i));
         }
 
         // Allow time for all events to be processed
@@ -280,32 +241,17 @@ mod tests {
 
         // Create event with known data for verification
         let test_data = b"zero copy test data";
-        let xaero_event = XaeroPoolManager::create_xaero_event(
-            test_data,
-            EventType::SystemEvent(SystemEventKind::PayloadWritten).to_u8(),
-            None,
-            None,
-            None,
-            emit_secs(),
-        )
-        .unwrap_or_else(|pool_error| {
-            tracing::error!("Pool allocation failed: {:?}", pool_error);
-            panic!("Cannot create test event - ring buffer pool exhausted");
-        });
+        let xaero_event = XaeroPoolManager::create_xaero_event(test_data, EventType::SystemEvent(SystemEventKind::PayloadWritten).to_u8(), None, None, None, emit_secs())
+            .unwrap_or_else(|pool_error| {
+                tracing::error!("Pool allocation failed: {:?}", pool_error);
+                panic!("Cannot create test event - ring buffer pool exhausted");
+            });
 
         // Verify zero-copy access works
         assert_eq!(xaero_event.data(), test_data);
-        assert_eq!(
-            xaero_event.event_type(),
-            EventType::SystemEvent(SystemEventKind::PayloadWritten).to_u8()
-        );
+        assert_eq!(xaero_event.event_type(), EventType::SystemEvent(SystemEventKind::PayloadWritten).to_u8());
 
-        actor
-            .pipe
-            .sink
-            .tx
-            .send(xaero_event)
-            .expect("Failed to send XaeroEvent to AOFActor");
+        actor.pipe.sink.tx.send(xaero_event).expect("Failed to send XaeroEvent to AOFActor");
 
         thread::sleep(Duration::from_millis(150));
     }

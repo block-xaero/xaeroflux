@@ -30,8 +30,8 @@ use crate::{
     indexing::storage::{
         actors::segment_writer_actor::{SegmentConfig, SegmentWriterActor},
         format::{
-            archive_xaero_internal_event_64, archive_xaero_internal_event_256, archive_xaero_internal_event_1024,
-            archive_xaero_internal_event_4096, archive_xaero_internal_event_16384,
+            archive_xaero_internal_event_64, archive_xaero_internal_event_256, archive_xaero_internal_event_1024, archive_xaero_internal_event_4096,
+            archive_xaero_internal_event_16384,
         },
         mmr::{XaeroMmr, XaeroMmrOps},
     },
@@ -129,16 +129,8 @@ impl MmrState {
 
         // Construct subject-specific path based on bus kind
         let lmdb_path = match bus_kind {
-            BusKind::Control => system_paths::emit_control_path_with_subject_hash(
-                base_path.to_str().expect("path_invalid_for_mmr"),
-                subject_hash.0,
-                "mmr",
-            ),
-            BusKind::Data => system_paths::emit_data_path_with_subject_hash(
-                base_path.to_str().expect("path_invalid_for_mmr"),
-                subject_hash.0,
-                "mmr",
-            ),
+            BusKind::Control => system_paths::emit_control_path_with_subject_hash(base_path.to_str().expect("path_invalid_for_mmr"), subject_hash.0, "mmr"),
+            BusKind::Data => system_paths::emit_data_path_with_subject_hash(base_path.to_str().expect("path_invalid_for_mmr"), subject_hash.0, "mmr"),
         };
 
         tracing::info!("Creating MMR LMDB at path: {}", lmdb_path);
@@ -155,64 +147,39 @@ impl MmrState {
     }
 
     /// Process XaeroInternalEvent<64> (XS)
-    fn process_internal_event_64(
-        &mut self,
-        internal_event: Arc<XaeroInternalEvent<64>>,
-    ) -> Result<MmrProcessConfirmation, Box<dyn std::error::Error>> {
+    fn process_internal_event_64(&mut self, internal_event: Arc<XaeroInternalEvent<64>>) -> Result<MmrProcessConfirmation, Box<dyn std::error::Error>> {
         let archived_data = archive_xaero_internal_event_64(*internal_event).to_vec();
         self.process_archived_data(archived_data, internal_event.xaero_id_hash, internal_event.latest_ts)
     }
 
     /// Process XaeroInternalEvent<256> (S)
-    fn process_internal_event_256(
-        &mut self,
-        internal_event: Arc<XaeroInternalEvent<256>>,
-    ) -> Result<MmrProcessConfirmation, Box<dyn std::error::Error>> {
+    fn process_internal_event_256(&mut self, internal_event: Arc<XaeroInternalEvent<256>>) -> Result<MmrProcessConfirmation, Box<dyn std::error::Error>> {
         let archived_data = archive_xaero_internal_event_256(*internal_event).to_vec();
         self.process_archived_data(archived_data, internal_event.xaero_id_hash, internal_event.latest_ts)
     }
 
     /// Process XaeroInternalEvent<1024> (M)
-    fn process_internal_event_1024(
-        &mut self,
-        internal_event: Arc<XaeroInternalEvent<1024>>,
-    ) -> Result<MmrProcessConfirmation, Box<dyn std::error::Error>> {
+    fn process_internal_event_1024(&mut self, internal_event: Arc<XaeroInternalEvent<1024>>) -> Result<MmrProcessConfirmation, Box<dyn std::error::Error>> {
         let archived_data = archive_xaero_internal_event_1024(*internal_event).to_vec();
         self.process_archived_data(archived_data, internal_event.xaero_id_hash, internal_event.latest_ts)
     }
 
     /// Process XaeroInternalEvent<4096> (L)
-    fn process_internal_event_4096(
-        &mut self,
-        internal_event: Arc<XaeroInternalEvent<4096>>,
-    ) -> Result<MmrProcessConfirmation, Box<dyn std::error::Error>> {
+    fn process_internal_event_4096(&mut self, internal_event: Arc<XaeroInternalEvent<4096>>) -> Result<MmrProcessConfirmation, Box<dyn std::error::Error>> {
         let archived_data = archive_xaero_internal_event_4096(*internal_event).to_vec();
         self.process_archived_data(archived_data, internal_event.xaero_id_hash, internal_event.latest_ts)
     }
 
     /// Process XaeroInternalEvent<16384> (XL)
-    fn process_internal_event_16384(
-        &mut self,
-        internal_event: Arc<XaeroInternalEvent<16384>>,
-    ) -> Result<MmrProcessConfirmation, Box<dyn std::error::Error>> {
+    fn process_internal_event_16384(&mut self, internal_event: Arc<XaeroInternalEvent<16384>>) -> Result<MmrProcessConfirmation, Box<dyn std::error::Error>> {
         let archived_data = archive_xaero_internal_event_16384(*internal_event).to_vec();
         self.process_archived_data(archived_data, internal_event.xaero_id_hash, internal_event.latest_ts)
     }
 
     /// Common processing logic for archived data
-    fn process_archived_data(
-        &mut self,
-        archived_data: Vec<u8>,
-        xaero_id_hash: [u8; 32],
-        latest_ts: u64,
-    ) -> Result<MmrProcessConfirmation, Box<dyn std::error::Error>> {
+    fn process_archived_data(&mut self, archived_data: Vec<u8>, xaero_id_hash: [u8; 32], latest_ts: u64) -> Result<MmrProcessConfirmation, Box<dyn std::error::Error>> {
         // Step 1: Persist to LMDB using universal push
-        push_internal_event_universal(
-            &self.env,
-            &archived_data,
-            EventType::ApplicationEvent(1).to_u8() as u32,
-            latest_ts,
-        )?;
+        push_internal_event_universal(&self.env, &archived_data, EventType::ApplicationEvent(1).to_u8() as u32, latest_ts)?;
 
         // Step 2: Compute leaf hash from archived data
         let leaf_hash = sha_256_slice(&archived_data);
@@ -230,11 +197,7 @@ impl MmrState {
         self.stats.last_leaf_hash = Some(leaf_hash);
         self.stats.last_process_ts = latest_ts;
 
-        tracing::debug!(
-            "Processed MMR event with leaf hash: {:?}, MMR size: {}",
-            leaf_hash,
-            new_mmr_size
-        );
+        tracing::debug!("Processed MMR event with leaf hash: {:?}, MMR size: {}", leaf_hash, new_mmr_size);
 
         Ok(MmrProcessConfirmation {
             original_hash: xaero_id_hash,
@@ -282,19 +245,11 @@ pub struct MmrActor {
 
 impl MmrActor {
     /// Create and spawn MMR actor with ring buffer processing and integrated segment writer
-    pub fn spin(
-        subject_hash: SubjectHash,
-        bus_kind: BusKind,
-        segment_config: Option<SegmentConfig>,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn spin(subject_hash: SubjectHash, bus_kind: BusKind, segment_config: Option<SegmentConfig>) -> Result<Self, Box<dyn std::error::Error>> {
         let mut state = MmrState::new(subject_hash, bus_kind.clone())?;
 
         // Create integrated segment writer actor
-        let segment_writer = Arc::new(SegmentWriterActor::spin(
-            subject_hash,
-            bus_kind.clone(),
-            segment_config,
-        )?);
+        let segment_writer = Arc::new(SegmentWriterActor::spin(subject_hash, bus_kind.clone(), segment_config)?);
         let segment_writer_clone = segment_writer.clone();
 
         let jh = thread::spawn(move || {
@@ -337,24 +292,19 @@ impl MmrActor {
                 let mut total_events_processed = 0;
 
                 // Process XS events (64 bytes)
-                total_events_processed +=
-                    Self::process_xs_events(&mut state, &mut xs_reader, &mut xs_writer, &segment_writer_clone);
+                total_events_processed += Self::process_xs_events(&mut state, &mut xs_reader, &mut xs_writer, &segment_writer_clone);
 
                 // Process S events (256 bytes)
-                total_events_processed +=
-                    Self::process_s_events(&mut state, &mut s_reader, &mut s_writer, &segment_writer_clone);
+                total_events_processed += Self::process_s_events(&mut state, &mut s_reader, &mut s_writer, &segment_writer_clone);
 
                 // Process M events (1024 bytes)
-                total_events_processed +=
-                    Self::process_m_events(&mut state, &mut m_reader, &mut m_writer, &segment_writer_clone);
+                total_events_processed += Self::process_m_events(&mut state, &mut m_reader, &mut m_writer, &segment_writer_clone);
 
                 // Process L events (4096 bytes)
-                total_events_processed +=
-                    Self::process_l_events(&mut state, &mut l_reader, &mut l_writer, &segment_writer_clone);
+                total_events_processed += Self::process_l_events(&mut state, &mut l_reader, &mut l_writer, &segment_writer_clone);
 
                 // Process XL events (16384 bytes)
-                total_events_processed +=
-                    Self::process_xl_events(&mut state, &mut xl_reader, &mut xl_writer, &segment_writer_clone);
+                total_events_processed += Self::process_xl_events(&mut state, &mut xl_reader, &mut xl_writer, &segment_writer_clone);
 
                 if total_events_processed > 0 {
                     state.log_stats();
@@ -395,12 +345,7 @@ impl MmrActor {
     }
 
     /// Process XS events (64 bytes) - for truly small events only
-    fn process_xs_events(
-        state: &mut MmrState,
-        reader: &mut Reader<64, 2000>,
-        writer: &mut Writer<64, 2000>,
-        _segment_writer: &Arc<SegmentWriterActor>,
-    ) -> usize {
+    fn process_xs_events(state: &mut MmrState, reader: &mut Reader<64, 2000>, writer: &mut Writer<64, 2000>, _segment_writer: &Arc<SegmentWriterActor>) -> usize {
         let mut events_processed = 0;
 
         // Get bridge ring for forwarding leaf hashes to segment writer
@@ -421,12 +366,7 @@ impl MmrActor {
     }
 
     /// Process S events (256 bytes) - handles XaeroInternalEvent<64> which is actually 256 bytes
-    fn process_s_events(
-        state: &mut MmrState,
-        reader: &mut Reader<256, 1000>,
-        writer: &mut Writer<64, 2000>,
-        _segment_writer: &Arc<SegmentWriterActor>,
-    ) -> usize {
+    fn process_s_events(state: &mut MmrState, reader: &mut Reader<256, 1000>, writer: &mut Writer<64, 2000>, _segment_writer: &Arc<SegmentWriterActor>) -> usize {
         let mut events_processed = 0;
 
         // Get bridge ring for forwarding leaf hashes to segment writer
@@ -438,12 +378,7 @@ impl MmrActor {
             let xe64_size = std::mem::size_of::<XaeroInternalEvent<64>>();
             let xe256_size = std::mem::size_of::<XaeroInternalEvent<256>>();
 
-            tracing::debug!(
-                "S ring received event of size: {} bytes (XE64={}, XE256={})",
-                event.len,
-                xe64_size,
-                xe256_size
-            );
+            tracing::debug!("S ring received event of size: {} bytes (XE64={}, XE256={})", event.len, xe64_size, xe256_size);
 
             if event.len == xe64_size as u32 {
                 // Handle XaeroInternalEvent<64> (which is actually ~256 bytes total)
@@ -532,12 +467,7 @@ impl MmrActor {
                     }
                 }
             } else {
-                tracing::warn!(
-                    "Unknown event size in S ring: {} bytes (expected {} or {})",
-                    event.len,
-                    xe64_size,
-                    xe256_size
-                );
+                tracing::warn!("Unknown event size in S ring: {} bytes (expected {} or {})", event.len, xe64_size, xe256_size);
             }
             events_processed += 1;
         }
@@ -546,12 +476,7 @@ impl MmrActor {
     }
 
     /// Process M events (1024 bytes)
-    fn process_m_events(
-        state: &mut MmrState,
-        reader: &mut Reader<1024, 500>,
-        writer: &mut Writer<64, 2000>,
-        _segment_writer: &Arc<SegmentWriterActor>,
-    ) -> usize {
+    fn process_m_events(state: &mut MmrState, reader: &mut Reader<1024, 500>, writer: &mut Writer<64, 2000>, _segment_writer: &Arc<SegmentWriterActor>) -> usize {
         let mut events_processed = 0;
 
         // Get bridge ring for forwarding leaf hashes to segment writer
@@ -609,12 +534,7 @@ impl MmrActor {
     }
 
     /// Process L events (4096 bytes)
-    fn process_l_events(
-        state: &mut MmrState,
-        reader: &mut Reader<4096, 100>,
-        writer: &mut Writer<64, 2000>,
-        _segment_writer: &Arc<SegmentWriterActor>,
-    ) -> usize {
+    fn process_l_events(state: &mut MmrState, reader: &mut Reader<4096, 100>, writer: &mut Writer<64, 2000>, _segment_writer: &Arc<SegmentWriterActor>) -> usize {
         let mut events_processed = 0;
 
         // Get bridge ring for forwarding leaf hashes to segment writer
@@ -672,12 +592,7 @@ impl MmrActor {
     }
 
     /// Process XL events (16384 bytes)
-    fn process_xl_events(
-        state: &mut MmrState,
-        reader: &mut Reader<16384, 50>,
-        writer: &mut Writer<64, 2000>,
-        _segment_writer: &Arc<SegmentWriterActor>,
-    ) -> usize {
+    fn process_xl_events(state: &mut MmrState, reader: &mut Reader<16384, 50>, writer: &mut Writer<64, 2000>, _segment_writer: &Arc<SegmentWriterActor>) -> usize {
         let mut events_processed = 0;
 
         // Get bridge ring for forwarding leaf hashes to segment writer
@@ -762,32 +677,14 @@ mod tests {
         println!("=== STRUCT SIZE VERIFICATION ===");
 
         // XaeroInternalEvent sizes (these include the full struct, not just data)
-        println!(
-            "XaeroInternalEvent<64>: {} bytes",
-            std::mem::size_of::<XaeroInternalEvent<64>>()
-        );
-        println!(
-            "XaeroInternalEvent<256>: {} bytes",
-            std::mem::size_of::<XaeroInternalEvent<256>>()
-        );
-        println!(
-            "XaeroInternalEvent<1024>: {} bytes",
-            std::mem::size_of::<XaeroInternalEvent<1024>>()
-        );
-        println!(
-            "XaeroInternalEvent<4096>: {} bytes",
-            std::mem::size_of::<XaeroInternalEvent<4096>>()
-        );
-        println!(
-            "XaeroInternalEvent<16384>: {} bytes",
-            std::mem::size_of::<XaeroInternalEvent<16384>>()
-        );
+        println!("XaeroInternalEvent<64>: {} bytes", std::mem::size_of::<XaeroInternalEvent<64>>());
+        println!("XaeroInternalEvent<256>: {} bytes", std::mem::size_of::<XaeroInternalEvent<256>>());
+        println!("XaeroInternalEvent<1024>: {} bytes", std::mem::size_of::<XaeroInternalEvent<1024>>());
+        println!("XaeroInternalEvent<4096>: {} bytes", std::mem::size_of::<XaeroInternalEvent<4096>>());
+        println!("XaeroInternalEvent<16384>: {} bytes", std::mem::size_of::<XaeroInternalEvent<16384>>());
 
         // Other important structs
-        println!(
-            "MmrProcessConfirmation: {} bytes",
-            std::mem::size_of::<MmrProcessConfirmation>()
-        );
+        println!("MmrProcessConfirmation: {} bytes", std::mem::size_of::<MmrProcessConfirmation>());
         println!("LeafHashEvent: {} bytes", std::mem::size_of::<LeafHashEvent>());
 
         // Ring buffer mappings based on actual sizes
@@ -816,11 +713,7 @@ mod tests {
         };
 
         let leaf_size = std::mem::size_of::<LeafHashEvent>();
-        assert_eq!(
-            leaf_size, 64,
-            "Leaf hash event must be exactly 64 bytes for XS pool, got {} bytes",
-            leaf_size
-        );
+        assert_eq!(leaf_size, 64, "Leaf hash event must be exactly 64 bytes for XS pool, got {} bytes", leaf_size);
 
         println!("✅ Leaf hash event fits perfectly in XS pool: {} bytes", leaf_size);
     }
@@ -834,11 +727,7 @@ mod tests {
         };
 
         let conf_size = std::mem::size_of::<MmrProcessConfirmation>();
-        assert_eq!(
-            conf_size, 64,
-            "MMR confirmation must be exactly 64 bytes for XS pool, got {} bytes",
-            conf_size
-        );
+        assert_eq!(conf_size, 64, "MMR confirmation must be exactly 64 bytes for XS pool, got {} bytes", conf_size);
 
         println!("✅ MMR confirmation fits perfectly in XS pool: {} bytes", conf_size);
     }
@@ -918,8 +807,7 @@ mod tests {
             lmdb_env_path: "/tmp/test-mmr-integration-lmdb".to_string(),
         });
 
-        let mut actor =
-            MmrActor::spin(subject_hash, BusKind::Data, segment_config).expect("Failed to create MMR actor");
+        let mut actor = MmrActor::spin(subject_hash, BusKind::Data, segment_config).expect("Failed to create MMR actor");
 
         // Create XaeroInternalEvent<64> - but it's actually 256 bytes total
         let internal_event = XaeroInternalEvent::<64> {
@@ -939,14 +827,10 @@ mod tests {
 
         // Since XaeroInternalEvent<64> is 256 bytes, use S ring buffer
         let internal_event_bytes = bytemuck::bytes_of(&internal_event);
-        let pooled_event = EventUtils::create_pooled_event::<256>(internal_event_bytes, 123)
-            .expect("Should create pooled event with S size (256 bytes)");
+        let pooled_event = EventUtils::create_pooled_event::<256>(internal_event_bytes, 123).expect("Should create pooled event with S size (256 bytes)");
 
         // Write to MMR S input buffer (not XS)
-        assert!(
-            actor.in_writer_s.add(pooled_event),
-            "Should write to MMR S input buffer"
-        );
+        assert!(actor.in_writer_s.add(pooled_event), "Should write to MMR S input buffer");
 
         // Check S output buffer for confirmations
         std::thread::sleep(Duration::from_millis(500));
@@ -955,9 +839,7 @@ mod tests {
         for attempt in 0..20 {
             if let Some(conf_event) = actor.out_reader_s.next() {
                 if conf_event.len == std::mem::size_of::<MmrProcessConfirmation>() as u32 {
-                    if let Ok(conf) =
-                        bytemuck::try_from_bytes::<MmrProcessConfirmation>(&conf_event.data[..conf_event.len as usize])
-                    {
+                    if let Ok(conf) = bytemuck::try_from_bytes::<MmrProcessConfirmation>(&conf_event.data[..conf_event.len as usize]) {
                         mmr_confirmation_found = true;
                         println!("✅ Received MMR confirmation with leaf hash: {:?}", conf.leaf_hash);
                         break;

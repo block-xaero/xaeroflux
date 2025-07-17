@@ -188,11 +188,7 @@ pub const ARCHIVE_SIZE_16384: usize = EVENT_HEADER_SIZE + std::mem::size_of::<Xa
 /// Panics if the magic prefix is invalid or the buffer is too small.
 pub fn unarchive_to_raw_data(bytes: &[u8]) -> (XaeroOnDiskEventHeader, &[u8]) {
     if bytes.len() < EVENT_HEADER_SIZE {
-        panic!(
-            "Buffer too small for header: need {} bytes but got {}",
-            EVENT_HEADER_SIZE,
-            bytes.len()
-        );
+        panic!("Buffer too small for header: need {} bytes but got {}", EVENT_HEADER_SIZE, bytes.len());
     }
 
     // FIX: Copy header bytes to aligned buffer to avoid alignment issues
@@ -203,10 +199,7 @@ pub fn unarchive_to_raw_data(bytes: &[u8]) -> (XaeroOnDiskEventHeader, &[u8]) {
 
     // Validate magic prefix
     if header.marker != XAERO_MAGIC {
-        panic!(
-            "Invalid magic number: expected {:?}, got {:?}",
-            XAERO_MAGIC, header.marker
-        );
+        panic!("Invalid magic number: expected {:?}, got {:?}", XAERO_MAGIC, header.marker);
     }
 
     // Extract event data
@@ -214,11 +207,7 @@ pub fn unarchive_to_raw_data(bytes: &[u8]) -> (XaeroOnDiskEventHeader, &[u8]) {
     let end = start + header.len as usize;
 
     if bytes.len() < end {
-        panic!(
-            "Buffer too small for event data: need {} bytes but got {}",
-            end,
-            bytes.len()
-        );
+        panic!("Buffer too small for event data: need {} bytes but got {}", end, bytes.len());
     }
 
     let event_data = &bytes[start..end];
@@ -342,8 +331,7 @@ mod tests {
         let timestamp = emit_secs();
 
         // Create original event
-        let original_event = XaeroPoolManager::create_xaero_event(test_data, event_type, None, None, None, timestamp)
-            .expect("Failed to create test event");
+        let original_event = XaeroPoolManager::create_xaero_event(test_data, event_type, None, None, None, timestamp).expect("Failed to create test event");
 
         // Archive the event
         let archived_bytes = archive_xaero_event(&original_event);
@@ -365,8 +353,7 @@ mod tests {
         let event_type = EventType::SystemEvent(SystemEventKind::MmrAppended).to_u8();
         let timestamp = 12345678;
 
-        let event = XaeroPoolManager::create_xaero_event(test_data, event_type, None, None, None, timestamp)
-            .expect("Failed to create test event");
+        let event = XaeroPoolManager::create_xaero_event(test_data, event_type, None, None, None, timestamp).expect("Failed to create test event");
 
         let archived_bytes = archive_xaero_event(&event);
         let (header, raw_data) = unarchive_to_raw_data(&archived_bytes);
@@ -386,12 +373,10 @@ mod tests {
         let event_type = EventType::ApplicationEvent(123).to_u8();
         let timestamp = 987654321;
 
-        let event = XaeroPoolManager::create_xaero_event(test_data, event_type, None, None, None, timestamp)
-            .expect("Failed to create test event");
+        let event = XaeroPoolManager::create_xaero_event(test_data, event_type, None, None, None, timestamp).expect("Failed to create test event");
 
         let archived_bytes = archive_xaero_event(&event);
-        let (peeked_type, peeked_timestamp, peeked_len) =
-            peek_event_metadata(&archived_bytes).expect("Failed to peek event metadata");
+        let (peeked_type, peeked_timestamp, peeked_len) = peek_event_metadata(&archived_bytes).expect("Failed to peek event metadata");
 
         assert_eq!(peeked_type, event_type);
         assert_eq!(peeked_timestamp, timestamp);
@@ -405,8 +390,7 @@ mod tests {
         let large_data = vec![0xAB; 4096]; // 4KB test data
         let event_type = EventType::ApplicationEvent(255).to_u8();
 
-        let event = XaeroPoolManager::create_xaero_event(&large_data, event_type, None, None, None, emit_secs())
-            .expect("Failed to create large event");
+        let event = XaeroPoolManager::create_xaero_event(&large_data, event_type, None, None, None, emit_secs()).expect("Failed to create large event");
 
         // Archive should use zero-copy access to ring buffer
         let archived_bytes = archive_xaero_event(&event);
@@ -438,8 +422,7 @@ mod tests {
         let empty_data = b"";
         let event_type = EventType::ApplicationEvent(0).to_u8();
 
-        let event = XaeroPoolManager::create_xaero_event(empty_data, event_type, None, None, None, emit_secs())
-            .expect("Failed to create empty event");
+        let event = XaeroPoolManager::create_xaero_event(empty_data, event_type, None, None, None, emit_secs()).expect("Failed to create empty event");
 
         let archived_bytes = archive_xaero_event(&event);
         let (header, raw_data) = unarchive_to_raw_data(&archived_bytes);
@@ -454,15 +437,8 @@ mod tests {
         setup();
 
         let timestamp = 12345u64;
-        let test_event = XaeroPoolManager::create_xaero_event(
-            b"timestamp test",
-            EventType::ApplicationEvent(1).to_u8(),
-            None,
-            None,
-            None,
-            timestamp,
-        )
-        .expect("Failed to create event with timestamp");
+        let test_event = XaeroPoolManager::create_xaero_event(b"timestamp test", EventType::ApplicationEvent(1).to_u8(), None, None, None, timestamp)
+            .expect("Failed to create event with timestamp");
 
         let archived = archive_xaero_event(&test_event);
         let (header, _) = unarchive_to_raw_data(&archived);

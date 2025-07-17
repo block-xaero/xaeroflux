@@ -108,18 +108,10 @@ impl SegmentReaderActor {
         // Set up paths based on bus kind
         let meta_db = match pipe.sink.kind {
             BusKind::Control => Arc::new(Mutex::new(
-                LmdbEnv::new(
-                    emit_control_path_with_subject_hash(&config.lmdb_env_path, name.0, NAME_PREFIX).as_str(),
-                    BusKind::Control,
-                )
-                .expect("failed to create Control LmdbEnv"),
+                LmdbEnv::new(emit_control_path_with_subject_hash(&config.lmdb_env_path, name.0, NAME_PREFIX).as_str(), BusKind::Control).expect("failed to create Control LmdbEnv"),
             )),
             BusKind::Data => Arc::new(Mutex::new(
-                LmdbEnv::new(
-                    emit_data_path_with_subject_hash(&config.lmdb_env_path, name.0, NAME_PREFIX).as_str(),
-                    BusKind::Data,
-                )
-                .expect("failed to create Data LmdbEnv"),
+                LmdbEnv::new(emit_data_path_with_subject_hash(&config.lmdb_env_path, name.0, NAME_PREFIX).as_str(), BusKind::Data).expect("failed to create Data LmdbEnv"),
             )),
         };
 
@@ -133,10 +125,7 @@ impl SegmentReaderActor {
         let _xaero_handle = std::thread::Builder::new()
             .name(format!("segment-reader-{}", hex::encode(name.0)))
             .spawn(move || {
-                tracing::info!(
-                    "SegmentReaderActor processing thread started for subject: {}",
-                    hex::encode(subject_hash.0)
-                );
+                tracing::info!("SegmentReaderActor processing thread started for subject: {}", hex::encode(subject_hash.0));
 
                 while let Ok(xaero_event) = pipe_clone.sink.rx.recv() {
                     // Check for shutdown signal
@@ -145,14 +134,7 @@ impl SegmentReaderActor {
                         break;
                     }
 
-                    match Self::handle_xaero_replay_event(
-                        &xaero_event,
-                        &pipe_clone,
-                        &meta_db_clone,
-                        &config_clone,
-                        bus_kind,
-                        subject_hash,
-                    ) {
+                    match Self::handle_xaero_replay_event(&xaero_event, &pipe_clone, &meta_db_clone, &config_clone, bus_kind, subject_hash) {
                         Ok(_) => {
                             tracing::debug!("Successfully processed replay event");
                         }
@@ -234,23 +216,15 @@ impl SegmentReaderActor {
             let unaligned_ts_start = segment_meta.ts_start;
             let unaligned_seg_idx = segment_meta.segment_index;
 
-            tracing::debug!(
-                "Processing segment: ts_start={}, seg_idx={}",
-                unaligned_ts_start,
-                unaligned_seg_idx
-            );
+            tracing::debug!("Processing segment: ts_start={}, seg_idx={}", unaligned_ts_start, unaligned_seg_idx);
 
             // Build segment file path using the actual subject hash
             let segment_dir = match bus_kind {
-                BusKind::Control =>
-                    emit_control_path_with_subject_hash(&config.segment_dir, subject_hash.0, NAME_PREFIX),
+                BusKind::Control => emit_control_path_with_subject_hash(&config.segment_dir, subject_hash.0, NAME_PREFIX),
                 BusKind::Data => emit_data_path_with_subject_hash(&config.segment_dir, subject_hash.0, NAME_PREFIX),
             };
 
-            let file_path = Path::new(&segment_dir).join(format!(
-                "{}-{}-{:04}.seg",
-                config.prefix, unaligned_ts_start, unaligned_seg_idx
-            ));
+            let file_path = Path::new(&segment_dir).join(format!("{}-{}-{:04}.seg", config.prefix, unaligned_ts_start, unaligned_seg_idx));
 
             // Read and process segment file
             match io::read_segment_file(file_path.to_str().unwrap_or("invalid_path")) {
@@ -273,11 +247,7 @@ impl SegmentReaderActor {
 
                                 // Try raw data approach as fallback
                                 let (header, raw_data) = unarchive_to_raw_data(event_bytes);
-                                tracing::warn!(
-                                    "Fallback: Got raw event data - type={}, size={} bytes",
-                                    header.event_type,
-                                    raw_data.len()
-                                );
+                                tracing::warn!("Fallback: Got raw event data - type={}, size={} bytes", header.event_type, raw_data.len());
                                 // Could potentially reconstruct manually or skip
                             }
                         }
@@ -289,11 +259,7 @@ impl SegmentReaderActor {
             }
         }
 
-        tracing::info!(
-            "Replay completed: {} events replayed from {} segments",
-            events_replayed,
-            smc
-        );
+        tracing::info!("Replay completed: {} events replayed from {} segments", events_replayed, smc);
         Ok(())
     }
 
@@ -598,18 +564,11 @@ mod tests {
 
         // Test zero-copy data access
         let test_data = b"test unaligned access pattern";
-        let test_event = XaeroPoolManager::create_xaero_event(
-            test_data,
-            EventType::SystemEvent(SystemEventKind::ReplayControl).to_u8(),
-            None,
-            None,
-            None,
-            emit_secs(),
-        )
-        .unwrap_or_else(|pool_error| {
-            tracing::error!("Pool allocation failed: {:?}", pool_error);
-            panic!("Cannot create test event - ring buffer pool exhausted");
-        });
+        let test_event = XaeroPoolManager::create_xaero_event(test_data, EventType::SystemEvent(SystemEventKind::ReplayControl).to_u8(), None, None, None, emit_secs())
+            .unwrap_or_else(|pool_error| {
+                tracing::error!("Pool allocation failed: {:?}", pool_error);
+                panic!("Cannot create test event - ring buffer pool exhausted");
+            });
 
         // Verify zero-copy access works
         assert_eq!(test_event.data(), test_data);

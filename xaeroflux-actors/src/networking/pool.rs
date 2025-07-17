@@ -8,12 +8,7 @@ pub struct OnlinePeerInfo {
 }
 
 #[derive(Debug)]
-pub struct FixedGroup<
-    const MAX_WORKSPACES: usize,
-    const MAX_PEERS: usize,
-    const OBJECT_SIZE: usize,
-    const MAX_WORKSPACE_PEERS: usize,
-> {
+pub struct FixedGroup<const MAX_WORKSPACES: usize, const MAX_PEERS: usize, const OBJECT_SIZE: usize, const MAX_WORKSPACE_PEERS: usize> {
     pub name: [u8; 32],
     pub online_peers: [OnlinePeerInfo; MAX_PEERS],
     pub workspaces: [FixedWorkspace<OBJECT_SIZE, MAX_WORKSPACE_PEERS>; MAX_WORKSPACES],

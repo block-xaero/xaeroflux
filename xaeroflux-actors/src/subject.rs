@@ -109,13 +109,7 @@ pub trait SubjectBatchOps {
     /// Sort -> Fold or Reduce
     /// This machinery helps with things like support of CRDT Ops naturally in `Subject`
     /// type.
-    fn buffer<F>(
-        self: &Arc<Self>,
-        duration: Duration,
-        event_count_threshold: Option<usize>,
-        pipeline: Vec<Operator>,
-        route_with: Arc<F>,
-    ) -> Arc<Self>
+    fn buffer<F>(self: &Arc<Self>, duration: Duration, event_count_threshold: Option<usize>, pipeline: Vec<Operator>, route_with: Arc<F>) -> Arc<Self>
     where
         F: Fn(&Arc<XaeroEvent>) -> bool + Send + Sync + 'static;
 
@@ -128,10 +122,7 @@ pub trait SubjectBatchOps {
     /// event header in archived form.
     fn fold_left<F>(self: &Arc<Self>, fold_left: Arc<F>) -> Arc<Self>
     where
-        F: Fn(Arc<Option<XaeroEvent>>, Vec<Arc<XaeroEvent>>) -> Result<Arc<XaeroEvent>, AllocationError>
-            + Send
-            + Sync
-            + 'static;
+        F: Fn(Arc<Option<XaeroEvent>>, Vec<Arc<XaeroEvent>>) -> Result<Arc<XaeroEvent>, AllocationError> + Send + Sync + 'static;
 
     /// Reduces vector of xaero events to a single XaeroEvent (stays in event domain).
     fn reduce<F>(self: &Arc<Self>, reducer: Arc<F>) -> Arc<Self>
@@ -204,13 +195,7 @@ impl SubjectStreamingOps for Subject {
 }
 
 impl SubjectBatchOps for Subject {
-    fn buffer<F>(
-        self: &Arc<Self>,
-        duration: Duration,
-        event_count_threshold: Option<usize>,
-        pipeline: Vec<Operator>,
-        route_with: Arc<F>,
-    ) -> Arc<Self>
+    fn buffer<F>(self: &Arc<Self>, duration: Duration, event_count_threshold: Option<usize>, pipeline: Vec<Operator>, route_with: Arc<F>) -> Arc<Self>
     where
         F: Fn(&Arc<XaeroEvent>) -> bool + Send + Sync + 'static,
     {
@@ -223,12 +208,7 @@ impl SubjectBatchOps for Subject {
             control_pipe: Pipe::new(BusKind::Control, None),
             pipeline: pipeline.clone(),
         });
-        new.ops.push(Operator::BufferMode(
-            duration,
-            event_count_threshold,
-            pipeline,
-            route_with,
-        ));
+        new.ops.push(Operator::BufferMode(duration, event_count_threshold, pipeline, route_with));
         Arc::new(new)
     }
 
@@ -244,10 +224,7 @@ impl SubjectBatchOps for Subject {
 
     fn fold_left<F>(self: &Arc<Self>, fold_left: Arc<F>) -> Arc<Self>
     where
-        F: Fn(Arc<Option<XaeroEvent>>, Vec<Arc<XaeroEvent>>) -> Result<Arc<XaeroEvent>, AllocationError>
-            + Send
-            + Sync
-            + 'static,
+        F: Fn(Arc<Option<XaeroEvent>>, Vec<Arc<XaeroEvent>>) -> Result<Arc<XaeroEvent>, AllocationError> + Send + Sync + 'static,
     {
         let mut new = (**self).clone();
         /// still lazy ~~ woohoo! ~~~
@@ -303,9 +280,7 @@ impl Subject {
             object_id: sha_256_hash(object_id.as_bytes().to_vec()),
             batch_mode: Arc::new(AtomicBool::new(false)), // by default its false.
             batch_context: None,
-            mode_set: Arc::new(AtomicSignal::new(
-                Signal::from_u8(0).expect("cannot set an uninit mode from atomic signal - must panic!"),
-            )),
+            mode_set: Arc::new(AtomicSignal::new(Signal::from_u8(0).expect("cannot set an uninit mode from atomic signal - must panic!"))),
         })
     }
 
@@ -345,8 +320,7 @@ impl Subject {
         let data_aof = Arc::new(AOFActor::new(self.hash, self.data.clone()));
 
         // Create NEW ring buffer segment writer actors
-        let control_seg_writer =
-            SegmentWriterActor::spin(subject_hash, BusKind::Control, Some(SegmentConfig::default()))?;
+        let control_seg_writer = SegmentWriterActor::spin(subject_hash, BusKind::Control, Some(SegmentConfig::default()))?;
         let data_seg_writer = SegmentWriterActor::spin(subject_hash, BusKind::Data, Some(SegmentConfig::default()))?;
 
         // Create NEW ring buffer MMR actor for data bus (with segment writer integration)
@@ -367,16 +341,8 @@ impl Subject {
         )?;
 
         // Create segment reader actors (still using old system for now)
-        let control_seg_reader = Arc::new(SegmentReaderActor::new(
-            subject_hash,
-            self.control.clone(),
-            SegmentConfig::default(),
-        ));
-        let data_seg_reader = Arc::new(SegmentReaderActor::new(
-            subject_hash,
-            self.data.clone(),
-            SegmentConfig::default(),
-        ));
+        let control_seg_reader = Arc::new(SegmentReaderActor::new(subject_hash, self.control.clone(), SegmentConfig::default()));
+        let data_seg_reader = Arc::new(SegmentReaderActor::new(subject_hash, self.data.clone(), SegmentConfig::default()));
 
         tracing::info!("System actors initialized successfully for Subject: {}", self.name);
         tracing::info!("Ring buffer actors: MMR, Segment Writers (Control/Data), Secondary Index - ✅");

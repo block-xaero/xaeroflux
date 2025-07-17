@@ -110,11 +110,7 @@ impl SecondaryIndexState {
     }
 
     /// Process SystemPayload event
-    pub fn process_system_payload(
-        &mut self,
-        payload: SystemPayload,
-        writer: &mut Writer<128, 2000>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn process_system_payload(&mut self, payload: SystemPayload, writer: &mut Writer<128, 2000>) -> Result<(), Box<dyn std::error::Error>> {
         let now = Instant::now();
         self.stats.total_processed += 1;
         self.stats.last_process_ts = emit_secs();
@@ -143,13 +139,7 @@ impl SecondaryIndexState {
     }
 
     /// Handle PayloadWritten event
-    fn handle_payload_written(
-        &mut self,
-        leaf_hash: [u8; 32],
-        meta: SegmentMeta,
-        now: Instant,
-        writer: &mut Writer<128, 2000>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn handle_payload_written(&mut self, leaf_hash: [u8; 32], meta: SegmentMeta, now: Instant, writer: &mut Writer<128, 2000>) -> Result<(), Box<dyn std::error::Error>> {
         let entry = self.cache.entry(leaf_hash).or_insert(CacheEntry {
             meta: None,
             mmr_appended: false,
@@ -172,12 +162,7 @@ impl SecondaryIndexState {
     }
 
     /// Handle MmrAppended event
-    fn handle_mmr_appended(
-        &mut self,
-        leaf_hash: [u8; 32],
-        now: Instant,
-        writer: &mut Writer<128, 2000>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn handle_mmr_appended(&mut self, leaf_hash: [u8; 32], now: Instant, writer: &mut Writer<128, 2000>) -> Result<(), Box<dyn std::error::Error>> {
         // Check if we already have the entry and get the meta before modifying cache
         let has_meta = self.cache.get(&leaf_hash).and_then(|e| e.meta);
 
@@ -227,12 +212,7 @@ impl SecondaryIndexState {
     }
 
     /// Write secondary index to LMDB
-    fn write_secondary_index(
-        &mut self,
-        leaf_hash: [u8; 32],
-        meta: SegmentMeta,
-        writer: &mut Writer<128, 2000>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn write_secondary_index(&mut self, leaf_hash: [u8; 32], meta: SegmentMeta, writer: &mut Writer<128, 2000>) -> Result<(), Box<dyn std::error::Error>> {
         tracing::debug!("Writing secondary index for leaf_hash: {:?}", leaf_hash);
 
         match put_secondary_index(&self.lmdb_env, &leaf_hash, &meta) {
@@ -293,11 +273,7 @@ impl SecondaryIndexState {
                     }
                 }
 
-                tracing::error!(
-                    "Failed to write secondary index for leaf_hash: {:?}, error: {:?}",
-                    leaf_hash,
-                    e
-                );
+                tracing::error!("Failed to write secondary index for leaf_hash: {:?}, error: {:?}", leaf_hash, e);
                 Err(e.into())
             }
         }
@@ -306,17 +282,12 @@ impl SecondaryIndexState {
     /// Garbage collect stale cache entries
     fn garbage_collect(&mut self, now: Instant) {
         let initial_size = self.cache.len();
-        self.cache
-            .retain(|_, entry| now.duration_since(entry.timestamp) < self.gc_ttl);
+        self.cache.retain(|_, entry| now.duration_since(entry.timestamp) < self.gc_ttl);
         let final_size = self.cache.len();
 
         if initial_size > final_size {
             self.stats.gc_runs += 1;
-            tracing::debug!(
-                "Garbage collected {} stale cache entries, {} remaining",
-                initial_size - final_size,
-                final_size
-            );
+            tracing::debug!("Garbage collected {} stale cache entries, {} remaining", initial_size - final_size, final_size);
         }
 
         self.last_gc = now;
@@ -353,21 +324,12 @@ pub struct SecondaryIndexActor {
 
 impl SecondaryIndexActor {
     /// Create and spawn Secondary Index actor with ring buffer processing
-    pub fn spin(
-        subject_hash: SubjectHash,
-        bus_kind: BusKind,
-        lmdb_env: Arc<Mutex<LmdbEnv>>,
-        gc_ttl: Option<Duration>,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn spin(subject_hash: SubjectHash, bus_kind: BusKind, lmdb_env: Arc<Mutex<LmdbEnv>>, gc_ttl: Option<Duration>) -> Result<Self, Box<dyn std::error::Error>> {
         let gc_ttl = gc_ttl.unwrap_or(Duration::from_secs(300)); // 5 minute default TTL
         let mut state = SecondaryIndexState::new(subject_hash, bus_kind.clone(), lmdb_env, gc_ttl);
 
         let jh = thread::spawn(move || {
-            tracing::info!(
-                "Secondary Index Actor started - Subject: {:?}, Bus: {:?}",
-                subject_hash,
-                bus_kind
-            );
+            tracing::info!("Secondary Index Actor started - Subject: {:?}, Bus: {:?}", subject_hash, bus_kind);
 
             // Initialize ring buffers
             let input_ring = SECONDARY_INDEX_INPUT_RING.get_or_init(RingBuffer::new);
@@ -401,11 +363,7 @@ impl SecondaryIndexActor {
                             }
                         }
                     } else {
-                        tracing::warn!(
-                            "Invalid SystemPayload size: {} bytes, expected {}",
-                            event.len,
-                            expected_size
-                        );
+                        tracing::warn!("Invalid SystemPayload size: {} bytes, expected {}", event.len, expected_size);
                     }
                     events_processed += 1;
                 }
@@ -468,16 +426,9 @@ mod tests {
         };
 
         let conf_size = std::mem::size_of::<SecondaryIndexConfirmation>();
-        assert_eq!(
-            conf_size, 64,
-            "Secondary index confirmation must be exactly 64 bytes for XS pool, got {} bytes",
-            conf_size
-        );
+        assert_eq!(conf_size, 64, "Secondary index confirmation must be exactly 64 bytes for XS pool, got {} bytes", conf_size);
 
-        println!(
-            "✅ Secondary index confirmation fits perfectly in XS pool: {} bytes",
-            conf_size
-        );
+        println!("✅ Secondary index confirmation fits perfectly in XS pool: {} bytes", conf_size);
     }
 
     #[test]
@@ -515,13 +466,10 @@ mod tests {
         initialize();
 
         let dir = tempdir().expect("Failed to create temp dir");
-        let env = Arc::new(Mutex::new(
-            LmdbEnv::new(dir.path().to_str().unwrap(), BusKind::Data).expect("Failed to create LMDB env"),
-        ));
+        let env = Arc::new(Mutex::new(LmdbEnv::new(dir.path().to_str().unwrap(), BusKind::Data).expect("Failed to create LMDB env")));
         let subject_hash = SubjectHash([1u8; 32]);
 
-        let actor = SecondaryIndexActor::spin(subject_hash, BusKind::Data, env, Some(Duration::from_secs(60)))
-            .expect("Failed to create Secondary Index actor");
+        let actor = SecondaryIndexActor::spin(subject_hash, BusKind::Data, env, Some(Duration::from_secs(60))).expect("Failed to create Secondary Index actor");
 
         // Verify interfaces exist
         assert!(true, "Secondary Index actor created successfully");
@@ -536,9 +484,7 @@ mod tests {
         initialize();
 
         let dir = tempdir().expect("Failed to create temp dir");
-        let env = Arc::new(Mutex::new(
-            LmdbEnv::new(dir.path().to_str().unwrap(), BusKind::Data).expect("Failed to create LMDB env"),
-        ));
+        let env = Arc::new(Mutex::new(LmdbEnv::new(dir.path().to_str().unwrap(), BusKind::Data).expect("Failed to create LMDB env")));
         let subject_hash = SubjectHash([2u8; 32]);
 
         let mut state = SecondaryIndexState::new(subject_hash, BusKind::Data, env.clone(), Duration::from_secs(60));
@@ -579,14 +525,8 @@ mod tests {
         let s_p_idx = secondary_index.page_index;
         let m_p_ix = meta.page_index;
         assert_eq!(s_p_idx, m_p_ix);
-        assert!(
-            !state.cache.contains_key(&leaf_hash),
-            "Cache should be cleared after successful write"
-        );
-        assert_eq!(
-            state.stats.successful_indexes, 1,
-            "Stats should show one successful index"
-        );
+        assert!(!state.cache.contains_key(&leaf_hash), "Cache should be cleared after successful write");
+        assert_eq!(state.stats.successful_indexes, 1, "Stats should show one successful index");
 
         println!("✅ Secondary Index state processing working correctly");
     }
@@ -596,14 +536,10 @@ mod tests {
         initialize();
 
         let dir = tempdir().expect("Failed to create temp dir");
-        let env = Arc::new(Mutex::new(
-            LmdbEnv::new(dir.path().to_str().unwrap(), BusKind::Data).expect("Failed to create LMDB env"),
-        ));
+        let env = Arc::new(Mutex::new(LmdbEnv::new(dir.path().to_str().unwrap(), BusKind::Data).expect("Failed to create LMDB env")));
         let subject_hash = SubjectHash([3u8; 32]);
 
-        let mut actor =
-            SecondaryIndexActor::spin(subject_hash, BusKind::Data, env.clone(), Some(Duration::from_secs(60)))
-                .expect("Failed to create Secondary Index actor");
+        let mut actor = SecondaryIndexActor::spin(subject_hash, BusKind::Data, env.clone(), Some(Duration::from_secs(60))).expect("Failed to create Secondary Index actor");
 
         // Create test SystemPayload events
         let leaf_hash = [0xBB; 32];
@@ -624,14 +560,10 @@ mod tests {
         // Send PayloadWritten event
         let payload_written = SystemPayload::PayloadWritten { leaf_hash, meta };
         let payload_bytes = bytemuck::bytes_of(&payload_written);
-        let payload_event =
-            EventUtils::create_pooled_event::<128>(payload_bytes, 101).expect("Should create pooled event");
+        let payload_event = EventUtils::create_pooled_event::<128>(payload_bytes, 101).expect("Should create pooled event");
 
         println!("Created PayloadWritten event, size: {} bytes", payload_bytes.len());
-        assert!(
-            actor.in_writer.add(payload_event),
-            "Should write PayloadWritten to input buffer"
-        );
+        assert!(actor.in_writer.add(payload_event), "Should write PayloadWritten to input buffer");
 
         // Give the actor some time to process the first event
         std::thread::sleep(Duration::from_millis(100));
@@ -642,10 +574,7 @@ mod tests {
         let mmr_event = EventUtils::create_pooled_event::<128>(mmr_bytes, 102).expect("Should create pooled event");
 
         println!("Created MmrAppended event, size: {} bytes", mmr_bytes.len());
-        assert!(
-            actor.in_writer.add(mmr_event),
-            "Should write MmrAppended to input buffer"
-        );
+        assert!(actor.in_writer.add(mmr_event), "Should write MmrAppended to input buffer");
 
         // Allow processing time for async operations
         std::thread::sleep(Duration::from_millis(1000));
@@ -658,23 +587,15 @@ mod tests {
         for attempt in 0..30 {
             if let Some(conf_event) = actor.out_reader.next() {
                 confirmations_received += 1;
-                println!(
-                    "Received confirmation #{} at attempt {}, len: {}",
-                    confirmations_received, attempt, conf_event.len
-                );
+                println!("Received confirmation #{} at attempt {}, len: {}", confirmations_received, attempt, conf_event.len);
 
                 let expected_conf_size = std::mem::size_of::<SecondaryIndexConfirmation>() as u32;
                 if conf_event.len == expected_conf_size {
-                    if let Ok(conf) = bytemuck::try_from_bytes::<SecondaryIndexConfirmation>(
-                        &conf_event.data[..conf_event.len as usize],
-                    ) {
+                    if let Ok(conf) = bytemuck::try_from_bytes::<SecondaryIndexConfirmation>(&conf_event.data[..conf_event.len as usize]) {
                         let operation_type = conf.operation_type;
                         let success = conf.success;
 
-                        println!(
-                            "Parsed confirmation - Operation: {}, Success: {}",
-                            operation_type, success
-                        );
+                        println!("Parsed confirmation - Operation: {}, Success: {}", operation_type, success);
 
                         match operation_type {
                             op if op == SecondaryIndexOperation::MmrAppended as u16 => {
@@ -695,10 +616,7 @@ mod tests {
                         println!("Failed to parse confirmation bytes");
                     }
                 } else {
-                    println!(
-                        "Wrong confirmation size: {} vs expected {}",
-                        conf_event.len, expected_conf_size
-                    );
+                    println!("Wrong confirmation size: {} vs expected {}", conf_event.len, expected_conf_size);
                 }
             }
 
@@ -732,9 +650,7 @@ mod tests {
         initialize();
 
         let dir = tempdir().expect("Failed to create temp dir");
-        let env = Arc::new(Mutex::new(
-            LmdbEnv::new(dir.path().to_str().unwrap(), BusKind::Data).expect("Failed to create LMDB env"),
-        ));
+        let env = Arc::new(Mutex::new(LmdbEnv::new(dir.path().to_str().unwrap(), BusKind::Data).expect("Failed to create LMDB env")));
         let subject_hash = SubjectHash([4u8; 32]);
 
         // Use very short TTL for testing
