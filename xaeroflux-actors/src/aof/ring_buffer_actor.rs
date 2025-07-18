@@ -1,10 +1,11 @@
-//! AOF (Append-Only File) Actor using ring buffer architecture.
+//! AOF (Append-Only File) Actor using ring buffer architecture with MMR indexing.
 //!
 //! This actor:
-//! - Reads from input ring buffer internally using existing pools
+//! - Reads from global ring buffers (XS, S, M, L, XL) defined in subject.rs
 //! - Persists events to LMDB in append-only fashion
-//! - Writes confirmation events to output ring buffer
-//! - Exposes reader/writer interfaces for external interaction
+//! - Updates MMR index for each event
+//! - Uses simple sequential selection for event processing
+//! - Uses hash index for fast leaf hash lookups
 
 use std::{
     sync::{Arc, Mutex, OnceLock},
@@ -13,73 +14,107 @@ use std::{
 };
 
 use bytemuck::{Pod, Zeroable};
-use rusted_ring_new::{EventPoolFactory, EventUtils, PooledEvent, Reader, RingBuffer, Writer};
-use xaeroflux_core::{CONF, date_time::emit_secs, hash::sha_256_slice, pipe::BusKind, pool::XaeroInternalEvent, system_paths};
+use rusted_ring_new::{
+    EventPoolFactory, EventUtils, L_CAPACITY, L_TSHIRT_SIZE, M_CAPACITY, M_TSHIRT_SIZE, PooledEvent, Reader, RingBuffer, S_CAPACITY, S_TSHIRT_SIZE, Writer, XL_CAPACITY,
+    XL_TSHIRT_SIZE, XS_CAPACITY, XS_TSHIRT_SIZE,
+};
+use xaeroflux_core::{CONF, date_time::emit_secs, hash::blake_hash_slice, pipe::BusKind, pool::XaeroInternalEvent, system_paths};
 
+// Import global ring buffers from subject.rs
+use crate::{L_RING, M_RING, S_RING, XL_RING, XS_RING};
 use crate::{
     aof::storage::{
-        format::EventKey,
-        lmdb::{LmdbEnv, generate_event_key, push_internal_event_universal},
+        format::{EventKey, MMRMeta},
+        lmdb::{LmdbEnv, generate_event_key, get_event_by_hash, get_mmr_meta, push_internal_event_universal, put_mmr_meta, scan_enhanced_range},
     },
-    subject::SubjectHash,
+    indexing::mmr::{Peak, XaeroMmr, XaeroMmrOps},
 };
-
-// ================================================================================================
-// AOF-SPECIFIC RING BUFFERS
-// ================================================================================================
-
-// AOF Control Event Flow: XS input -> XS output (confirmations)
-pub static AOF_CONTROL_INPUT_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
-pub static AOF_CONTROL_OUTPUT_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
-
-// AOF Data Event Flow: S input -> XS output (confirmations are small)
-pub static AOF_DATA_INPUT_RING: OnceLock<RingBuffer<256, 1000>> = OnceLock::new();
-pub static AOF_DATA_OUTPUT_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
 
 // ================================================================================================
 // TYPES & STRUCTS
 // ================================================================================================
 
-/// Confirmation event sent after successful LMDB write - exactly 64 bytes for XS pool
-#[repr(C, packed)]
-#[derive(Clone, Copy, Debug)]
-pub struct AofWriteConfirmation {
-    pub original_hash: [u8; 32], // Hash of original event data (32 bytes)
-    pub sequence_id: u32,        // Sequential write order (4 bytes)
-    pub latest_ts: u32,          // Timestamp (4 bytes)
-    pub event_type: u8,          // Original event type (1 byte)
-    pub status: u8,              // 0 = success, 1 = failure (1 byte)
-    pub _pad: [u8; 22],          // Padding to reach exactly 64 bytes
-}
-
-unsafe impl Pod for AofWriteConfirmation {}
-unsafe impl Zeroable for AofWriteConfirmation {}
-
-/// AOF Actor statistics
-#[derive(Debug, Default)]
-pub struct AofStats {
-    pub total_writes: u64,
-    pub failed_writes: u64,
-    pub bytes_written: u64,
-    pub last_write_ts: u64,
-}
-
-/// AOF Actor state - tracks write statistics and sequence
+/// AOF Actor state - tracks sequence and MMR index
 pub struct AofState {
     pub env: Arc<Mutex<LmdbEnv>>,
-    pub subject_hash: SubjectHash,
-    pub bus_kind: BusKind,
     pub sequence_counter: u64,
-    pub stats: AofStats,
+    pub mmr: XaeroMmr, // MMR index for cryptographic integrity
 }
 
-/// AOF Actor - processes events from ring buffer and persists to LMDB
+/// Reader multiplexer for all ring buffer sizes
+pub struct ReaderMultiplexer {
+    pub xs_reader: Reader<XS_TSHIRT_SIZE, XS_CAPACITY>,
+    pub s_reader: Reader<S_TSHIRT_SIZE, S_CAPACITY>,
+    pub m_reader: Reader<M_TSHIRT_SIZE, M_CAPACITY>,
+    pub l_reader: Reader<L_TSHIRT_SIZE, L_CAPACITY>,
+    pub xl_reader: Reader<XL_TSHIRT_SIZE, XL_CAPACITY>,
+}
+
+impl ReaderMultiplexer {
+    pub fn new() -> Self {
+        let xs_ring = XS_RING.get_or_init(|| RingBuffer::new());
+        let s_ring = S_RING.get_or_init(|| RingBuffer::new());
+        let m_ring = M_RING.get_or_init(|| RingBuffer::new());
+        let l_ring = L_RING.get_or_init(|| RingBuffer::new());
+        let xl_ring = XL_RING.get_or_init(|| RingBuffer::new());
+
+        Self {
+            xs_reader: Reader::new(xs_ring),
+            s_reader: Reader::new(s_ring),
+            m_reader: Reader::new(m_ring),
+            l_reader: Reader::new(l_ring),
+            xl_reader: Reader::new(xl_ring),
+        }
+    }
+
+    /// Process events using simple sequential selection (XS -> S -> M -> L -> XL)
+    pub fn process_events(&mut self, state: &mut AofState) -> bool {
+        // Check XS first (highest priority)
+        if let Some(event) = self.xs_reader.next() {
+            if let Ok(_) = AofActor::process_ring_event_sized::<XS_TSHIRT_SIZE>(state, &event) {
+                tracing::debug!("Processed XS event");
+            }
+            return true;
+        }
+
+        // Check S
+        if let Some(event) = self.s_reader.next() {
+            if let Ok(_) = AofActor::process_ring_event_sized::<S_TSHIRT_SIZE>(state, &event) {
+                tracing::debug!("Processed S event");
+            }
+            return true;
+        }
+
+        // Check M
+        if let Some(event) = self.m_reader.next() {
+            if let Ok(_) = AofActor::process_ring_event_sized::<M_TSHIRT_SIZE>(state, &event) {
+                tracing::debug!("Processed M event");
+            }
+            return true;
+        }
+
+        // Check L
+        if let Some(event) = self.l_reader.next() {
+            if let Ok(_) = AofActor::process_ring_event_sized::<L_TSHIRT_SIZE>(state, &event) {
+                tracing::debug!("Processed L event");
+            }
+            return true;
+        }
+
+        // Check XL
+        if let Some(event) = self.xl_reader.next() {
+            if let Ok(_) = AofActor::process_ring_event_sized::<XL_TSHIRT_SIZE>(state, &event) {
+                tracing::debug!("Processed XL event");
+            }
+            return true;
+        }
+
+        false // No events found
+    }
+}
+
+/// AOF Actor - processes events from global ring buffers and persists to LMDB with MMR indexing
 pub struct AofActor {
-    // Exposed interfaces for external interaction using dedicated AOF ring buffers
-    pub in_writer: Writer<64, 2000>,       // Control events input
-    pub in_writer_data: Writer<256, 1000>, // Data events input
-    pub out_reader: Reader<64, 2000>,      // Control confirmations output
-    pub out_reader_data: Reader<64, 2000>, // Data confirmations output (confirmations are small)
     pub jh: JoinHandle<()>,
 }
 
@@ -88,86 +123,125 @@ pub struct AofActor {
 // ================================================================================================
 
 impl AofState {
-    /// Create new AOF state with LMDB environment
-    pub fn new(subject_hash: SubjectHash, bus_kind: BusKind) -> Result<Self, Box<dyn std::error::Error>> {
+    /// Create new AOF state with LMDB environment and recovered MMR
+    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
         // Get base path from config
         let c = CONF.get().expect("failed to unravel config");
         let base_path = &c.aof.file_path;
 
         // Construct subject-specific path based on bus kind
-        let lmdb_path = match bus_kind {
-            BusKind::Control => system_paths::emit_control_path_with_subject_hash(base_path.to_str().expect("path_invalid_for_aof"), subject_hash.0, "aof"),
-            BusKind::Data => system_paths::emit_data_path_with_subject_hash(base_path.to_str().expect("path_invalid_for_aof"), subject_hash.0, "aof"),
-        };
+        let lmdb_path = system_paths::emit_path_with_prefix(base_path.to_str().expect("path_invalid_for_aof"), "aof");
 
         tracing::info!("Creating AOF LMDB at path: {}", lmdb_path);
-        let env = Arc::new(Mutex::new(LmdbEnv::new(&lmdb_path, bus_kind.clone())?));
+        let env = Arc::new(Mutex::new(LmdbEnv::new(&lmdb_path)?));
 
-        Ok(Self {
-            env,
-            subject_hash,
-            bus_kind,
-            sequence_counter: 0,
-            stats: AofStats::default(),
-        })
+        // Recover MMR state from existing events
+        let mmr = Self::recover_mmr_from_events(&env)?;
+        tracing::info!("Recovered MMR with {} leaves", mmr.leaf_count());
+
+        Ok(Self { env, sequence_counter: 0, mmr })
     }
 
-    /// Process a single enhanced event with peer and vector clock info
-    fn process_event(
-        &mut self,
-        event_data: &[u8],
-        event_type: u8,
-        timestamp: u64,
-        xaero_id_hash: [u8; 32],
-        vector_clock_hash: [u8; 32],
-    ) -> Result<AofWriteConfirmation, Box<dyn std::error::Error>> {
-        // Skip noise/debug events
-        if !Self::should_persist_event_type(event_type) {
-            return Ok(AofWriteConfirmation {
-                original_hash: sha_256_slice(event_data),
-                sequence_id: self.sequence_counter as u32,
-                latest_ts: timestamp as u32,
-                event_type,
-                status: 0, // Success (but skipped)
-                _pad: [0; 22],
-            });
+    /// Recover MMR state by scanning all existing events in chronological order
+    fn recover_mmr_from_events(env: &Arc<Mutex<LmdbEnv>>) -> Result<XaeroMmr, Box<dyn std::error::Error>> {
+        let mut mmr = XaeroMmr::new();
+
+        // Check if we have stored MMR metadata first
+        if let Ok(Some(mmr_meta)) = get_mmr_meta(env) {
+            let mpc = mmr_meta.leaf_count;
+            tracing::info!("Found existing MMR metadata: {mpc:?} leaves");
         }
 
-        // Use the universal push function for storage
+        // Scan all events in chronological order and rebuild MMR
+        let mut all_events = Vec::new();
+
+        // Collect events from all possible sizes
+        if let Ok(xs_events) = unsafe { scan_enhanced_range::<XS_TSHIRT_SIZE>(env, 0, u64::MAX) } {
+            for event in xs_events {
+                let event_data = &event.evt.data[..event.evt.len as usize];
+                let event_hash = blake_hash_slice(event_data);
+                all_events.push((event.latest_ts, event_hash.into()));
+            }
+        }
+
+        if let Ok(s_events) = unsafe { scan_enhanced_range::<S_TSHIRT_SIZE>(env, 0, u64::MAX) } {
+            for event in s_events {
+                let event_data = &event.evt.data[..event.evt.len as usize];
+                let event_hash = blake_hash_slice(event_data);
+                all_events.push((event.latest_ts, event_hash.into()));
+            }
+        }
+
+        if let Ok(m_events) = unsafe { scan_enhanced_range::<M_TSHIRT_SIZE>(env, 0, u64::MAX) } {
+            for event in m_events {
+                let event_data = &event.evt.data[..event.evt.len as usize];
+                let event_hash = blake_hash_slice(event_data);
+                all_events.push((event.latest_ts, event_hash.into()));
+            }
+        }
+
+        if let Ok(l_events) = unsafe { scan_enhanced_range::<L_TSHIRT_SIZE>(env, 0, u64::MAX) } {
+            for event in l_events {
+                let event_data = &event.evt.data[..event.evt.len as usize];
+                let event_hash = blake_hash_slice(event_data);
+                all_events.push((event.latest_ts, event_hash.into()));
+            }
+        }
+
+        if let Ok(xl_events) = unsafe { scan_enhanced_range::<XL_TSHIRT_SIZE>(env, 0, u64::MAX) } {
+            for event in xl_events {
+                let event_data = &event.evt.data[..event.evt.len as usize];
+                let event_hash = blake_hash_slice(event_data);
+                all_events.push((event.latest_ts, event_hash.into()));
+            }
+        }
+
+        // Sort events by timestamp to rebuild MMR in correct order
+        all_events.sort_by_key(|(ts, _)| *ts);
+
+        // Rebuild MMR by appending events in chronological order
+        for (_, event_hash) in all_events {
+            mmr.append(event_hash);
+        }
+
+        tracing::info!("Recovered MMR with {} leaves", mmr.leaf_count());
+        Ok(mmr)
+    }
+
+    /// Process a single enhanced event with peer and vector clock info, including MMR update
+    fn process_event(&mut self, event_data: &[u8], event_type: u8, timestamp: u64, xaero_id_hash: [u8; 32], vector_clock_hash: [u8; 32]) -> Result<(), Box<dyn std::error::Error>> {
+        // Skip noise/debug events
+        if !Self::should_persist_event_type(event_type) {
+            return Ok(());
+        }
+
+        // 1. Store event in LMDB (this also updates hash index automatically)
         match push_internal_event_universal(&self.env, event_data, event_type as u32, timestamp) {
             Ok(_) => {
-                self.sequence_counter += 1;
-                self.stats.total_writes += 1;
-                self.stats.bytes_written += event_data.len() as u64;
-                self.stats.last_write_ts = timestamp;
+                // 2. Add event hash to MMR index
+                let event_hash = blake_hash_slice(event_data);
+                let _changed_peaks = self.mmr.append(event_hash.into());
 
-                Ok(AofWriteConfirmation {
-                    original_hash: sha_256_slice(event_data),
-                    sequence_id: self.sequence_counter as u32,
-                    latest_ts: timestamp as u32,
-                    event_type,
-                    status: 0, // Success
-                    _pad: [0; 22],
-                })
+                // 3. Persist MMR metadata to LMDB
+                if let Err(e) = self.persist_mmr_metadata() {
+                    tracing::warn!("Failed to persist MMR metadata: {:?}", e);
+                }
+
+                self.sequence_counter += 1;
+
+                tracing::debug!("Event processed: hash={}, MMR leaves={}", hex::encode(event_hash), self.mmr.leaf_count());
+
+                Ok(())
             }
             Err(e) => {
-                self.stats.failed_writes += 1;
-                tracing::error!("Failed to persist enhanced event to LMDB: {:?}", e);
-
-                Ok(AofWriteConfirmation {
-                    original_hash: sha_256_slice(event_data),
-                    sequence_id: self.sequence_counter as u32,
-                    latest_ts: timestamp as u32,
-                    event_type,
-                    status: 1, // Failure
-                    _pad: [0; 22],
-                })
+                tracing::error!("Failed to persist event to LMDB: {:?}", e);
+                Err(e)
             }
         }
     }
 
     /// Process a single event and persist to LMDB (legacy method)
-    fn process_legacy_event(&mut self, event_data: &[u8], event_type: u8) -> Result<AofWriteConfirmation, Box<dyn std::error::Error>> {
+    fn process_legacy_event(&mut self, event_data: &[u8], event_type: u8) -> Result<(), Box<dyn std::error::Error>> {
         // Use empty hashes for legacy events
         self.process_event(
             event_data,
@@ -176,6 +250,19 @@ impl AofState {
             [0; 32], // Empty xaero_id_hash
             [0; 32], // Empty vector_clock_hash
         )
+    }
+
+    /// Persist MMR metadata to LMDB META database
+    fn persist_mmr_metadata(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let mmr_meta = MMRMeta {
+            root_hash: self.mmr.root(),
+            peaks_count: self.mmr.peaks().len(),
+            leaf_count: self.mmr.leaf_count(),
+            segment_meta: Default::default(), // No segments in LMDB-only approach
+        };
+
+        put_mmr_meta(&self.env, &mmr_meta)?;
+        Ok(())
     }
 
     /// Filter out noise events to reduce storage overhead
@@ -188,18 +275,175 @@ impl AofState {
         }
     }
 
-    /// Log periodic statistics
-    fn log_stats(&self) {
-        if self.stats.total_writes % 1000 == 0 && self.stats.total_writes > 0 {
-            tracing::info!(
-                "AOF Stats - Subject: {:?}, Bus: {:?}, Writes: {}, Failed: {}, Bytes: {} MB",
-                self.subject_hash,
-                self.bus_kind,
-                self.stats.total_writes,
-                self.stats.failed_writes,
-                self.stats.bytes_written / (1024 * 1024)
-            );
+    /// Get events for specific leaf hashes (for peer sync) - NOW USING HASH INDEX!
+    pub fn get_events_for_leaf_hashes(&self, leaf_hashes: &[[u8; 32]]) -> Result<Vec<Vec<u8>>, Box<dyn std::error::Error>> {
+        let mut events = Vec::new();
+
+        for &target_hash in leaf_hashes {
+            let mut found = false;
+
+            // Try O(1) hash index lookup for each possible size
+            // This replaces the old O(N) scan approach!
+
+            // Try XS size first
+            if !found {
+                if let Ok(Some(event)) = get_event_by_hash::<XS_TSHIRT_SIZE>(&self.env, target_hash) {
+                    let event_data = &event.evt.data[..event.evt.len as usize];
+                    events.push(event_data.to_vec());
+                    found = true;
+                }
+            }
+
+            // Try S size
+            if !found {
+                if let Ok(Some(event)) = get_event_by_hash::<S_TSHIRT_SIZE>(&self.env, target_hash) {
+                    let event_data = &event.evt.data[..event.evt.len as usize];
+                    events.push(event_data.to_vec());
+                    found = true;
+                }
+            }
+
+            // Try M size
+            if !found {
+                if let Ok(Some(event)) = get_event_by_hash::<M_TSHIRT_SIZE>(&self.env, target_hash) {
+                    let event_data = &event.evt.data[..event.evt.len as usize];
+                    events.push(event_data.to_vec());
+                    found = true;
+                }
+            }
+
+            // Try L size
+            if !found {
+                if let Ok(Some(event)) = get_event_by_hash::<L_TSHIRT_SIZE>(&self.env, target_hash) {
+                    let event_data = &event.evt.data[..event.evt.len as usize];
+                    events.push(event_data.to_vec());
+                    found = true;
+                }
+            }
+
+            // Try XL size
+            if !found {
+                if let Ok(Some(event)) = get_event_by_hash::<XL_TSHIRT_SIZE>(&self.env, target_hash) {
+                    let event_data = &event.evt.data[..event.evt.len as usize];
+                    events.push(event_data.to_vec());
+                    found = true;
+                }
+            }
+
+            if !found {
+                tracing::warn!("Event not found for leaf hash: {}", hex::encode(target_hash));
+            }
         }
+
+        tracing::debug!("Retrieved {} events for {} leaf hashes using hash index", events.len(), leaf_hashes.len());
+        Ok(events)
+    }
+
+    /// FALLBACK: Old scan-based method (kept for compatibility/debugging)
+    pub fn get_events_for_leaf_hashes_legacy(&self, leaf_hashes: &[[u8; 32]]) -> Result<Vec<Vec<u8>>, Box<dyn std::error::Error>> {
+        let mut events = Vec::new();
+
+        for &target_hash in leaf_hashes {
+            let mut found = false;
+
+            // Search through all possible event sizes using full scan
+            if !found {
+                if let Ok(all_events) = unsafe { scan_enhanced_range::<XS_TSHIRT_SIZE>(&self.env, 0, u64::MAX) } {
+                    for event in all_events {
+                        let event_data = &event.evt.data[..event.evt.len as usize];
+                        let hash = blake_hash_slice(event_data);
+
+                        if hash == target_hash {
+                            events.push(event_data.to_vec());
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if !found {
+                if let Ok(all_events) = unsafe { scan_enhanced_range::<S_TSHIRT_SIZE>(&self.env, 0, u64::MAX) } {
+                    for event in all_events {
+                        let event_data = &event.evt.data[..event.evt.len as usize];
+                        let hash = blake_hash_slice(event_data);
+
+                        if hash == target_hash {
+                            events.push(event_data.to_vec());
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if !found {
+                if let Ok(all_events) = unsafe { scan_enhanced_range::<M_TSHIRT_SIZE>(&self.env, 0, u64::MAX) } {
+                    for event in all_events {
+                        let event_data = &event.evt.data[..event.evt.len as usize];
+                        let hash = blake_hash_slice(event_data);
+
+                        if hash == target_hash {
+                            events.push(event_data.to_vec());
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if !found {
+                if let Ok(all_events) = unsafe { scan_enhanced_range::<L_TSHIRT_SIZE>(&self.env, 0, u64::MAX) } {
+                    for event in all_events {
+                        let event_data = &event.evt.data[..event.evt.len as usize];
+                        let hash = blake_hash_slice(event_data);
+
+                        if hash == target_hash {
+                            events.push(event_data.to_vec());
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if !found {
+                if let Ok(all_events) = unsafe { scan_enhanced_range::<XL_TSHIRT_SIZE>(&self.env, 0, u64::MAX) } {
+                    for event in all_events {
+                        let event_data = &event.evt.data[..event.evt.len as usize];
+                        let hash = blake_hash_slice(event_data);
+
+                        if hash == target_hash {
+                            events.push(event_data.to_vec());
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(events)
+    }
+
+    /// Get current MMR peaks for sharing with peers
+    pub fn get_mmr_peaks(&self) -> Vec<Peak> {
+        self.mmr.peaks().to_vec()
+    }
+
+    /// Get MMR root hash
+    pub fn get_mmr_root(&self) -> [u8; 32] {
+        self.mmr.root()
+    }
+
+    /// Generate MMR proof for a specific leaf index
+    pub fn get_mmr_proof(&self, leaf_index: usize) -> Option<xaeroflux_core::merkle_tree::XaeroMerkleProof> {
+        self.mmr.proof(leaf_index)
+    }
+
+    /// Verify an MMR proof
+    pub fn verify_mmr_proof(&self, leaf_hash: [u8; 32], proof: &xaeroflux_core::merkle_tree::XaeroMerkleProof, expected_root: [u8; 32]) -> bool {
+        self.mmr.verify(leaf_hash, proof, expected_root)
     }
 }
 
@@ -208,59 +452,32 @@ impl AofState {
 // ================================================================================================
 
 impl AofActor {
-    /// Create and spawn AOF actor with ring buffer processing using dedicated AOF ring buffers
-    pub fn spin(subject_hash: SubjectHash, bus_kind: BusKind) -> Result<Self, Box<dyn std::error::Error>> {
-        let mut state = AofState::new(subject_hash, bus_kind.clone())?;
+    /// Create and spawn AOF actor that reads from global ring buffers
+    pub fn spin() -> Result<Self, Box<dyn std::error::Error>> {
+        let mut state = AofState::new()?;
 
         let jh = thread::spawn(move || {
-            tracing::info!("AOF Actor started - Subject: {:?}, Bus: {:?}", subject_hash, bus_kind);
+            tracing::info!("AOF Actor started ");
+            tracing::info!("Reading from global ring buffers: XS, S, M, L, XL");
 
-            match bus_kind {
-                BusKind::Control => {
-                    // Control: Read from AOF control input, write confirmations to AOF control output
-                    let control_input_ring = AOF_CONTROL_INPUT_RING.get_or_init(RingBuffer::new);
-                    let control_output_ring = AOF_CONTROL_OUTPUT_RING.get_or_init(RingBuffer::new);
+            // Create reader multiplexer for all global ring buffers
+            let mut multiplexer = ReaderMultiplexer::new();
 
-                    let mut input_reader = Reader::new(control_input_ring);
-                    let mut output_writer = Writer::new(control_output_ring);
-
-                    Self::run_control_event_loop(&mut state, &mut input_reader, &mut output_writer);
-                }
-                BusKind::Data => {
-                    // Data: Read from AOF data input, write confirmations to AOF data output
-                    let data_input_ring = AOF_DATA_INPUT_RING.get_or_init(RingBuffer::new);
-                    let data_output_ring = AOF_DATA_OUTPUT_RING.get_or_init(RingBuffer::new);
-
-                    let mut input_reader = Reader::new(data_input_ring);
-                    let mut output_writer = Writer::new(data_output_ring);
-
-                    Self::run_data_event_loop(&mut state, &mut input_reader, &mut output_writer);
+            // Main event processing loop
+            loop {
+                // Process events with priority (XS first, then S, M, L, XL)
+                if !multiplexer.process_events(&mut state) {
+                    // No events available, yield CPU briefly
+                    thread::sleep(Duration::from_micros(100));
                 }
             }
         });
 
-        // Create exposed interfaces using the dedicated AOF ring buffers
-        let control_input_ring = AOF_CONTROL_INPUT_RING.get_or_init(RingBuffer::new);
-        let control_output_ring = AOF_CONTROL_OUTPUT_RING.get_or_init(RingBuffer::new);
-        let data_input_ring = AOF_DATA_INPUT_RING.get_or_init(RingBuffer::new);
-        let data_output_ring = AOF_DATA_OUTPUT_RING.get_or_init(RingBuffer::new);
-
-        let in_writer = Writer::new(control_input_ring); // Control events input
-        let in_writer_data = Writer::new(data_input_ring); // Data events input
-        let out_reader = Reader::new(control_output_ring); // Control confirmations output
-        let out_reader_data = Reader::new(data_output_ring); // Data confirmations output
-
-        Ok(Self {
-            in_writer,
-            in_writer_data,
-            out_reader,
-            out_reader_data,
-            jh,
-        })
+        Ok(Self { jh })
     }
 
     /// Process event from ring buffer with specific size
-    fn process_ring_event_sized<const SIZE: usize>(state: &mut AofState, event: &PooledEvent<SIZE>) -> Result<AofWriteConfirmation, Box<dyn std::error::Error>> {
+    pub fn process_ring_event_sized<const SIZE: usize>(state: &mut AofState, event: &PooledEvent<SIZE>) -> Result<(), Box<dyn std::error::Error>> {
         // Try to parse as XaeroInternalEvent first
         if event.len == std::mem::size_of::<XaeroInternalEvent<SIZE>>() as u32 {
             // Safety: We've verified the size matches exactly
@@ -282,79 +499,6 @@ impl AofActor {
         let event_data = &event.data[..event.len as usize];
         state.process_legacy_event(event_data, event.event_type as u8)
     }
-
-    /// Control event processing loop (AOF control input -> AOF control output)
-    fn run_control_event_loop(state: &mut AofState, reader: &mut Reader<64, 2000>, writer: &mut Writer<64, 2000>) {
-        loop {
-            let mut events_processed = 0;
-
-            for event in reader.by_ref() {
-                match Self::process_ring_event_sized::<64>(state, &event) {
-                    Ok(confirmation) => {
-                        let conf_bytes = bytemuck::bytes_of(&confirmation);
-                        // Confirmation fits exactly in 64 bytes
-                        match EventUtils::create_pooled_event::<64>(conf_bytes, 200) {
-                            Ok(conf_event) =>
-                                if !writer.add(conf_event) {
-                                    tracing::warn!("AOF control confirmation buffer full - dropping confirmation");
-                                },
-                            Err(e) => {
-                                tracing::error!("Failed to create control confirmation event: {:?}", e);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to process AOF control event: {:?}", e);
-                    }
-                }
-                events_processed += 1;
-            }
-
-            if events_processed > 0 {
-                state.log_stats();
-            }
-
-            thread::sleep(Duration::from_micros(100));
-        }
-    }
-
-    /// Data event processing loop (AOF data input -> AOF data output for confirmations)
-    fn run_data_event_loop(state: &mut AofState, reader: &mut Reader<256, 1000>, writer: &mut Writer<64, 2000>) {
-        tracing::warn!("🚀 AOF Data event loop STARTED");
-        tracing::warn!("🎯 Actor input ring buffer address: {:p}", reader.ringbuffer as *const _);
-        tracing::warn!("🎯 Actor output ring buffer address: {:p}", writer.ringbuffer as *const _);
-        loop {
-            let mut events_processed = 0;
-
-            for event in reader.by_ref() {
-                match Self::process_ring_event_sized::<256>(state, &event) {
-                    Ok(confirmation) => {
-                        let conf_bytes = bytemuck::bytes_of(&confirmation);
-                        // Confirmation fits exactly in 64 bytes
-                        match EventUtils::create_pooled_event::<64>(conf_bytes, 200) {
-                            Ok(conf_event) =>
-                                if !writer.add(conf_event) {
-                                    tracing::warn!("AOF data confirmation buffer full - dropping confirmation");
-                                },
-                            Err(e) => {
-                                tracing::error!("Failed to create data confirmation event: {:?}", e);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to process AOF data event: {:?}", e);
-                    }
-                }
-                events_processed += 1;
-            }
-
-            if events_processed > 0 {
-                state.log_stats();
-            }
-
-            thread::sleep(Duration::from_micros(100));
-        }
-    }
 }
 
 // ================================================================================================
@@ -366,164 +510,78 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_pool_size_constraints() {
-        // Verify our confirmation event fits in XS pool
-        let conf = AofWriteConfirmation {
-            original_hash: [0; 32],
-            sequence_id: 1,
-            latest_ts: 1234567890,
-            event_type: 42,
-            status: 0,
-            _pad: [0; 22],
-        };
+    fn test_reader_multiplexer() {
+        // Test that multiplexer can be created with global rings
+        let multiplexer = ReaderMultiplexer::new();
 
-        let conf_size = std::mem::size_of::<AofWriteConfirmation>();
-        assert_eq!(conf_size, 64, "Confirmation must be exactly 64 bytes for XS pool, got {} bytes", conf_size);
+        // Verify all readers are initialized
+        assert!(multiplexer.xs_reader.cursor == 0);
+        assert!(multiplexer.s_reader.cursor == 0);
+        assert!(multiplexer.m_reader.cursor == 0);
+        assert!(multiplexer.l_reader.cursor == 0);
+        assert!(multiplexer.xl_reader.cursor == 0);
 
-        // Test XS event creation
-        let conf_bytes = bytemuck::bytes_of(&conf);
-        let xs_event = EventUtils::create_pooled_event::<64>(conf_bytes, 200).expect("Confirmation should fit in XS event");
-
-        assert_eq!(xs_event.len as usize, conf_size);
-        println!("✅ Confirmation fits perfectly in XS pool: {} bytes", conf_size);
+        println!("✅ Reader multiplexer created successfully");
     }
 
     #[test]
-    fn test_aof_actor_xs_interface() {
+    fn test_mmr_integration() {
         xaeroflux_core::initialize();
 
-        let subject_hash = SubjectHash([1u8; 32]);
-        let mut actor = AofActor::spin(subject_hash, BusKind::Control).expect("Failed to create AOF actor");
+        let mut state = AofState::new().expect("Failed to create AOF state");
 
-        // Test XS writer interface (64 bytes for control events)
-        let test_data = b"control cmd"; // Small control command
-        let event = EventUtils::create_pooled_event::<64>(test_data, 42).expect("Failed to create XS event");
+        // Test MMR integration with event processing
+        let test_events = [b"first event".as_slice(), b"second event".as_slice(), b"third event".as_slice()];
 
-        // Write to AOF control input buffer
-        assert!(actor.in_writer.add(event), "Should write to AOF control input buffer");
+        let initial_leaf_count = state.mmr.leaf_count();
 
-        // Read confirmations from AOF control output buffer
-        let mut confirmation_found = false;
-        for _attempt in 0..50 {
-            thread::sleep(Duration::from_millis(100));
-
-            if let Some(conf_event) = actor.out_reader.next() {
-                if let Ok(_conf) = bytemuck::try_from_bytes::<AofWriteConfirmation>(&conf_event.data[..conf_event.len as usize]) {
-                    confirmation_found = true;
-                    break;
-                }
-            }
+        for (i, event_data) in test_events.iter().enumerate() {
+            state
+                .process_event(
+                    event_data,
+                    42 + i as u8,
+                    emit_secs() + i as u64,
+                    [i as u8; 32],        // Different peer IDs
+                    [(i + 10) as u8; 32], // Different vector clocks
+                )
+                .expect("Should process event with MMR");
         }
 
-        assert!(confirmation_found, "Should receive control confirmation from AOF output buffer");
+        assert_eq!(state.mmr.leaf_count(), initial_leaf_count + test_events.len(), "MMR should have correct leaf count");
+        assert_ne!(state.mmr.root(), [0; 32], "MMR root should be non-zero");
+
+        println!("✅ MMR integration working: {} leaves", state.mmr.leaf_count());
     }
 
     #[test]
-    fn test_aof_actor_s_interface() {
+    fn test_hash_index_lookup_performance() {
         xaeroflux_core::initialize();
-        let subject_hash = SubjectHash([2u8; 32]);
-        let mut actor = AofActor::spin(subject_hash, BusKind::Data).expect("Failed to create AOF actor");
-        tracing::warn!(
-            "🔍 Test input ring buffer address: {:p}",
-            AOF_DATA_INPUT_RING.get().map(|r| r as *const _).unwrap_or(std::ptr::null())
-        );
-        tracing::warn!(
-            "🔍 Test output ring buffer address: {:p}",
-            AOF_DATA_OUTPUT_RING.get().map(|r| r as *const _).unwrap_or(std::ptr::null())
-        );
-        // Test S writer with CRDT operation (256 bytes for data events)
-        let crdt_op = b"{'op':'insert','pos':42,'char':'a','user':'alice'}"; // CRDT operation
-        let event = EventUtils::create_pooled_event::<256>(crdt_op, 100).expect("Failed to create S event");
-        thread::sleep(Duration::from_millis(100));
-        // Write to AOF data input buffer
-        assert!(actor.in_writer_data.add(event), "Should write CRDT op to AOF data input buffer");
 
-        // Read confirmations from AOF data output buffer (separate ring buffer for confirmations)
-        let mut confirmation_found = false;
-        for _attempt in 0..50 {
-            thread::sleep(Duration::from_millis(100));
+        let mut state = AofState::new().expect("Failed to create AOF state");
 
-            if let Some(conf_event) = actor.out_reader_data.next() {
-                match bytemuck::try_from_bytes::<AofWriteConfirmation>(&conf_event.data[..conf_event.len as usize]) {
-                    Ok(_conf) => {
-                        confirmation_found = true;
-                        break;
-                    }
-                    Err(e) => {
-                        panic!(
-                            "Failed to parse data confirmation: {:?}. Event len: {}, Expected: {}",
-                            e,
-                            conf_event.len,
-                            std::mem::size_of::<AofWriteConfirmation>()
-                        );
-                    }
-                }
-            }
+        // Store some test events
+        let test_events = [b"hash_index_test_1".as_slice(), b"hash_index_test_2".as_slice(), b"hash_index_test_3".as_slice()];
+
+        let mut event_hashes = Vec::new();
+
+        for (i, event_data) in test_events.iter().enumerate() {
+            state
+                .process_event(event_data, 100 + i as u8, emit_secs() + i as u64, [i as u8; 32], [(i + 20) as u8; 32])
+                .expect("Should process event");
+
+            let event_hash = blake_hash_slice(event_data);
+            event_hashes.push(event_hash);
         }
 
-        assert!(confirmation_found, "Should receive data confirmation from AOF output buffer within timeout");
-    }
+        // Test hash index lookup
+        let retrieved_events = state.get_events_for_leaf_hashes(&event_hashes).expect("Hash lookup should work");
 
-    #[test]
-    fn test_xaero_internal_event_detection() {
-        // Test that we can distinguish XaeroInternalEvent from regular PooledEvent
-        use bytemuck::Zeroable;
-        use rusted_ring_new::PooledEvent;
+        assert_eq!(retrieved_events.len(), test_events.len(), "Should retrieve all events");
 
-        // Create XaeroInternalEvent<256>
-        let mut pooled_event = PooledEvent::<256>::zeroed();
-        let test_data = b"internal event test";
-        let copy_len = std::cmp::min(test_data.len(), 256);
-        pooled_event.data[..copy_len].copy_from_slice(&test_data[..copy_len]);
-        pooled_event.len = test_data.len() as u32;
-        pooled_event.event_type = 42;
+        for (original, retrieved) in test_events.iter().zip(retrieved_events.iter()) {
+            assert_eq!(*original, retrieved.as_slice(), "Event data should match");
+        }
 
-        let internal_event = XaeroInternalEvent::<256> {
-            xaero_id_hash: [1u8; 32],
-            vector_clock_hash: [2u8; 32],
-            evt: pooled_event,
-            latest_ts: emit_secs(),
-        };
-
-        // Convert to bytes and back as PooledEvent
-        let internal_bytes = bytemuck::bytes_of(&internal_event);
-
-        // Check size detection logic
-        let size_matches = internal_bytes.len() == std::mem::size_of::<XaeroInternalEvent<256>>();
-        assert!(size_matches, "Size should match XaeroInternalEvent<256>");
-
-        // Create regular PooledEvent for comparison
-        let regular_event = EventUtils::create_pooled_event::<256>(test_data, 42).unwrap();
-        let regular_size = std::mem::size_of::<PooledEvent<256>>();
-        let internal_size = std::mem::size_of::<XaeroInternalEvent<256>>();
-
-        assert_ne!(regular_size, internal_size, "Sizes should be different");
-        println!("✅ XaeroInternalEvent detection logic working: regular={}, internal={}", regular_size, internal_size);
-    }
-
-    #[test]
-    fn test_event_processing_with_enhanced_data() {
-        xaeroflux_core::initialize();
-
-        let subject_hash = SubjectHash([3u8; 32]);
-        let mut state = AofState::new(subject_hash, BusKind::Data).expect("Failed to create AOF state");
-
-        // Test processing enhanced event with peer/vector clock info
-        let test_data = b"enhanced event with metadata";
-        let confirmation = state
-            .process_event(
-                test_data,
-                42,
-                emit_secs(),
-                [5u8; 32], // peer ID
-                [6u8; 32], // vector clock
-            )
-            .expect("Should process enhanced event");
-
-        assert_eq!(confirmation.status, 0, "Should succeed");
-        assert_eq!(confirmation.event_type, 42, "Should preserve event type");
-        assert_eq!(confirmation.original_hash, sha_256_slice(test_data), "Should hash correctly");
-
-        println!("✅ Enhanced event processing working");
+        println!("✅ Hash index lookup performance test passed");
     }
 }

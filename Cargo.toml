@@ -3,5 +3,5 @@ resolver = "3"
 members = ["xaeroflux", "xaeroflux-actors", "xaeroflux-core", "xaeroflux-crdts", "xaeroflux-ffi", "xaeroflux-macros"]
 [workspace.dependencies]
 xaeroid = {version = "0.3.2-rc3"}
-rusted-ring-new = {package = "rusted-ring" , version = "0.5.4"}
+rusted-ring-new = {package = "rusted-ring" , version = "0.5.5"}
 rusted-ring = {version = "0.4.0"}
