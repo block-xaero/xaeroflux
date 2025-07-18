@@ -38,13 +38,9 @@ libc = "0.2.172"
 
 [dependencies]
 hnsw_rs = "0.3.2"
-paste = "1.0.15"
-rusted-ring-new = {package = "rusted-ring", workspace = true}
-rusted-ring = { workspace = true }
+rusted-ring = {workspace = true}
 xaeroid = { workspace = true }
 xaeroflux-core = { path = "../xaeroflux-core" }
-xaeroflux-macros = { path = "../xaeroflux-macros" }
-xaeroflux-crdts = { version = "0.8.1-m5" }
 ed25519-dalek = { version = "2.1.1", features = ["rand_core"] }
 rand = "0.8"
 iroh = {version = "0.90.0", "default-features" = true, features = ["discovery-local-network", "discovery-pkarr-dht"] }

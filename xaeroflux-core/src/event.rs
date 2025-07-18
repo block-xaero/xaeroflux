@@ -6,22 +6,11 @@
 //! - Serialization support via `rkyv` for zero-copy archiving.
 //! - `EVENT_HEADER` magic and `META_BASE` offset for metadata event encoding.
 
-use std::{
-    cmp::Ordering,
-    fmt::{Debug, Formatter},
-    sync::{
-        Arc,
-        atomic::{AtomicU64, AtomicUsize},
-    },
-    time::Duration,
-};
+use std::fmt::Debug;
 
 use bytemuck::{Pod, Zeroable};
 use rkyv::{Archive, Deserialize, Serialize};
-use rusted_ring::AllocationError;
-use rusted_ring_new::{PooledEvent, RingBuffer};
 
-use crate::pool::XaeroEventSized;
 pub use crate::{pool::XaeroEvent, vector_clock::VectorClock};
 
 /// Magic bytes prefix for event headers in paged segments.

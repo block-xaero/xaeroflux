@@ -1,12 +1,6 @@
-use std::sync::{Arc, OnceLock};
-
 use bytemuck::{Pod, Zeroable};
-use rusted_ring::{
-    EventAllocator, EventSize, PooledEvent, RingPtr, pooled_event_ptr::PooledEventPtr,
-};
+use rusted_ring::PooledEvent;
 use xaeroid::{XaeroID, XaeroProof};
-
-use crate::event::VectorClock;
 
 // Platform-specific configuration
 #[cfg(any(target_os = "ios", target_os = "android"))]
@@ -23,9 +17,6 @@ mod desktop_config {
     pub const VECTOR_CLOCK_CAPACITY: usize = 100; // ~2.4MB vector clocks (100 * 24KB)
 }
 
-// Use platform-specific constants
-#[cfg(all(not(target_os = "ios"), not(target_os = "android")))]
-use desktop_config::*;
 #[cfg(any(target_os = "ios", target_os = "android"))]
 use mobile_config::*;
 
@@ -54,7 +45,7 @@ unsafe impl<const SIZE: usize> Pod for XaeroEventSized<SIZE> {}
 pub struct XaeroInternalEvent<const TSHIRT_SIZE: usize> {
     pub xaero_id_hash: [u8; 32],
     pub vector_clock_hash: [u8; 32],
-    pub evt: rusted_ring_new::PooledEvent<TSHIRT_SIZE>,
+    pub evt: rusted_ring::PooledEvent<TSHIRT_SIZE>,
     pub latest_ts: u64,
 }
 
@@ -63,7 +54,7 @@ unsafe impl<const TSHIRT_SIZE: usize> Zeroable for XaeroInternalEvent<TSHIRT_SIZ
 
 #[derive(Clone, Copy)]
 pub struct XaeroPeerEvent<const TSHIRT_SIZE: usize> {
-    pub evt: rusted_ring_new::PooledEvent<TSHIRT_SIZE>,
+    pub evt: rusted_ring::PooledEvent<TSHIRT_SIZE>,
     pub author_id: Option<XaeroID>,
     pub merkle_proof: Option<XaeroProof>,
     pub vector_clock: XaeroVectorClock,

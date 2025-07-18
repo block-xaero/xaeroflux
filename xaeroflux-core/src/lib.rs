@@ -16,7 +16,6 @@ pub mod merkle_tree;
 pub mod network;
 pub mod pipe;
 pub mod pool;
-pub mod ring_buffer_actor;
 pub mod size;
 pub mod sys;
 pub mod system_paths;
@@ -42,14 +41,11 @@ use rkyv::{
     util::AlignedVec,
     validation::{Validator, archive::ArchiveValidator, shared::SharedValidator},
 };
-use rusted_ring::allocator::EventAllocator;
 use threadpool::ThreadPool;
 use tracing::info;
 
 use crate as xaeroflux_core;
 pub use crate::{config::Config, logs::init_logging};
-
-pub static EVENT_ALLOCATOR: OnceLock<EventAllocator> = OnceLock::new();
 
 pub static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 

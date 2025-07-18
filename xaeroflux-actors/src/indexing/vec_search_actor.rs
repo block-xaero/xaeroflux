@@ -2,17 +2,17 @@ use std::{
     collections::HashMap,
     pin::Pin,
     sync::{
-        atomic::{fence, AtomicUsize, Ordering}, Arc, Mutex,
-        OnceLock,
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicUsize, Ordering, fence},
     },
     thread::{self, JoinHandle},
     time::Duration,
 };
 
-use bytemuck::{bytes_of, Pod, Zeroable};
+use bytemuck::{Pod, Zeroable, bytes_of};
 use hnsw_rs::prelude::*;
-use rusted_ring_new::{
-    EventUtils, PooledEvent, Reader, RingBuffer, L_CAPACITY, L_TSHIRT_SIZE, M_CAPACITY, M_TSHIRT_SIZE, S_CAPACITY, S_TSHIRT_SIZE, XL_CAPACITY, XL_TSHIRT_SIZE, XS_CAPACITY,
+use rusted_ring::{
+    EventUtils, L_CAPACITY, L_TSHIRT_SIZE, M_CAPACITY, M_TSHIRT_SIZE, PooledEvent, Reader, RingBuffer, S_CAPACITY, S_TSHIRT_SIZE, XL_CAPACITY, XL_TSHIRT_SIZE, XS_CAPACITY,
     XS_TSHIRT_SIZE,
 };
 use xaeroflux_core::{
@@ -21,6 +21,8 @@ use xaeroflux_core::{
     pool::XaeroInternalEvent,
 };
 
+// Import global ring buffers from subject.rs
+use crate::{L_RING, M_RING, S_RING, XL_RING, XS_RING};
 use crate::{
     aof::storage::{
         format::{EventKey, SegmentMeta},
@@ -28,8 +30,6 @@ use crate::{
     },
     indexing::lmdb::LmdbVectorSearchDb,
 };
-// Import global ring buffers from subject.rs
-use crate::{L_RING, M_RING, S_RING, XL_RING, XS_RING};
 // ================================================================================================
 // VECTOR EXTRACTION & REGISTRY
 // ================================================================================================

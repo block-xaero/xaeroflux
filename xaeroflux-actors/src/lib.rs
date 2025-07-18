@@ -8,8 +8,8 @@ use std::{
     thread::JoinHandle,
 };
 
-use rusted_ring_new::{
-    PooledEvent, RingBuffer, Writer, L_CAPACITY, L_TSHIRT_SIZE, M_CAPACITY, M_TSHIRT_SIZE, S_CAPACITY, S_TSHIRT_SIZE, XL_CAPACITY, XL_TSHIRT_SIZE, XS_CAPACITY, XS_TSHIRT_SIZE,
+use rusted_ring::{
+    L_CAPACITY, L_TSHIRT_SIZE, M_CAPACITY, M_TSHIRT_SIZE, PooledEvent, RingBuffer, S_CAPACITY, S_TSHIRT_SIZE, Writer, XL_CAPACITY, XL_TSHIRT_SIZE, XS_CAPACITY, XS_TSHIRT_SIZE,
 };
 
 use crate::aof::ring_buffer_actor::AofActor;

@@ -7,11 +7,11 @@ use std::{
 };
 
 use liblmdb::{
-    mdb_cursor_close, mdb_cursor_get, mdb_cursor_open, mdb_dbi_close, mdb_dbi_open, mdb_env_create, mdb_env_open, mdb_env_set_mapsize, mdb_env_set_maxdbs, mdb_put, mdb_strerror, mdb_txn_abort, mdb_txn_begin,
-    mdb_txn_commit, MDB_cursor_op_MDB_NEXT, MDB_dbi, MDB_env, MDB_txn, MDB_val, MDB_CREATE, MDB_NOTFOUND, MDB_RDONLY, MDB_RESERVE, MDB_SUCCESS,
+    MDB_CREATE, MDB_NOTFOUND, MDB_RDONLY, MDB_RESERVE, MDB_SUCCESS, MDB_cursor_op_MDB_NEXT, MDB_dbi, MDB_env, MDB_txn, MDB_val, mdb_cursor_close, mdb_cursor_get, mdb_cursor_open,
+    mdb_dbi_close, mdb_dbi_open, mdb_env_create, mdb_env_open, mdb_env_set_mapsize, mdb_env_set_maxdbs, mdb_put, mdb_strerror, mdb_txn_abort, mdb_txn_begin, mdb_txn_commit,
 };
 use rkyv::{rancor::Failure, util::AlignedVec};
-use rusted_ring_new::{EventPoolFactory, EventUtils};
+use rusted_ring::{EventPoolFactory, EventUtils};
 use xaeroflux_core::{
     date_time::emit_secs,
     event::{EventType, XaeroEvent},
@@ -25,7 +25,7 @@ use super::format::{EventKey, MMRMeta};
 pub enum DBI {
     Aof = 0,
     Meta = 1,
-    HashIndex = 2,  // NEW: Hash index database
+    HashIndex = 2, // NEW: Hash index database
 }
 
 /// A wrapper around an LMDB environment with three databases: AOF, META, and HASH_INDEX.
@@ -35,7 +35,7 @@ pub enum DBI {
 /// - HASH_INDEX_DB stores hash → EventKey mappings for O(1) leaf hash lookups.
 pub struct LmdbEnv {
     pub env: *mut MDB_env,
-    pub dbis: [MDB_dbi; 3],  // CHANGED: Now 3 databases
+    pub dbis: [MDB_dbi; 3], // CHANGED: Now 3 databases
 }
 
 unsafe impl Sync for LmdbEnv {}
@@ -59,7 +59,7 @@ impl LmdbEnv {
             }
 
             tracing::info!("Configuring LMDB environment");
-            tracing::info!("Setting max DBs to 3");  // CHANGED: Now 3 DBs
+            tracing::info!("Setting max DBs to 3"); // CHANGED: Now 3 DBs
             let sc_set_max_dbs = mdb_env_set_maxdbs(env, 3);
             if sc_set_max_dbs != 0 {
                 return Err(Box::new(std::io::Error::from_raw_os_error(sc_set_max_dbs)));
@@ -80,9 +80,12 @@ impl LmdbEnv {
 
         let aof_dbi = unsafe { open_named_db(env, c"/aof".as_ptr())? };
         let meta_dbi = unsafe { open_named_db(env, c"/meta".as_ptr())? };
-        let hash_index_dbi = unsafe { open_named_db(env, c"/hash_index".as_ptr())? };  // NEW
+        let hash_index_dbi = unsafe { open_named_db(env, c"/hash_index".as_ptr())? }; // NEW
 
-        Ok(Self { env, dbis: [aof_dbi, meta_dbi, hash_index_dbi] })  // CHANGED
+        Ok(Self {
+            env,
+            dbis: [aof_dbi, meta_dbi, hash_index_dbi],
+        }) // CHANGED
     }
 }
 
@@ -252,7 +255,10 @@ pub fn get_event_key_by_hash(arc_env: &Arc<Mutex<LmdbEnv>>, event_hash: [u8; 32]
 }
 
 /// Get event data directly by hash (O(1) lookup) - uses hash index then fetches event
-pub fn get_event_by_hash<const TSHIRT_SIZE: usize>(arc_env: &Arc<Mutex<LmdbEnv>>, event_hash: [u8; 32]) -> Result<Option<XaeroInternalEvent<TSHIRT_SIZE>>, Box<dyn std::error::Error>> {
+pub fn get_event_by_hash<const TSHIRT_SIZE: usize>(
+    arc_env: &Arc<Mutex<LmdbEnv>>,
+    event_hash: [u8; 32],
+) -> Result<Option<XaeroInternalEvent<TSHIRT_SIZE>>, Box<dyn std::error::Error>> {
     // 1. Look up EventKey by hash
     let event_key = match get_event_key_by_hash(arc_env, event_hash)? {
         Some(key) => key,
@@ -406,7 +412,7 @@ pub fn push_internal_event_universal(arc_env: &Arc<Mutex<LmdbEnv>>, event_data: 
     let estimated_size = EventPoolFactory::estimate_size(event_data.len());
 
     match estimated_size {
-        rusted_ring_new::EventSize::XS => {
+        rusted_ring::EventSize::XS => {
             let pooled_event = EventUtils::create_pooled_event::<64>(event_data, event_type)?;
             let internal_event = XaeroInternalEvent::<64> {
                 xaero_id_hash: [0u8; 32],     // Empty for universal events
@@ -416,7 +422,7 @@ pub fn push_internal_event_universal(arc_env: &Arc<Mutex<LmdbEnv>>, event_data: 
             };
             push_xaero_internal_event(arc_env, &internal_event)
         }
-        rusted_ring_new::EventSize::S => {
+        rusted_ring::EventSize::S => {
             let pooled_event = EventUtils::create_pooled_event::<256>(event_data, event_type)?;
             let internal_event = XaeroInternalEvent::<256> {
                 xaero_id_hash: [0u8; 32],
@@ -426,7 +432,7 @@ pub fn push_internal_event_universal(arc_env: &Arc<Mutex<LmdbEnv>>, event_data: 
             };
             push_xaero_internal_event(arc_env, &internal_event)
         }
-        rusted_ring_new::EventSize::M => {
+        rusted_ring::EventSize::M => {
             let pooled_event = EventUtils::create_pooled_event::<1024>(event_data, event_type)?;
             let internal_event = XaeroInternalEvent::<1024> {
                 xaero_id_hash: [0u8; 32],
@@ -436,7 +442,7 @@ pub fn push_internal_event_universal(arc_env: &Arc<Mutex<LmdbEnv>>, event_data: 
             };
             push_xaero_internal_event(arc_env, &internal_event)
         }
-        rusted_ring_new::EventSize::L => {
+        rusted_ring::EventSize::L => {
             let pooled_event = EventUtils::create_pooled_event::<4096>(event_data, event_type)?;
             let internal_event = XaeroInternalEvent::<4096> {
                 xaero_id_hash: [0u8; 32],
@@ -446,7 +452,7 @@ pub fn push_internal_event_universal(arc_env: &Arc<Mutex<LmdbEnv>>, event_data: 
             };
             push_xaero_internal_event(arc_env, &internal_event)
         }
-        rusted_ring_new::EventSize::XL => {
+        rusted_ring::EventSize::XL => {
             let pooled_event = EventUtils::create_pooled_event::<16384>(event_data, event_type)?;
             let internal_event = XaeroInternalEvent::<16384> {
                 xaero_id_hash: [0u8; 32],
@@ -456,7 +462,7 @@ pub fn push_internal_event_universal(arc_env: &Arc<Mutex<LmdbEnv>>, event_data: 
             };
             push_xaero_internal_event(arc_env, &internal_event)
         }
-        rusted_ring_new::EventSize::XXL => {
+        rusted_ring::EventSize::XXL => {
             return Err(Box::new(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 format!("Event data too large: {} bytes exceeds maximum size", event_data.len()),
@@ -675,7 +681,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use tempfile::tempdir;
-    use xaeroflux_core::{date_time::emit_secs, initialize, hash::blake_hash_slice};
+    use xaeroflux_core::{date_time::emit_secs, hash::blake_hash_slice, initialize};
 
     use super::*;
 
@@ -751,9 +757,9 @@ mod tests {
         let env = LmdbEnv::new(dir.path().to_str().expect("failed to unravel")).expect("failed to unravel");
 
         assert!(!env.env.is_null());
-        assert!(env.dbis[0] > 0);  // AOF
-        assert!(env.dbis[1] > 0);  // META
-        assert!(env.dbis[2] > 0);  // HASH_INDEX
+        assert!(env.dbis[0] > 0); // AOF
+        assert!(env.dbis[1] > 0); // META
+        assert!(env.dbis[2] > 0); // HASH_INDEX
     }
 
     #[test]

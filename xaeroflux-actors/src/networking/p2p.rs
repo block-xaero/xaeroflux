@@ -5,24 +5,24 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use bytemuck::{Pod, Zeroable};
 use iroh::{
-    endpoint::{Connection, Endpoint}, NodeAddr,
-    NodeId,
+    NodeAddr, NodeId,
+    endpoint::{Connection, Endpoint},
 };
 use iroh_gossip::{net::Gossip, proto::TopicId};
-use rkyv::{rancor::Failure, Archive, Deserialize, Serialize};
-use rusted_ring_new::{
-    PooledEvent, Reader, Writer, L_CAPACITY, L_TSHIRT_SIZE, M_CAPACITY, M_TSHIRT_SIZE, S_CAPACITY, S_TSHIRT_SIZE, XL_CAPACITY, XL_TSHIRT_SIZE, XS_CAPACITY, XS_TSHIRT_SIZE,
+use rkyv::{Archive, Deserialize, Serialize, rancor::Failure};
+use rusted_ring::{
+    L_CAPACITY, L_TSHIRT_SIZE, M_CAPACITY, M_TSHIRT_SIZE, PooledEvent, Reader, S_CAPACITY, S_TSHIRT_SIZE, Writer, XL_CAPACITY, XL_TSHIRT_SIZE, XS_CAPACITY, XS_TSHIRT_SIZE,
 };
 use tokio::sync::mpsc;
 use xaeroid::{IdentityManager, XaeroID, XaeroProof};
 
 use crate::{
-    aof::{ring_buffer_actor::AofState, storage::lmdb::get_event_by_hash}, indexing::mmr::{Peak, XaeroMmr}, L_RING, M_RING, P2P_L_RING, P2P_M_RING, P2P_S_RING, P2P_XL_RING, P2P_XS_RING, S_RING,
-    XL_RING,
-    XS_RING,
+    L_RING, M_RING, P2P_L_RING, P2P_M_RING, P2P_S_RING, P2P_XL_RING, P2P_XS_RING, S_RING, XL_RING, XS_RING,
+    aof::{ring_buffer_actor::AofState, storage::lmdb::get_event_by_hash},
+    indexing::mmr::{Peak, XaeroMmr},
 };
 
 // ================================================================================================
@@ -123,18 +123,18 @@ impl P2PActorState {
         let iroh_endpoint = Endpoint::builder().alpns(vec![b"xaeroflux".to_vec()]).bind().await?;
 
         // Get writers to P2P ring buffers
-        let p2p_xs_ring = P2P_XS_RING.get_or_init(|| rusted_ring_new::RingBuffer::new());
-        let p2p_s_ring = P2P_S_RING.get_or_init(|| rusted_ring_new::RingBuffer::new());
-        let p2p_m_ring = P2P_M_RING.get_or_init(|| rusted_ring_new::RingBuffer::new());
-        let p2p_l_ring = P2P_L_RING.get_or_init(|| rusted_ring_new::RingBuffer::new());
-        let p2p_xl_ring = P2P_XL_RING.get_or_init(|| rusted_ring_new::RingBuffer::new());
+        let p2p_xs_ring = P2P_XS_RING.get_or_init(|| rusted_ring::RingBuffer::new());
+        let p2p_s_ring = P2P_S_RING.get_or_init(|| rusted_ring::RingBuffer::new());
+        let p2p_m_ring = P2P_M_RING.get_or_init(|| rusted_ring::RingBuffer::new());
+        let p2p_l_ring = P2P_L_RING.get_or_init(|| rusted_ring::RingBuffer::new());
+        let p2p_xl_ring = P2P_XL_RING.get_or_init(|| rusted_ring::RingBuffer::new());
 
         // Get readers from main ring buffers
-        let main_xs_ring = XS_RING.get_or_init(|| rusted_ring_new::RingBuffer::new());
-        let main_s_ring = S_RING.get_or_init(|| rusted_ring_new::RingBuffer::new());
-        let main_m_ring = M_RING.get_or_init(|| rusted_ring_new::RingBuffer::new());
-        let main_l_ring = L_RING.get_or_init(|| rusted_ring_new::RingBuffer::new());
-        let main_xl_ring = XL_RING.get_or_init(|| rusted_ring_new::RingBuffer::new());
+        let main_xs_ring = XS_RING.get_or_init(|| rusted_ring::RingBuffer::new());
+        let main_s_ring = S_RING.get_or_init(|| rusted_ring::RingBuffer::new());
+        let main_m_ring = M_RING.get_or_init(|| rusted_ring::RingBuffer::new());
+        let main_l_ring = L_RING.get_or_init(|| rusted_ring::RingBuffer::new());
+        let main_xl_ring = XL_RING.get_or_init(|| rusted_ring::RingBuffer::new());
 
         Ok(Self {
             topic,
