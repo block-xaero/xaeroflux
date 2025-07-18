@@ -145,9 +145,6 @@ pub fn subject(input: TokenStream) -> TokenStream {
             use crate::subject::Subject;
             use xaeroflux_core::event::{EventType, SystemEventKind};
             use xaeroflux_core::date_time::emit_secs;
-            use xaeroflux_core::pool::XaeroPoolManager;
-            // Initialize ring buffer pools if not already initialized
-            XaeroPoolManager::init();
 
             // 1) Construct the Subject itself, calling new_with_workspace(...)
             let subject = Subject::new_with_workspace(
@@ -192,8 +189,6 @@ pub fn subject(input: TokenStream) -> TokenStream {
             // Send ObjectCreated event
             subject.control.sink.tx.send(oc_evt)
                 .expect("failed to bootstrap: ObjectCreated");
-
-            // 4) Return the newly‐constructed Arc<Subject>
             subject
         }
     };

@@ -52,23 +52,23 @@ use crate::{
 // ================================================================================================
 
 // Segment Control Event Flow: XS input -> XS output (confirmations)
-static SEGMENT_CONTROL_INPUT_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
-static SEGMENT_CONTROL_OUTPUT_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
+pub static SEGMENT_CONTROL_INPUT_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
+pub static SEGMENT_CONTROL_OUTPUT_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
 
 // Segment Data Event Flow: S input -> XS output (confirmations are small)
-static SEGMENT_DATA_INPUT_RING: OnceLock<RingBuffer<256, 1000>> = OnceLock::new();
-static SEGMENT_DATA_OUTPUT_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
+pub static SEGMENT_DATA_INPUT_RING: OnceLock<RingBuffer<256, 1000>> = OnceLock::new();
+pub static SEGMENT_DATA_OUTPUT_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
 
 // Medium Event Flow: M input -> XS output
-static SEGMENT_MEDIUM_INPUT_RING: OnceLock<RingBuffer<1024, 500>> = OnceLock::new();
-static SEGMENT_MEDIUM_OUTPUT_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
+pub static SEGMENT_MEDIUM_INPUT_RING: OnceLock<RingBuffer<1024, 500>> = OnceLock::new();
+pub static SEGMENT_MEDIUM_OUTPUT_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
 
 // Large Event Flow: L input -> XS output
-static SEGMENT_LARGE_INPUT_RING: OnceLock<RingBuffer<4096, 100>> = OnceLock::new();
+pub(crate) static SEGMENT_LARGE_INPUT_RING: OnceLock<RingBuffer<4096, 100>> = OnceLock::new();
 static SEGMENT_LARGE_OUTPUT_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
 
 // Extra Large Event Flow: XL input -> XS output
-static SEGMENT_XL_INPUT_RING: OnceLock<RingBuffer<16384, 50>> = OnceLock::new();
+pub(crate) static SEGMENT_XL_INPUT_RING: OnceLock<RingBuffer<16384, 50>> = OnceLock::new();
 static SEGMENT_XL_OUTPUT_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
 
 // ================================================================================================

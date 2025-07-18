@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use rusted_ring_new::{Reader, RingBuffer, RingPipe, Writer};
+pub(crate) use rusted_ring_new::{Reader, RingBuffer, RingPipe, Writer};
 
 pub struct RingBufferActor<const TSHIRT_SIZE: usize, const RING_CAPACITY: usize> {
     pub jh: std::thread::JoinHandle<()>,

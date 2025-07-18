@@ -3,7 +3,6 @@ use xaeroid::{XaeroCredential, XaeroProof};
 pub mod discovery;
 pub mod iroh;
 mod p2p;
-mod pool;
 mod state;
 
 pub fn xaero_id_zero() -> XaeroID {

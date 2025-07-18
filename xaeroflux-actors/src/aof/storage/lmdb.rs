@@ -13,7 +13,6 @@ use liblmdb::{
 use rkyv::{rancor::Failure, util::AlignedVec};
 use rusted_ring_new::{EventPoolFactory, EventUtils};
 use xaeroflux_core::{
-    XaeroPoolManager,
     date_time::emit_secs,
     event::{EventType, XaeroEvent},
     hash::{blake_hash_slice, sha_256, sha_256_slice},
@@ -21,7 +20,7 @@ use xaeroflux_core::{
 };
 
 use super::format::{EventKey, SegmentMeta};
-use crate::{BusKind, indexing::storage::format::archive_xaero_event};
+use crate::BusKind;
 
 #[repr(usize)]
 pub enum DBI {
@@ -163,234 +162,6 @@ impl Drop for LmdbEnv {
             liblmdb::mdb_env_close(self.env);
         }
     }
-}
-
-#[deprecated(note = "Use scan_enhanced_range instead - supports enhanced EventKey format with peer and vector clock hashes")]
-#[allow(clippy::missing_safety_doc)]
-/// Scans archived XaeroEvents in the AOF database for a given timestamp range.
-///
-/// Returns a `Vec<Arc<XaeroEvent>>` where each element is a reconstructed XaeroEvent
-/// for events whose keys have timestamps in `[start_ms, end_ms)`.
-pub unsafe fn scan_xaero_range(env: &Arc<Mutex<LmdbEnv>>, start_ms: u64, end_ms: u64) -> anyhow::Result<Vec<Arc<XaeroEvent>>> {
-    let mut results = Vec::<Arc<XaeroEvent>>::new();
-    let g = env.lock().expect("failed to lock env");
-    let env = g.env;
-
-    unsafe {
-        // 1) Begin a read txn
-        let mut rtxn: *mut MDB_txn = std::ptr::null_mut();
-        let sc_tx_begin = mdb_txn_begin(env, std::ptr::null_mut(), MDB_RDONLY, &mut rtxn);
-        if sc_tx_begin != 0 {
-            return Err(anyhow::anyhow!("Failed to begin read txn: {}", sc_tx_begin));
-        }
-
-        // 2) Open a cursor on that DB
-        let mut cursor = std::ptr::null_mut();
-        let sc_cursor_open = mdb_cursor_open(rtxn, g.dbis[0], &mut cursor);
-        if sc_cursor_open != 0 {
-            mdb_txn_abort(rtxn);
-            return Err(anyhow::anyhow!("Failed to open cursor: {}", sc_cursor_open));
-        }
-
-        // 3) Build a start key - need to handle both old and new key formats
-        // Try to position cursor at first key and iterate through all
-        let mut key_val = MDB_val {
-            mv_size: 0,
-            mv_data: std::ptr::null_mut(),
-        };
-        let mut data_val = MDB_val {
-            mv_size: 0,
-            mv_data: std::ptr::null_mut(),
-        };
-
-        // 4) Position to first key
-        let rc = mdb_cursor_get(cursor, &mut key_val, &mut data_val, liblmdb::MDB_cursor_op_MDB_FIRST);
-        if rc != 0 {
-            mdb_cursor_close(cursor);
-            mdb_txn_abort(rtxn);
-            return Ok(results);
-        }
-
-        loop {
-            // 5) Extract the timestamp from the key (handle both formats)
-            let raw_key = std::slice::from_raw_parts(key_val.mv_data as *const u8, key_val.mv_size);
-
-            let ts = if raw_key.len() == 16 {
-                // Old format: timestamp at beginning
-                u64::from_be_bytes(raw_key[0..8].try_into().expect("failed to unravel"))
-            } else if raw_key.len() >= std::mem::size_of::<EventKey>() {
-                // New format: timestamp at offset 64 - FIXED: only convert once
-                let ts_bytes: [u8; 8] = raw_key[64..72].try_into().map_err(|_| anyhow::anyhow!("Failed to extract timestamp from enhanced key"))?;
-                u64::from_be_bytes(ts_bytes) // FIXED: removed double conversion
-            } else {
-                // Unknown format, skip
-                tracing::warn!("Unknown key format with length: {}", raw_key.len());
-                let rc = mdb_cursor_get(cursor, &mut key_val, &mut data_val, MDB_cursor_op_MDB_NEXT);
-                if rc != 0 {
-                    break;
-                }
-                continue;
-            };
-
-            if ts < start_ms {
-                // Skip events before our range
-                let rc = mdb_cursor_get(cursor, &mut key_val, &mut data_val, MDB_cursor_op_MDB_NEXT);
-                if rc != 0 {
-                    break;
-                }
-                continue;
-            }
-
-            if ts >= end_ms {
-                break;
-            }
-
-            // 6) Reconstruct XaeroEvent from archived data
-            let data_slice = std::slice::from_raw_parts(data_val.mv_data as *const u8, data_val.mv_size);
-
-            match crate::indexing::storage::format::unarchive_to_xaero_event(data_slice) {
-                Ok(xaero_event) => {
-                    results.push(xaero_event);
-                    tracing::debug!("Reconstructed XaeroEvent from AOF storage");
-                }
-                Err(pool_error) => {
-                    tracing::error!("Pool allocation failed during AOF scan: {:?}", pool_error);
-                    // Continue instead of panicking - this might be XaeroInternalEvent data
-                    tracing::debug!("Skipping event that couldn't be reconstructed as XaeroEvent");
-                }
-            }
-
-            // 7) Advance the cursor
-            let rc = mdb_cursor_get(cursor, &mut key_val, &mut data_val, MDB_cursor_op_MDB_NEXT);
-            if rc != 0 {
-                break;
-            }
-        }
-
-        // 8) Cleanup
-        mdb_cursor_close(cursor);
-        mdb_txn_abort(rtxn);
-        Ok(results)
-    }
-}
-
-/// Persists a XaeroEvent into the LMDB AOF or META database.
-///
-/// Behavior varies by event type:
-/// - `MetaEvent(1)`: stores segment metadata under composite and static keys.
-/// - `MetaEvent(2)`: stores MMR metadata under a static key.
-/// - Application events: stored in the AOF database with a composite key.
-pub fn push_xaero_event(arc_env: &Arc<Mutex<LmdbEnv>>, xaero_event: &Arc<XaeroEvent>) -> Result<(), Box<dyn std::error::Error>> {
-    unsafe {
-        let env = arc_env.lock().expect("failed to lock env");
-        let mut txn = ptr::null_mut();
-        let sc_tx_begin = mdb_txn_begin(env.env, ptr::null_mut(), 0, &mut txn);
-        if sc_tx_begin != 0 {
-            return Err(Box::new(std::io::Error::from_raw_os_error(sc_tx_begin)));
-        }
-
-        let event_type = EventType::from_u8(xaero_event.event_type());
-
-        // Handle segment_meta events specially
-        if let EventType::MetaEvent(1) = event_type {
-            let event_data = xaero_event.data();
-            let sm: &SegmentMeta = bytemuck::from_bytes(event_data);
-
-            // 1) Composite entry: raw SegmentMeta bytes under composite key
-            let mut key_buf = [0u8; 16];
-            key_buf[..8].copy_from_slice(&sm.ts_start.to_be_bytes());
-            key_buf[8..16].copy_from_slice(&(sm.segment_index as u64).to_be_bytes());
-            let mut key_val = MDB_val {
-                mv_size: key_buf.len(),
-                mv_data: key_buf.as_ptr() as *mut libc::c_void,
-            };
-
-            let mut data_val = MDB_val {
-                mv_size: event_data.len(),
-                mv_data: std::ptr::null_mut(),
-            };
-            let sc = mdb_put(txn, env.dbis[DBI::Meta as usize], &mut key_val, &mut data_val, MDB_RESERVE);
-            if sc != 0 {
-                return Err(Box::new(std::io::Error::from_raw_os_error(sc)));
-            }
-            std::ptr::copy_nonoverlapping(event_data.as_ptr(), data_val.mv_data.cast(), event_data.len());
-
-            // 2) Static entry: raw SegmentMeta bytes under "segment_meta"
-            let static_key = b"segment_meta";
-            let mut static_key_val = MDB_val {
-                mv_size: static_key.len(),
-                mv_data: static_key.as_ptr() as *mut libc::c_void,
-            };
-            let mut static_val = MDB_val {
-                mv_size: event_data.len(),
-                mv_data: std::ptr::null_mut(),
-            };
-            let sc2 = mdb_put(txn, env.dbis[DBI::Meta as usize], &mut static_key_val, &mut static_val, MDB_RESERVE);
-            if sc2 != 0 {
-                return Err(Box::new(std::io::Error::from_raw_os_error(sc2)));
-            }
-            std::ptr::copy_nonoverlapping(event_data.as_ptr(), static_val.mv_data.cast(), event_data.len());
-        } else if let EventType::MetaEvent(2) = event_type {
-            // Static entry: raw MMRMeta bytes under "mmr_meta"
-            let static_key = b"mmr_meta";
-            let mut key_val = MDB_val {
-                mv_size: static_key.len(),
-                mv_data: static_key.as_ptr() as *mut libc::c_void,
-            };
-
-            let event_data = xaero_event.data();
-            let mut data_val = MDB_val {
-                mv_size: event_data.len(),
-                mv_data: std::ptr::null_mut(),
-            };
-            let sc = mdb_put(txn, env.dbis[DBI::Meta as usize], &mut key_val, &mut data_val, MDB_RESERVE);
-            if sc != 0 {
-                return Err(Box::new(std::io::Error::from_raw_os_error(sc)));
-            }
-            std::ptr::copy_nonoverlapping(event_data.as_ptr(), data_val.mv_data.cast(), event_data.len());
-        } else {
-            // Application event: store using new archive format
-            let key = generate_xaero_key(xaero_event)?;
-            let key_bytes: &[u8] = bytemuck::bytes_of(&key);
-            let mut key_val = MDB_val {
-                mv_size: key_bytes.len(),
-                mv_data: key_bytes.as_ptr() as *mut libc::c_void,
-            };
-
-            let archived_data = archive_xaero_event(xaero_event);
-            let mut data_val = MDB_val {
-                mv_size: archived_data.len(),
-                mv_data: std::ptr::null_mut(),
-            };
-            let sc = mdb_put(txn, env.dbis[DBI::Aof as usize], &mut key_val, &mut data_val, MDB_RESERVE);
-            if sc != 0 {
-                return Err(Box::new(std::io::Error::from_raw_os_error(sc)));
-            }
-            std::ptr::copy_nonoverlapping(archived_data.as_ptr(), data_val.mv_data.cast(), archived_data.len());
-        }
-
-        tracing::info!("Pushed XaeroEvent to LMDB: type={}", xaero_event.event_type());
-        let sc_tx_commit = mdb_txn_commit(txn);
-        if sc_tx_commit != 0 {
-            return Err(Box::new(std::io::Error::from_raw_os_error(sc_tx_commit)));
-        }
-    }
-    Ok(())
-}
-
-#[deprecated]
-/// Generates an `EventKey` from a XaeroEvent consisting of timestamp, type, and data hash.
-pub fn generate_xaero_key(xaero_event: &Arc<XaeroEvent>) -> Result<EventKey, Failure> {
-    let event_data = xaero_event.data();
-    let timestamp = xaero_event.latest_ts;
-
-    Ok(EventKey {
-        xaero_id_hash: [0u8; 32],
-        vector_clock_hash: [0u8; 32],
-        ts: timestamp.to_be(), // FIXED: store as bytes directly
-        kind: xaero_event.event_type(),
-        hash: sha_256_slice(event_data),
-    })
 }
 
 /// Generates event key that consists of :
@@ -862,7 +633,6 @@ mod tests {
     use bytemuck::bytes_of;
     use tempfile::tempdir;
     use xaeroflux_core::{
-        XaeroPoolManager,
         date_time::{MS_PER_DAY, day_bounds_from_epoch_ms, emit_secs},
         event::{EventType, XaeroEvent},
         initialize,
@@ -879,8 +649,6 @@ mod tests {
     #[test]
     fn test_put_and_get_secondary_index() {
         initialize();
-        XaeroPoolManager::init();
-
         let dir = tempdir().expect("failed_to_unravel");
         let arc_env = Arc::new(Mutex::new(
             LmdbEnv::new(dir.path().to_str().expect("failed_to_unravel"), BusKind::Data).expect("failed_to_unravel"),
@@ -908,8 +676,6 @@ mod tests {
     #[test]
     fn test_get_secondary_index_not_found() {
         initialize();
-        XaeroPoolManager::init();
-
         let dir = tempdir().expect("failed_to_unravel");
         let arc_env = Arc::new(Mutex::new(
             LmdbEnv::new(dir.path().to_str().expect("failed_to_unravel"), BusKind::Data).expect("failed_to_unravel"),
@@ -923,7 +689,6 @@ mod tests {
     #[test]
     fn test_env_creation_and_dbi_handles() {
         initialize();
-        XaeroPoolManager::init();
 
         let dir = tempdir().expect("failed to unravel");
         let env = LmdbEnv::new(dir.path().to_str().expect("failed to unravel"), BusKind::Control).expect("failed to unravel");
@@ -934,136 +699,8 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_xaero_key_consistency() {
-        initialize();
-        XaeroPoolManager::init();
-
-        let data = b"hello".to_vec();
-        let timestamp = 123_456_789;
-        let event_type = EventType::ApplicationEvent(1).to_u8();
-
-        let xaero_event = XaeroPoolManager::create_xaero_event(&data, event_type, None, None, None, timestamp).expect("Failed to create XaeroEvent");
-
-        let key = generate_xaero_key(&xaero_event).expect("failed to unravel");
-        let bytes = bytes_of(&key);
-
-        tracing::info!("key bytes: {:?}", bytes);
-
-        // Test the timestamp field (first 8 bytes after the hash fields)
-        // EventKey layout: [xaero_id_hash: 32][vector_clock_hash: 32][ts: 8][kind: 1][hash: 32]
-        let ts_offset = 64; // Skip 32 + 32 bytes for the hash fields
-        assert_eq!(u64::from_be_bytes(bytes[ts_offset..ts_offset + 8].try_into().expect("failed to unravel")), timestamp);
-
-        // Test the event type field (after timestamp)
-        let kind_offset = ts_offset + 8;
-        assert_eq!(bytes[kind_offset], event_type);
-
-        // Test total size
-        assert_eq!(bytes.len(), std::mem::size_of::<EventKey>());
-    }
-
-    #[test]
-    fn test_debug_key_format() {
-        initialize();
-        XaeroPoolManager::init();
-
-        let dir = tempdir().expect("failed to create temp dir");
-        let arc_env = Arc::new(Mutex::new(
-            LmdbEnv::new(dir.path().to_str().expect("failed to get path"), BusKind::Data).expect("failed to create env"),
-        ));
-
-        // Test what keys actually look like
-        let timestamp = emit_secs();
-        let event_data = b"test";
-
-        // Test legacy XaeroEvent key
-        let xaero_event =
-            XaeroPoolManager::create_xaero_event(event_data, EventType::ApplicationEvent(1).to_u8(), None, None, None, timestamp).expect("Failed to create XaeroEvent");
-
-        let legacy_key = generate_xaero_key(&xaero_event).expect("Failed to generate legacy key");
-        println!("Legacy key size: {} bytes", std::mem::size_of_val(&legacy_key));
-        println!("Enhanced EventKey size: {} bytes", std::mem::size_of::<EventKey>());
-
-        // Test enhanced key
-        let enhanced_key = generate_event_key(event_data, 1, timestamp, [0u8; 32], [0u8; 32]);
-
-        println!("Legacy timestamp in key: {:?}", u64::from_be(legacy_key.ts));
-        println!("Enhanced timestamp in key: {:?}", u64::from_be(enhanced_key.ts));
-        println!("Original timestamp: {}", timestamp);
-
-        // Store both types and see what happens
-        push_xaero_event(&arc_env, &xaero_event).expect("Failed to push legacy event");
-        push_internal_event_universal(&arc_env, event_data, 2, timestamp + 1).expect("Failed to push universal event");
-
-        println!("✅ Debug key format test completed");
-    }
-
-    #[test]
-    fn test_push_and_scan_xaero_events() {
-        initialize();
-        XaeroPoolManager::init();
-
-        let dir = tempdir().expect("failed to unravel");
-        let arc_env = Arc::new(Mutex::new(
-            LmdbEnv::new(dir.path().to_str().expect("failed to unravel"), BusKind::Data).expect("failed to unravel"),
-        ));
-
-        // Create two XaeroEvents with known timestamps (in seconds)
-        let base_timestamp = emit_secs();
-        let e1 = XaeroPoolManager::create_xaero_event(b"one", EventType::ApplicationEvent(1).to_u8(), None, None, None, base_timestamp).expect("Failed to create event 1");
-
-        let e2 = XaeroPoolManager::create_xaero_event(
-            b"two",
-            EventType::ApplicationEvent(2).to_u8(),
-            None,
-            None,
-            None,
-            base_timestamp + 1, // 1 second later
-        )
-        .expect("Failed to create event 2");
-
-        push_xaero_event(&arc_env, &e1).expect("failed to push e1");
-        push_xaero_event(&arc_env, &e2).expect("failed to push e2");
-
-        tracing::info!(
-            "Event 1: ts={}, type={}, data={:?}",
-            e1.latest_ts,
-            e1.event_type(),
-            std::str::from_utf8(e1.data()).unwrap_or("non-utf8")
-        );
-        tracing::info!(
-            "Event 2: ts={}, type={}, data={:?}",
-            e2.latest_ts,
-            e2.event_type(),
-            std::str::from_utf8(e2.data()).unwrap_or("non-utf8")
-        );
-
-        // For legacy events, we need to check if they're actually being stored
-        // Let's try a wider range to see if there's any data at all
-        let start_scan = 0; // Start from beginning of time
-        let end_scan = u64::MAX; // End at end of time
-
-        tracing::info!("Scanning entire database for any legacy events...");
-        let events = unsafe { scan_xaero_range(&arc_env, start_scan, end_scan).expect("failed to scan") };
-
-        tracing::info!("Legacy scan found {} events in full range", events.len());
-
-        if events.is_empty() {
-            // If no events found, the issue might be with key format compatibility
-            tracing::warn!("No legacy events found - this suggests a key format issue");
-            // For now, just check that we can store and the functions don't crash
-            assert!(true, "Functions executed without crashing, but key format needs investigation");
-        } else {
-            // Verify event data if found
-            assert!(events.iter().any(|e| e.data() == b"one"), "Missing event 'one'");
-            assert!(events.iter().any(|e| e.data() == b"two"), "Missing event 'two'");
-        }
-    }
-
-    #[test]
     fn test_universal_push_and_enhanced_scan() {
         initialize();
-        XaeroPoolManager::init();
 
         let dir = tempdir().expect("failed to create temp dir");
         let arc_env = Arc::new(Mutex::new(
@@ -1110,7 +747,6 @@ mod tests {
     #[test]
     fn test_universal_push_function() {
         initialize();
-        XaeroPoolManager::init();
 
         let dir = tempdir().expect("failed to create temp dir");
         let arc_env = Arc::new(Mutex::new(
@@ -1137,7 +773,6 @@ mod tests {
     #[test]
     fn test_enhanced_key_generation() {
         initialize();
-        XaeroPoolManager::init();
 
         // Test data
         let data = b"hello";
@@ -1174,62 +809,10 @@ mod tests {
         println!("✅ Enhanced key generation is consistent");
     }
 
-    #[test]
-    fn test_segment_meta_with_xaero_events() {
-        initialize();
-        XaeroPoolManager::init();
-
-        let dir = tempdir().expect("failed_to_unwrap");
-        let arc_env = Arc::new(Mutex::new(
-            LmdbEnv::new(dir.path().to_str().expect("failed_to_unwrap"), BusKind::Control).expect("failed_to_unwrap"),
-        ));
-
-        let meta = SegmentMeta {
-            page_index: 1,
-            segment_index: 2,
-            write_pos: 128,
-            byte_offset: 256,
-            latest_segment_id: 3,
-            ts_start: emit_secs(),
-            ts_end: emit_secs(),
-        };
-
-        let data = bytemuck::bytes_of(&meta);
-        let xaero_event = XaeroPoolManager::create_xaero_event(data, EventType::MetaEvent(1).to_u8(), None, None, None, emit_secs()).expect("Failed to create meta event");
-
-        push_xaero_event(&arc_env, &xaero_event).expect("failed to push meta");
-
-        // Read back using meta interface
-        let raw = unsafe { get_meta_val(&arc_env, b"segment_meta") };
-        let got: &SegmentMeta = bytemuck::from_bytes(&raw);
-
-        // Declare unaligned field accesses for got
-        let unaligned_got_page_index = got.page_index;
-        let unaligned_got_byte_offset = got.byte_offset;
-        let unaligned_got_write_pos = got.write_pos;
-        let unaligned_got_segment_index = got.segment_index;
-        let unaligned_got_latest_segment_id = got.latest_segment_id;
-
-        // Declare unaligned field accesses for meta
-        let unaligned_meta_page_index = meta.page_index;
-        let unaligned_meta_byte_offset = meta.byte_offset;
-        let unaligned_meta_write_pos = meta.write_pos;
-        let unaligned_meta_segment_index = meta.segment_index;
-        let unaligned_meta_latest_segment_id = meta.latest_segment_id;
-
-        // Perform assertions using unaligned values
-        assert_eq!(unaligned_got_page_index, unaligned_meta_page_index);
-        assert_eq!(unaligned_got_byte_offset, unaligned_meta_byte_offset);
-        assert_eq!(unaligned_got_write_pos, unaligned_meta_write_pos);
-        assert_eq!(unaligned_got_segment_index, unaligned_meta_segment_index);
-        assert_eq!(unaligned_got_latest_segment_id, unaligned_meta_latest_segment_id);
-    }
-
     // NEW: Test for XaeroInternalEvent storage and retrieval
     #[test]
     fn test_xaero_internal_event_storage() {
         initialize();
-        XaeroPoolManager::init();
 
         let dir = tempdir().expect("failed to create temp dir");
         let arc_env = Arc::new(Mutex::new(
@@ -1263,7 +846,6 @@ mod tests {
     #[test]
     fn test_debug_universal_push_storage() {
         initialize();
-        XaeroPoolManager::init();
 
         let dir = tempdir().expect("failed to create temp dir");
 
@@ -1357,7 +939,6 @@ mod tests {
     #[test]
     fn test_enhanced_scan_functions() {
         initialize();
-        XaeroPoolManager::init();
 
         let dir = tempdir().expect("failed to create temp dir");
         let arc_env = Arc::new(Mutex::new(
