@@ -16,9 +16,9 @@ readme = "README.md"
 [lints.rust]
 unused = "allow"
 
-[[bin]]
-name = "test_discovery"
-path = "examples/test_discovery.rs"
+#[[bin]]
+#name = "test_discovery"
+#path = "examples/test_discovery.rs"
 
 [lib]
 name = "xaeroflux_actors"  # This should match your library name without the "lib" prefix
@@ -75,6 +75,7 @@ serde = { version = "1.0.219", features = ["derive"] }
 rustfix = "0.9.0"
 env_logger = "0.8.4"
 blake3 = "1.8.2"
+bincode = "2.0.1"
 
 
 [profile.release]
