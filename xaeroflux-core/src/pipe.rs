@@ -126,7 +126,7 @@ pub struct GenPipe<T> {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Pipe {
     pub source: Arc<Source<Arc<XaeroEvent>>>,
     pub sink: Arc<Sink<Arc<XaeroEvent>>>,

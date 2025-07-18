@@ -21,8 +21,8 @@ use rkyv::{Archive, Deserialize, Serialize};
 use rusted_ring::AllocationError;
 use rusted_ring_new::{PooledEvent, RingBuffer};
 
-pub use crate::{pool::XaeroEvent, vector_clock::VectorClock};
 use crate::pool::XaeroEventSized;
+pub use crate::{pool::XaeroEvent, vector_clock::VectorClock};
 
 /// Magic bytes prefix for event headers in paged segments.
 /// Used to identify and slice raw event bytes from storage pages.
@@ -242,36 +242,3 @@ pub struct ScanWindow {
 }
 unsafe impl Pod for ScanWindow {}
 unsafe impl Zeroable for ScanWindow {}
-
-pub trait RingOperator<const SIZE: usize> {
-    fn process(&self, event: PooledEvent<SIZE>) -> Option<PooledEvent<SIZE>>;
-}
-
-pub struct MapOperator<const SIZE: usize, F>
-where
-    F: Fn(XaeroEventSized<SIZE>) -> PooledEvent<SIZE> + Send + Sync,
-{
-    pub handler: F,
-}
-
-pub struct FilterOperator<const SIZE: usize, P>
-where
-    P: Fn(&PooledEvent<SIZE>) -> bool + Send + Sync,
-{
-    pub predicate: P,
-}
-
-
-pub struct SortOperator<const SIZE: usize, P>
-where
-    P: Fn(PooledEvent<SIZE>) -> PooledEvent<SIZE> + Send + Sync,
-{
-    predicate: P,
-}
-
-pub struct BufferOperator<const SIZE: usize, const BUFFER_CAPACITY: usize> {
-    buffer: [Option<PooledEvent<SIZE>>; BUFFER_CAPACITY],
-    count: AtomicUsize,
-    duration: Duration,
-    last_flush: AtomicU64,
-}

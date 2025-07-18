@@ -43,23 +43,23 @@ use crate::{
 // ================================================================================================
 
 // MMR Control Event Flow: XS input -> XS output (confirmations)
-static MMR_CONTROL_INPUT_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
+pub(crate) static MMR_CONTROL_INPUT_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
 static MMR_CONTROL_OUTPUT_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
 
 // MMR Data Event Flow: S input -> XS output (confirmations are small)
-static MMR_DATA_INPUT_RING: OnceLock<RingBuffer<256, 1000>> = OnceLock::new();
+pub(crate) static MMR_DATA_INPUT_RING: OnceLock<RingBuffer<256, 1000>> = OnceLock::new();
 static MMR_DATA_OUTPUT_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
 
 // MMR Medium Event Flow: M input -> XS output
-static MMR_MEDIUM_INPUT_RING: OnceLock<RingBuffer<1024, 500>> = OnceLock::new();
+pub(crate) static MMR_MEDIUM_INPUT_RING: OnceLock<RingBuffer<1024, 500>> = OnceLock::new();
 static MMR_MEDIUM_OUTPUT_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
 
 // MMR Large Event Flow: L input -> XS output
-static MMR_LARGE_INPUT_RING: OnceLock<RingBuffer<4096, 100>> = OnceLock::new();
+pub(crate) static MMR_LARGE_INPUT_RING: OnceLock<RingBuffer<4096, 100>> = OnceLock::new();
 static MMR_LARGE_OUTPUT_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
 
 // MMR XL Event Flow: XL input -> XS output
-static MMR_XL_INPUT_RING: OnceLock<RingBuffer<16384, 50>> = OnceLock::new();
+pub(crate) static MMR_XL_INPUT_RING: OnceLock<RingBuffer<16384, 50>> = OnceLock::new();
 static MMR_XL_OUTPUT_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
 
 // ================================================================================================

@@ -29,12 +29,12 @@ use crate::{
 // ================================================================================================
 
 // AOF Control Event Flow: XS input -> XS output (confirmations)
-static AOF_CONTROL_INPUT_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
-static AOF_CONTROL_OUTPUT_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
+pub static AOF_CONTROL_INPUT_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
+pub static AOF_CONTROL_OUTPUT_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
 
 // AOF Data Event Flow: S input -> XS output (confirmations are small)
-static AOF_DATA_INPUT_RING: OnceLock<RingBuffer<256, 1000>> = OnceLock::new();
-static AOF_DATA_OUTPUT_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
+pub static AOF_DATA_INPUT_RING: OnceLock<RingBuffer<256, 1000>> = OnceLock::new();
+pub static AOF_DATA_OUTPUT_RING: OnceLock<RingBuffer<64, 2000>> = OnceLock::new();
 
 // ================================================================================================
 // TYPES & STRUCTS

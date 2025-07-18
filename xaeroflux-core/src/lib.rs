@@ -22,7 +22,6 @@ pub mod sys;
 pub mod system_paths;
 mod vector_clock;
 pub mod vector_clock_actor;
-pub mod workspace;
 
 use std::{
     any::Any,
@@ -74,7 +73,6 @@ pub static XAERO_DISPATCHER_POOL: OnceLock<ThreadPool> = OnceLock::new();
 
 /// Global runtime for peer-to-peer networking tasks.
 pub static P2P_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
-
 
 // Automatically initializes on first access
 pub fn shutdown_all_pools() -> Result<(), Box<dyn std::error::Error>> {
