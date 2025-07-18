@@ -7,6 +7,3 @@ pub use xaeroflux_core::*;
 pub mod actors {
     pub use xaeroflux_actors::*;
 }
-
-// Make the `subject!` proc-macro available through this facade:
-pub use xaeroflux_macros::subject;

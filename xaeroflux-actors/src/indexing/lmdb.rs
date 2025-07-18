@@ -1,16 +1,10 @@
 use std::{collections::HashMap, error::Error};
 
 use bytemuck::bytes_of;
-use liblmdb::{
-    mdb_get, mdb_txn_abort, mdb_txn_begin,
-    MDB_txn, MDB_val, MDB_RDONLY,
-};
+use liblmdb::{MDB_RDONLY, MDB_txn, MDB_val, mdb_get, mdb_txn_abort, mdb_txn_begin};
 use xaeroflux_core::pool::XaeroInternalEvent;
 
-use crate::aof::storage::{
-    format::EventKey,
-    lmdb::LmdbEnv,
-};
+use crate::aof::storage::{format::EventKey, lmdb::LmdbEnv};
 
 #[repr(C)]
 pub struct LmdbVectorSearchDb {
@@ -55,10 +49,7 @@ impl LmdbVectorSearchDb {
                 let rc = mdb_get(txn, self.env.dbis[0], &mut mdb_key, &mut data_val);
                 if rc == 0 {
                     // Found the key, copy the data
-                    let data_slice = std::slice::from_raw_parts(
-                        data_val.mv_data as *const u8,
-                        data_val.mv_size
-                    );
+                    let data_slice = std::slice::from_raw_parts(data_val.mv_data as *const u8, data_val.mv_size);
                     results.insert(event_key, data_slice.to_vec());
                 }
                 // Skip if not found (rc != 0)
@@ -71,10 +62,7 @@ impl LmdbVectorSearchDb {
     }
 
     /// Bulk search for multiple event keys, returning parsed XaeroInternalEvent
-    pub fn bulk_search_events<const TSHIRT: usize>(
-        &self,
-        event_keys: Vec<EventKey>
-    ) -> HashMap<EventKey, XaeroInternalEvent<TSHIRT>> {
+    pub fn bulk_search_events<const TSHIRT: usize>(&self, event_keys: Vec<EventKey>) -> HashMap<EventKey, XaeroInternalEvent<TSHIRT>> {
         let mut results = HashMap::new();
 
         unsafe {
@@ -102,10 +90,7 @@ impl LmdbVectorSearchDb {
                 if rc == 0 {
                     // Found the key, verify size matches expected XaeroInternalEvent
                     if data_val.mv_size == std::mem::size_of::<XaeroInternalEvent<TSHIRT>>() {
-                        let data_slice = std::slice::from_raw_parts(
-                            data_val.mv_data as *const u8,
-                            data_val.mv_size
-                        );
+                        let data_slice = std::slice::from_raw_parts(data_val.mv_data as *const u8, data_val.mv_size);
 
                         // Parse as XaeroInternalEvent
                         if let Ok(event) = bytemuck::try_from_bytes::<XaeroInternalEvent<TSHIRT>>(data_slice) {
@@ -144,10 +129,7 @@ impl LmdbVectorSearchDb {
 
             let rc = mdb_get(txn, self.env.dbis[0], &mut mdb_key, &mut data_val);
             let result = if rc == 0 {
-                let data_slice = std::slice::from_raw_parts(
-                    data_val.mv_data as *const u8,
-                    data_val.mv_size
-                );
+                let data_slice = std::slice::from_raw_parts(data_val.mv_data as *const u8, data_val.mv_size);
                 Some(data_slice.to_vec())
             } else {
                 None
@@ -159,10 +141,7 @@ impl LmdbVectorSearchDb {
     }
 
     /// Single key lookup for parsed XaeroInternalEvent
-    pub fn get_event<const TSHIRT: usize>(
-        &self,
-        event_key: &EventKey
-    ) -> Option<XaeroInternalEvent<TSHIRT>> {
+    pub fn get_event<const TSHIRT: usize>(&self, event_key: &EventKey) -> Option<XaeroInternalEvent<TSHIRT>> {
         unsafe {
             let mut txn: *mut MDB_txn = std::ptr::null_mut();
             let begin_rc = mdb_txn_begin(self.env.env, std::ptr::null_mut(), MDB_RDONLY, &mut txn);
@@ -183,10 +162,7 @@ impl LmdbVectorSearchDb {
 
             let rc = mdb_get(txn, self.env.dbis[0], &mut mdb_key, &mut data_val);
             let result = if rc == 0 && data_val.mv_size == std::mem::size_of::<XaeroInternalEvent<TSHIRT>>() {
-                let data_slice = std::slice::from_raw_parts(
-                    data_val.mv_data as *const u8,
-                    data_val.mv_size
-                );
+                let data_slice = std::slice::from_raw_parts(data_val.mv_data as *const u8, data_val.mv_size);
 
                 bytemuck::try_from_bytes::<XaeroInternalEvent<TSHIRT>>(data_slice).ok().copied()
             } else {

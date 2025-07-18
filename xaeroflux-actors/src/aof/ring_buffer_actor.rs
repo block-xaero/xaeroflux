@@ -14,7 +14,7 @@ use std::{
 };
 
 use bytemuck::{Pod, Zeroable};
-use rusted_ring_new::{
+use rusted_ring::{
     EventPoolFactory, EventUtils, L_CAPACITY, L_TSHIRT_SIZE, M_CAPACITY, M_TSHIRT_SIZE, PooledEvent, Reader, RingBuffer, S_CAPACITY, S_TSHIRT_SIZE, Writer, XL_CAPACITY,
     XL_TSHIRT_SIZE, XS_CAPACITY, XS_TSHIRT_SIZE,
 };

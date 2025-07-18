@@ -1,7 +1,7 @@
 use std::{cmp::max, collections::HashMap, sync::OnceLock};
 
 use bytemuck::{Pod, Zeroable, from_bytes};
-use rusted_ring_new::{EventUtils, RingBuffer};
+use rusted_ring::{EventUtils, RingBuffer};
 
 use crate::date_time::emit_secs;
 
@@ -195,8 +195,8 @@ impl VectorClockActor {
             let out_buffer = VC_DELTA_OUTPUT_RING
                 .get()
                 .expect("cannot allocate vector clock");
-            let mut reader = rusted_ring_new::Reader::new(in_buffer);
-            let mut writer = rusted_ring_new::Writer::new(out_buffer);
+            let mut reader = rusted_ring::Reader::new(in_buffer);
+            let mut writer = rusted_ring::Writer::new(out_buffer);
 
             loop {
                 for event in reader.by_ref() {
@@ -243,7 +243,7 @@ impl VectorClockActor {
 #[cfg(test)]
 mod vector_clock_tests {
     use bytemuck::{bytes_of, from_bytes};
-    use rusted_ring_new::{EventUtils, Reader, Writer};
+    use rusted_ring::{EventUtils, Reader, Writer};
 
     use super::*;
 

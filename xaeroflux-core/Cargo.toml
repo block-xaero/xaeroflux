@@ -17,7 +17,6 @@ diagnostics = []
 default = []
 
 [dependencies]
-rusted-ring-new = {package = "rusted-ring", workspace = true}
 rusted-ring = { workspace = true }
 blake3 = "1.8.2"
 xaeroid = { workspace = true }

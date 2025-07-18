@@ -6988,12 +6988,9 @@ dependencies = [
 name = "xaeroflux"
 version = "0.8.1-m5"
 dependencies = [
- "rusted-ring 0.4.0",
  "rusted-ring 0.5.5",
  "xaeroflux-actors 0.8.1-m5 (registry+https://github.com/rust-lang/crates.io-index)",
  "xaeroflux-core 0.8.1-m5 (registry+https://github.com/rust-lang/crates.io-index)",
- "xaeroflux-crdts 0.8.1-m5 (registry+https://github.com/rust-lang/crates.io-index)",
- "xaeroflux-macros 0.8.1-m5 (registry+https://github.com/rust-lang/crates.io-index)",
  "xaeroid",
 ]
 
@@ -7020,11 +7017,9 @@ dependencies = [
  "liblmdb",
  "memmap2",
  "multihash",
- "paste",
  "rand 0.8.5",
  "rkyv 0.8.10",
  "rkyv_dyn",
- "rusted-ring 0.4.0",
  "rusted-ring 0.5.5",
  "rustfix",
  "serde",
@@ -7038,8 +7033,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber 0.3.19",
  "xaeroflux-core 0.8.1-m5",
- "xaeroflux-crdts 0.8.1-m5 (registry+https://github.com/rust-lang/crates.io-index)",
- "xaeroflux-macros 0.8.1-m5",
  "xaeroid",
 ]
 
@@ -7081,8 +7074,8 @@ dependencies = [
  "tracing",
  "tracing-subscriber 0.3.19",
  "xaeroflux-core 0.8.1-m5 (registry+https://github.com/rust-lang/crates.io-index)",
- "xaeroflux-crdts 0.8.1-m5 (registry+https://github.com/rust-lang/crates.io-index)",
- "xaeroflux-macros 0.8.1-m5 (registry+https://github.com/rust-lang/crates.io-index)",
+ "xaeroflux-crdts",
+ "xaeroflux-macros",
  "xaeroid",
 ]
 
@@ -7104,7 +7097,6 @@ dependencies = [
  "rand 0.8.5",
  "rkyv 0.8.10",
  "rkyv_dyn",
- "rusted-ring 0.4.0",
  "rusted-ring 0.5.5",
  "rustfix",
  "serde",
@@ -7158,21 +7150,6 @@ dependencies = [
 [[package]]
 name = "xaeroflux-crdts"
 version = "0.8.1-m5"
-dependencies = [
- "bytemuck",
- "crdts",
- "rkyv 0.8.10",
- "rusted-ring 0.4.0",
- "rusted-ring 0.5.5",
- "serde",
- "xaeroflux-core 0.8.1-m5 (registry+https://github.com/rust-lang/crates.io-index)",
- "xaeroid",
- "yrs",
-]
-
-[[package]]
-name = "xaeroflux-crdts"
-version = "0.8.1-m5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "45e41d1eabf6fd505f5594af28ef86caebee4bc6340dac3eff9f1775e61b7c53"
 dependencies = [
@@ -7184,27 +7161,6 @@ dependencies = [
  "xaeroflux-core 0.8.1-m5 (registry+https://github.com/rust-lang/crates.io-index)",
  "xaeroid",
  "yrs",
-]
-
-[[package]]
-name = "xaeroflux-ffi"
-version = "0.8.0-m5"
-dependencies = [
- "blake3",
- "xaeroflux",
-]
-
-[[package]]
-name = "xaeroflux-macros"
-version = "0.8.1-m5"
-dependencies = [
- "blake3",
- "paste",
- "proc-macro2",
- "quote",
- "syn 2.0.103",
- "trybuild",
- "xaeroflux-core 0.8.1-m5 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
