@@ -23,6 +23,12 @@ pub struct XaeroVectorClockEntry([u8; 32], XaeroClock); // 32 + 16 = 48 bytes
 unsafe impl Pod for XaeroVectorClockEntry {}
 unsafe impl Zeroable for XaeroVectorClockEntry {}
 
+impl Default for XaeroClock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl XaeroClock {
     pub fn with_base(base_ts: u64, latest_timestamp: u16) -> Self {
         Self {
@@ -64,6 +70,12 @@ static VC_DELTA_OUTPUT_RING: OnceLock<RingBuffer<1024, 1000>> = OnceLock::new();
 pub struct VectorClockState {
     clock: XaeroClock,
     lru_cache: HashMap<[u8; 32], XaeroClock>,
+}
+
+impl Default for VectorClockState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl VectorClockState {
@@ -178,6 +190,12 @@ impl VectorClockState {
 
 pub struct VectorClockActor {
     pub state: VectorClockState,
+}
+
+impl Default for VectorClockActor {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl VectorClockActor {

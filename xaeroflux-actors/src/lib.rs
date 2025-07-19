@@ -45,14 +45,20 @@ pub struct EventBus {
     xl_writer: Writer<XL_TSHIRT_SIZE, XL_CAPACITY>,
 }
 
+impl Default for EventBus {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EventBus {
     /// Create new EventBus with writers to main ring buffers
     pub fn new() -> Self {
-        let xs_ring = XS_RING.get_or_init(|| RingBuffer::new());
-        let s_ring = S_RING.get_or_init(|| RingBuffer::new());
-        let m_ring = M_RING.get_or_init(|| RingBuffer::new());
-        let l_ring = L_RING.get_or_init(|| RingBuffer::new());
-        let xl_ring = XL_RING.get_or_init(|| RingBuffer::new());
+        let xs_ring = XS_RING.get_or_init(RingBuffer::new);
+        let s_ring = S_RING.get_or_init(RingBuffer::new);
+        let m_ring = M_RING.get_or_init(RingBuffer::new);
+        let l_ring = L_RING.get_or_init(RingBuffer::new);
+        let xl_ring = XL_RING.get_or_init(RingBuffer::new);
 
         Self {
             xs_writer: Writer::new(xs_ring),
@@ -136,31 +142,31 @@ pub struct P2PRingAccess;
 impl P2PRingAccess {
     /// Get writer for P2P XS ring
     pub fn xs_writer() -> Writer<XS_TSHIRT_SIZE, XS_CAPACITY> {
-        let ring = P2P_XS_RING.get_or_init(|| RingBuffer::new());
+        let ring = P2P_XS_RING.get_or_init(RingBuffer::new);
         Writer::new(ring)
     }
 
     /// Get writer for P2P S ring
     pub fn s_writer() -> Writer<S_TSHIRT_SIZE, S_CAPACITY> {
-        let ring = P2P_S_RING.get_or_init(|| RingBuffer::new());
+        let ring = P2P_S_RING.get_or_init(RingBuffer::new);
         Writer::new(ring)
     }
 
     /// Get writer for P2P M ring
     pub fn m_writer() -> Writer<M_TSHIRT_SIZE, M_CAPACITY> {
-        let ring = P2P_M_RING.get_or_init(|| RingBuffer::new());
+        let ring = P2P_M_RING.get_or_init(RingBuffer::new);
         Writer::new(ring)
     }
 
     /// Get writer for P2P L ring
     pub fn l_writer() -> Writer<L_TSHIRT_SIZE, L_CAPACITY> {
-        let ring = P2P_L_RING.get_or_init(|| RingBuffer::new());
+        let ring = P2P_L_RING.get_or_init(RingBuffer::new);
         Writer::new(ring)
     }
 
     /// Get writer for P2P XL ring
     pub fn xl_writer() -> Writer<XL_TSHIRT_SIZE, XL_CAPACITY> {
-        let ring = P2P_XL_RING.get_or_init(|| RingBuffer::new());
+        let ring = P2P_XL_RING.get_or_init(RingBuffer::new);
         Writer::new(ring)
     }
 }
@@ -185,6 +191,12 @@ pub struct XaeroFlux {
     pub event_bus: EventBus,
     pub vector_search: Option<Arc<VectorSearchActor>>,
     pub aof_handle: Option<JoinHandle<()>>,
+}
+
+impl Default for XaeroFlux {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl XaeroFlux {

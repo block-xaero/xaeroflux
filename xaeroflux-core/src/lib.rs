@@ -23,24 +23,14 @@ mod vector_clock;
 pub mod vector_clock_actor;
 
 use std::{
-    any::Any,
     env,
-    fmt::Debug,
     sync::{
-        LazyLock, OnceLock,
+        OnceLock,
         atomic::{AtomicU64, Ordering},
     },
 };
 
 use figlet_rs::FIGfont;
-use rkyv::{
-    Archive,
-    bytecheck::CheckBytes,
-    de::Pool,
-    rancor::{Failure, Strategy},
-    util::AlignedVec,
-    validation::{Validator, archive::ArchiveValidator, shared::SharedValidator},
-};
 use threadpool::ThreadPool;
 use tracing::info;
 

@@ -462,12 +462,10 @@ pub fn push_internal_event_universal(arc_env: &Arc<Mutex<LmdbEnv>>, event_data: 
             };
             push_xaero_internal_event(arc_env, &internal_event)
         }
-        rusted_ring::EventSize::XXL => {
-            return Err(Box::new(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("Event data too large: {} bytes exceeds maximum size", event_data.len()),
-            )));
-        }
+        rusted_ring::EventSize::XXL => Err(Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("Event data too large: {} bytes exceeds maximum size", event_data.len()),
+        ))),
     }
 }
 

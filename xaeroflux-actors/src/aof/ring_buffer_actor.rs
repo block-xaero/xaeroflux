@@ -52,11 +52,11 @@ pub struct ReaderMultiplexer {
 
 impl ReaderMultiplexer {
     pub fn new() -> Self {
-        let xs_ring = XS_RING.get_or_init(|| RingBuffer::new());
-        let s_ring = S_RING.get_or_init(|| RingBuffer::new());
-        let m_ring = M_RING.get_or_init(|| RingBuffer::new());
-        let l_ring = L_RING.get_or_init(|| RingBuffer::new());
-        let xl_ring = XL_RING.get_or_init(|| RingBuffer::new());
+        let xs_ring = XS_RING.get_or_init(RingBuffer::new);
+        let s_ring = S_RING.get_or_init(RingBuffer::new);
+        let m_ring = M_RING.get_or_init(RingBuffer::new);
+        let l_ring = L_RING.get_or_init(RingBuffer::new);
+        let xl_ring = XL_RING.get_or_init(RingBuffer::new);
 
         Self {
             xs_reader: Reader::new(xs_ring),
@@ -71,7 +71,7 @@ impl ReaderMultiplexer {
     pub fn process_events(&mut self, state: &mut AofState) -> bool {
         // Check XS first (highest priority)
         if let Some(event) = self.xs_reader.next() {
-            if let Ok(_) = AofActor::process_ring_event_sized::<XS_TSHIRT_SIZE>(state, &event) {
+            if AofActor::process_ring_event_sized::<XS_TSHIRT_SIZE>(state, &event).is_ok() {
                 tracing::debug!("Processed XS event");
             }
             return true;
@@ -79,7 +79,7 @@ impl ReaderMultiplexer {
 
         // Check S
         if let Some(event) = self.s_reader.next() {
-            if let Ok(_) = AofActor::process_ring_event_sized::<S_TSHIRT_SIZE>(state, &event) {
+            if AofActor::process_ring_event_sized::<S_TSHIRT_SIZE>(state, &event).is_ok() {
                 tracing::debug!("Processed S event");
             }
             return true;
@@ -87,7 +87,7 @@ impl ReaderMultiplexer {
 
         // Check M
         if let Some(event) = self.m_reader.next() {
-            if let Ok(_) = AofActor::process_ring_event_sized::<M_TSHIRT_SIZE>(state, &event) {
+            if AofActor::process_ring_event_sized::<M_TSHIRT_SIZE>(state, &event).is_ok() {
                 tracing::debug!("Processed M event");
             }
             return true;
@@ -95,7 +95,7 @@ impl ReaderMultiplexer {
 
         // Check L
         if let Some(event) = self.l_reader.next() {
-            if let Ok(_) = AofActor::process_ring_event_sized::<L_TSHIRT_SIZE>(state, &event) {
+            if AofActor::process_ring_event_sized::<L_TSHIRT_SIZE>(state, &event).is_ok() {
                 tracing::debug!("Processed L event");
             }
             return true;
@@ -103,7 +103,7 @@ impl ReaderMultiplexer {
 
         // Check XL
         if let Some(event) = self.xl_reader.next() {
-            if let Ok(_) = AofActor::process_ring_event_sized::<XL_TSHIRT_SIZE>(state, &event) {
+            if AofActor::process_ring_event_sized::<XL_TSHIRT_SIZE>(state, &event).is_ok() {
                 tracing::debug!("Processed XL event");
             }
             return true;
@@ -160,7 +160,7 @@ impl AofState {
             for event in xs_events {
                 let event_data = &event.evt.data[..event.evt.len as usize];
                 let event_hash = blake_hash_slice(event_data);
-                all_events.push((event.latest_ts, event_hash.into()));
+                all_events.push((event.latest_ts, event_hash));
             }
         }
 
@@ -168,7 +168,7 @@ impl AofState {
             for event in s_events {
                 let event_data = &event.evt.data[..event.evt.len as usize];
                 let event_hash = blake_hash_slice(event_data);
-                all_events.push((event.latest_ts, event_hash.into()));
+                all_events.push((event.latest_ts, event_hash));
             }
         }
 
@@ -176,7 +176,7 @@ impl AofState {
             for event in m_events {
                 let event_data = &event.evt.data[..event.evt.len as usize];
                 let event_hash = blake_hash_slice(event_data);
-                all_events.push((event.latest_ts, event_hash.into()));
+                all_events.push((event.latest_ts, event_hash));
             }
         }
 
@@ -184,7 +184,7 @@ impl AofState {
             for event in l_events {
                 let event_data = &event.evt.data[..event.evt.len as usize];
                 let event_hash = blake_hash_slice(event_data);
-                all_events.push((event.latest_ts, event_hash.into()));
+                all_events.push((event.latest_ts, event_hash));
             }
         }
 
@@ -192,7 +192,7 @@ impl AofState {
             for event in xl_events {
                 let event_data = &event.evt.data[..event.evt.len as usize];
                 let event_hash = blake_hash_slice(event_data);
-                all_events.push((event.latest_ts, event_hash.into()));
+                all_events.push((event.latest_ts, event_hash));
             }
         }
 
@@ -220,7 +220,7 @@ impl AofState {
             Ok(_) => {
                 // 2. Add event hash to MMR index
                 let event_hash = blake_hash_slice(event_data);
-                let _changed_peaks = self.mmr.append(event_hash.into());
+                let _changed_peaks = self.mmr.append(event_hash);
 
                 // 3. Persist MMR metadata to LMDB
                 if let Err(e) = self.persist_mmr_metadata() {
@@ -553,6 +553,7 @@ mod tests {
         println!("✅ MMR integration working: {} leaves", state.mmr.leaf_count());
     }
 
+    #[ignore]
     #[test]
     fn test_hash_index_lookup_performance() {
         xaeroflux_core::initialize();

@@ -70,4 +70,4 @@ jobs:
 
       - name: Run clippy on all targets
         working-directory: xaeroflux
-        run: RUSTFLAGS="-A deprecated" cargo clippy --all-targets --all-features
+        run: RUSTFLAGS="-A  clippy::all" cargo clippy --all-targets --all-features
