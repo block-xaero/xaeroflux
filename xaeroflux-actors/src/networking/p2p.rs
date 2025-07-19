@@ -466,8 +466,8 @@ impl P2PActorState {
         //
         // // Deserialize message
         // if let Ok(message) = rkyv::from_bytes::<P2PMessage>(&buffer) {
-        //     let peer_id = connection.remote_address().expect("failed to unravel"); // This won't work directly, need proper
-        // peer ID     // TODO: Get actual peer NodeId from connection
+        //     let peer_id = connection.remote_address().expect("failed to unravel"); // This won't work
+        // directly, need proper peer ID     // TODO: Get actual peer NodeId from connection
         //
         //     // Handle the message (placeholder for actual message handling)
         //     tracing::debug!("Received message type: {}", message.message_type);
@@ -542,7 +542,11 @@ impl P2PActor {
     pub fn add_verified_peer(&self, state: &Arc<Mutex<P2PActorState>>, peer_id: NodeId, xaero_id: XaeroID) {
         let mut state_guard = state.lock().expect("failed to unravel");
         state_guard.verified_peers.lock().expect("failed to unravel").insert(peer_id, xaero_id);
-        state_guard.peer_status.lock().expect("failed to unravel").insert(peer_id, PeerStatus::Verified { xaero_id });
+        state_guard
+            .peer_status
+            .lock()
+            .expect("failed to unravel")
+            .insert(peer_id, PeerStatus::Verified { xaero_id });
         tracing::info!("Added verified peer: {}", peer_id);
     }
 }
