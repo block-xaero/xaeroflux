@@ -1,6 +1,6 @@
 [package]
 name = "xaeroflux-core"
-version = "0.8.1-m5"
+version = "0.8.1-m6"
 edition = "2024"
 description = "EXPERIMENTAL: actor layer for xaeroflux"
 categories = ["database", "database-implementations"]
