@@ -123,18 +123,18 @@ impl P2PActorState {
         let iroh_endpoint = Endpoint::builder().alpns(vec![b"xaeroflux".to_vec()]).bind().await?;
 
         // Get writers to P2P ring buffers
-        let p2p_xs_ring = P2P_XS_RING.get_or_init(|| rusted_ring::RingBuffer::new());
-        let p2p_s_ring = P2P_S_RING.get_or_init(|| rusted_ring::RingBuffer::new());
-        let p2p_m_ring = P2P_M_RING.get_or_init(|| rusted_ring::RingBuffer::new());
-        let p2p_l_ring = P2P_L_RING.get_or_init(|| rusted_ring::RingBuffer::new());
-        let p2p_xl_ring = P2P_XL_RING.get_or_init(|| rusted_ring::RingBuffer::new());
+        let p2p_xs_ring = P2P_XS_RING.get_or_init(rusted_ring::RingBuffer::new);
+        let p2p_s_ring = P2P_S_RING.get_or_init(rusted_ring::RingBuffer::new);
+        let p2p_m_ring = P2P_M_RING.get_or_init(rusted_ring::RingBuffer::new);
+        let p2p_l_ring = P2P_L_RING.get_or_init(rusted_ring::RingBuffer::new);
+        let p2p_xl_ring = P2P_XL_RING.get_or_init(rusted_ring::RingBuffer::new);
 
         // Get readers from main ring buffers
-        let main_xs_ring = XS_RING.get_or_init(|| rusted_ring::RingBuffer::new());
-        let main_s_ring = S_RING.get_or_init(|| rusted_ring::RingBuffer::new());
-        let main_m_ring = M_RING.get_or_init(|| rusted_ring::RingBuffer::new());
-        let main_l_ring = L_RING.get_or_init(|| rusted_ring::RingBuffer::new());
-        let main_xl_ring = XL_RING.get_or_init(|| rusted_ring::RingBuffer::new());
+        let main_xs_ring = XS_RING.get_or_init(rusted_ring::RingBuffer::new);
+        let main_s_ring = S_RING.get_or_init(rusted_ring::RingBuffer::new);
+        let main_m_ring = M_RING.get_or_init(rusted_ring::RingBuffer::new);
+        let main_l_ring = L_RING.get_or_init(rusted_ring::RingBuffer::new);
+        let main_xl_ring = XL_RING.get_or_init(rusted_ring::RingBuffer::new);
 
         Ok(Self {
             topic,
@@ -164,7 +164,7 @@ impl P2PActorState {
 
         // Store challenge for this peer
         {
-            let mut status = self.peer_status.lock().unwrap();
+            let mut status = self.peer_status.lock().expect("failed to unravel");
             status.insert(peer_id, PeerStatus::Challenged { challenge });
         }
 
@@ -187,7 +187,7 @@ impl P2PActorState {
     /// Verify peer's identity response
     pub fn verify_peer_response(&self, peer_id: NodeId, xaero_id: XaeroID, signature: &[u8]) -> Result<bool> {
         let challenge = {
-            let status = self.peer_status.lock().unwrap();
+            let status = self.peer_status.lock().expect("failed to unravel");
             match status.get(&peer_id) {
                 Some(PeerStatus::Challenged { challenge }) => *challenge,
                 _ => return Ok(false),
@@ -201,18 +201,18 @@ impl P2PActorState {
         if is_valid {
             // Add to verified peers
             {
-                let mut verified = self.verified_peers.lock().unwrap();
+                let mut verified = self.verified_peers.lock().expect("failed to unravel");
                 verified.insert(peer_id, xaero_id);
             }
             {
-                let mut status = self.peer_status.lock().unwrap();
+                let mut status = self.peer_status.lock().expect("failed to unravel");
                 status.insert(peer_id, PeerStatus::Verified { xaero_id });
             }
 
             tracing::info!("Peer verified successfully: {}", peer_id);
         } else {
             {
-                let mut status = self.peer_status.lock().unwrap();
+                let mut status = self.peer_status.lock().expect("failed to unravel");
                 status.insert(peer_id, PeerStatus::Rejected);
             }
             tracing::warn!("Peer verification failed: {}", peer_id);
@@ -223,7 +223,7 @@ impl P2PActorState {
 
     /// Generate random challenge for peer verification
     fn generate_challenge(&self) -> [u8; 32] {
-        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).expect("failed to unravel").as_secs();
 
         let mut challenge = [0u8; 32];
         challenge[..8].copy_from_slice(&timestamp.to_le_bytes());
@@ -259,7 +259,7 @@ impl P2PActorState {
     /// Broadcast message to all verified peers
     async fn broadcast_to_verified_peers(&self, message: P2PMessage) -> Result<()> {
         let verified_peers: Vec<NodeId> = {
-            let peers = self.verified_peers.lock().unwrap();
+            let peers = self.verified_peers.lock().expect("failed to unravel");
             peers.keys().cloned().collect()
         };
 
@@ -320,31 +320,31 @@ impl P2PActorState {
         let mut events = Vec::new();
 
         // Read XS events
-        while let Some(event) = self.main_xs_reader.next() {
+        for event in self.main_xs_reader.by_ref() {
             let data = event.data[..event.len as usize].to_vec();
             events.push((data, event.event_type));
         }
 
         // Read S events
-        while let Some(event) = self.main_s_reader.next() {
+        for event in self.main_s_reader.by_ref() {
             let data = event.data[..event.len as usize].to_vec();
             events.push((data, event.event_type));
         }
 
         // Read M events
-        while let Some(event) = self.main_m_reader.next() {
+        for event in self.main_m_reader.by_ref() {
             let data = event.data[..event.len as usize].to_vec();
             events.push((data, event.event_type));
         }
 
         // Read L events
-        while let Some(event) = self.main_l_reader.next() {
+        for event in self.main_l_reader.by_ref() {
             let data = event.data[..event.len as usize].to_vec();
             events.push((data, event.event_type));
         }
 
         // Read XL events
-        while let Some(event) = self.main_xl_reader.next() {
+        for event in self.main_xl_reader.by_ref() {
             let data = event.data[..event.len as usize].to_vec();
             events.push((data, event.event_type));
         }
@@ -356,7 +356,7 @@ impl P2PActorState {
     async fn handle_mmr_sync(&self, peer_id: NodeId) -> Result<()> {
         // Get our current MMR state
         let (our_root, our_leaf_count) = {
-            let aof = self.aof_state.lock().unwrap();
+            let aof = self.aof_state.lock().expect("failed to unravel");
             (aof.get_mmr_root(), aof.mmr.leaf_count)
         };
 
@@ -381,7 +381,7 @@ impl P2PActorState {
     async fn request_missing_events(&self, peer_id: NodeId, peer_root: [u8; 32], peer_leaf_count: u64) -> Result<()> {
         // Compare with our MMR to find missing events
         let missing_hashes = {
-            let aof = self.aof_state.lock().unwrap();
+            let aof = self.aof_state.lock().expect("failed to unravel");
             self.calculate_mmr_diff(&aof, peer_root, peer_leaf_count)?
         };
 
@@ -433,7 +433,7 @@ impl P2PActorState {
     /// Handle request for events from peer
     async fn handle_event_request(&self, peer_id: NodeId, leaf_hashes: Vec<[u8; 32]>) -> Result<()> {
         let events = {
-            let aof = self.aof_state.lock().unwrap();
+            let aof = self.aof_state.lock().expect("failed to unravel");
             aof.get_events_for_leaf_hashes(&leaf_hashes)
         };
 
@@ -466,7 +466,7 @@ impl P2PActorState {
         //
         // // Deserialize message
         // if let Ok(message) = rkyv::from_bytes::<P2PMessage>(&buffer) {
-        //     let peer_id = connection.remote_address().unwrap(); // This won't work directly, need proper
+        //     let peer_id = connection.remote_address().expect("failed to unravel"); // This won't work directly, need proper
         // peer ID     // TODO: Get actual peer NodeId from connection
         //
         //     // Handle the message (placeholder for actual message handling)
@@ -505,22 +505,22 @@ impl P2PActor {
     fn outgoing_loop(state: Arc<Mutex<P2PActorState>>) {
         loop {
             let events = {
-                let mut state_guard = state.lock().unwrap();
+                let mut state_guard = state.lock().expect("failed to unravel");
                 state_guard.read_from_main_rings()
             };
 
             if !events.is_empty() {
                 // Broadcast events to verified peers
-                let rt = tokio::runtime::Runtime::new().unwrap();
+                let rt = tokio::runtime::Runtime::new().expect("failed to unravel");
                 rt.block_on(async {
-                    let state_guard = state.lock().unwrap();
+                    let state_guard = state.lock().expect("failed to unravel");
                     for (event_data, event_type) in events {
                         let mut broadcast_payload = P2PPayload::zeroed();
                         let data_len = std::cmp::min(event_data.len(), 16384);
                         broadcast_payload.event_data[..data_len].copy_from_slice(&event_data[..data_len]);
                         broadcast_payload.event_data_len = data_len as u32;
                         broadcast_payload.event_type = event_type;
-                        broadcast_payload.timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+                        broadcast_payload.timestamp = SystemTime::now().duration_since(UNIX_EPOCH).expect("failed to unravel").as_secs();
 
                         let broadcast_msg = P2PMessage {
                             message_type: MSG_TYPE_EVENT_BROADCAST,
@@ -540,9 +540,9 @@ impl P2PActor {
 
     /// Add a verified peer manually (for testing/bootstrapping)
     pub fn add_verified_peer(&self, state: &Arc<Mutex<P2PActorState>>, peer_id: NodeId, xaero_id: XaeroID) {
-        let mut state_guard = state.lock().unwrap();
-        state_guard.verified_peers.lock().unwrap().insert(peer_id, xaero_id);
-        state_guard.peer_status.lock().unwrap().insert(peer_id, PeerStatus::Verified { xaero_id });
+        let mut state_guard = state.lock().expect("failed to unravel");
+        state_guard.verified_peers.lock().expect("failed to unravel").insert(peer_id, xaero_id);
+        state_guard.peer_status.lock().expect("failed to unravel").insert(peer_id, PeerStatus::Verified { xaero_id });
         tracing::info!("Added verified peer: {}", peer_id);
     }
 }
@@ -553,6 +553,7 @@ impl P2PActor {
 
 #[cfg(test)]
 mod tests {
+    use xaeroflux_core::initialize;
     use xaeroid::XaeroID;
 
     use super::*;
@@ -560,6 +561,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_p2p_actor_creation() {
+        initialize();
         let topic = [1u8; 32];
         let xaero_id = XaeroID::zeroed(); // Mock XaeroID
         let aof_state = Arc::new(Mutex::new(AofState::new().expect("Failed to create AOF state")));
@@ -572,13 +574,14 @@ mod tests {
 
     #[test]
     fn test_challenge_generation() {
+        initialize();
         let topic = [1u8; 32];
         let xaero_id = XaeroID::zeroed();
         let aof_state = Arc::new(Mutex::new(AofState::new().expect("Failed to create AOF state")));
 
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().expect("failed to unravel");
         rt.block_on(async {
-            let state = P2PActorState::new(topic, xaero_id, aof_state).await.unwrap();
+            let state = P2PActorState::new(topic, xaero_id, aof_state).await.expect("failed to unravel");
             let challenge1 = state.generate_challenge();
             let challenge2 = state.generate_challenge();
 

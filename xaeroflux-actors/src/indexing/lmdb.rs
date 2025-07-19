@@ -11,6 +11,12 @@ pub struct LmdbVectorSearchDb {
     pub env: LmdbEnv,
 }
 
+impl Default for LmdbVectorSearchDb {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LmdbVectorSearchDb {
     pub fn new() -> Self {
         match LmdbEnv::new("vector_search") {

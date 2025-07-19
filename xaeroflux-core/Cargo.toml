@@ -23,11 +23,8 @@ xaeroid = { workspace = true }
 ed25519-dalek = { version = "2.1.1", features = ["rand_core"] }
 rand = "0.8"
 tokio = { version = "1.45.1", default-features = false, features = ["rt-multi-thread", "macros", "net", "sync"] }
-tokio-stream = "0.1.17"
-crdts = "7.3.2"
 bytemuck = "1.23.0"
 rkyv = "0.8.10"
-rkyv_dyn = "0.7.44"
 threadpool = "1.8.1"
 figlet-rs = "0.1.5"
 toml = "0.8.22"
@@ -39,8 +36,4 @@ tempfile = "3.20.0"
 memmap2 = "0.9.5"
 crossbeam = "0.8.4"
 serde = { version = "1.0.219", features = ["derive"] }
-rustfix = "0.9.0"
 libc = "0.2.172"
-thiserror = "2.0.12"
-bincode = "2.0.1"
-log = "0.4.27"

@@ -57,7 +57,7 @@ impl VectorRegistry {
         vector_dimension: usize,
     ) -> Self {
         Self {
-            hnsw: Hnsw::new(max_nb_connection, max_elements, max_layer, ef_construction, DistCosine::default()),
+            hnsw: Hnsw::new(max_nb_connection, max_elements, max_layer, ef_construction, DistCosine),
             node_to_event: HashMap::new(),
             event_to_node: HashMap::new(),
             vector_dimension,
@@ -138,13 +138,19 @@ pub struct VectorReaderMultiplexer {
     pub xl_reader: Reader<XL_TSHIRT_SIZE, XL_CAPACITY>,
 }
 
+impl Default for VectorReaderMultiplexer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VectorReaderMultiplexer {
     pub fn new() -> Self {
-        let xs_ring = XS_RING.get_or_init(|| RingBuffer::new());
-        let s_ring = S_RING.get_or_init(|| RingBuffer::new());
-        let m_ring = M_RING.get_or_init(|| RingBuffer::new());
-        let l_ring = L_RING.get_or_init(|| RingBuffer::new());
-        let xl_ring = XL_RING.get_or_init(|| RingBuffer::new());
+        let xs_ring = XS_RING.get_or_init(RingBuffer::new);
+        let s_ring = S_RING.get_or_init(RingBuffer::new);
+        let m_ring = M_RING.get_or_init(RingBuffer::new);
+        let l_ring = L_RING.get_or_init(RingBuffer::new);
+        let xl_ring = XL_RING.get_or_init(RingBuffer::new);
 
         Self {
             xs_reader: Reader::new(xs_ring),
@@ -159,7 +165,7 @@ impl VectorReaderMultiplexer {
     pub fn process_events(&mut self, registry: &mut VectorRegistry) -> bool {
         // Check XS first (highest priority)
         if let Some(event) = self.xs_reader.next() {
-            if let Ok(_) = VectorSearchActor::process_ring_event_sized::<XS_TSHIRT_SIZE>(registry, &event) {
+            if VectorSearchActor::process_ring_event_sized::<XS_TSHIRT_SIZE>(registry, &event).is_ok() {
                 tracing::debug!("Indexed XS event vector");
             }
             return true;
@@ -167,7 +173,7 @@ impl VectorReaderMultiplexer {
 
         // Check S
         if let Some(event) = self.s_reader.next() {
-            if let Ok(_) = VectorSearchActor::process_ring_event_sized::<S_TSHIRT_SIZE>(registry, &event) {
+            if VectorSearchActor::process_ring_event_sized::<S_TSHIRT_SIZE>(registry, &event).is_ok() {
                 tracing::debug!("Indexed S event vector");
             }
             return true;
@@ -175,7 +181,7 @@ impl VectorReaderMultiplexer {
 
         // Check M
         if let Some(event) = self.m_reader.next() {
-            if let Ok(_) = VectorSearchActor::process_ring_event_sized::<M_TSHIRT_SIZE>(registry, &event) {
+            if VectorSearchActor::process_ring_event_sized::<M_TSHIRT_SIZE>(registry, &event).is_ok() {
                 tracing::debug!("Indexed M event vector");
             }
             return true;
@@ -183,7 +189,7 @@ impl VectorReaderMultiplexer {
 
         // Check L
         if let Some(event) = self.l_reader.next() {
-            if let Ok(_) = VectorSearchActor::process_ring_event_sized::<L_TSHIRT_SIZE>(registry, &event) {
+            if VectorSearchActor::process_ring_event_sized::<L_TSHIRT_SIZE>(registry, &event).is_ok() {
                 tracing::debug!("Indexed L event vector");
             }
             return true;
@@ -191,7 +197,7 @@ impl VectorReaderMultiplexer {
 
         // Check XL
         if let Some(event) = self.xl_reader.next() {
-            if let Ok(_) = VectorSearchActor::process_ring_event_sized::<XL_TSHIRT_SIZE>(registry, &event) {
+            if VectorSearchActor::process_ring_event_sized::<XL_TSHIRT_SIZE>(registry, &event).is_ok() {
                 tracing::debug!("Indexed XL event vector");
             }
             return true;
@@ -274,12 +280,11 @@ impl VectorSearchState {
     /// Bulk search LMDB for event data
     fn bulk_search_lmdb(&self, event_keys: Vec<EventKey>) -> HashMap<EventKey, Vec<u8>> {
         // Use the improved bulk search from LmdbVectorSearchDb
-        let mut results = HashMap::new();
 
         // Call the bulk_search method from your LmdbVectorSearchDb
         // Note: You'll need to make the method compatible with returning Vec<u8> instead of references
 
-        results
+        HashMap::new()
     }
 }
 
@@ -318,7 +323,7 @@ impl VectorSearchActor {
             loop {
                 // Process events with priority (XS first, then S, M, L, XL)
                 let processed = {
-                    let mut state_guard = indexer_state.lock().unwrap();
+                    let mut state_guard = indexer_state.lock().expect("failed to unravel");
                     multiplexer.process_events(&mut state_guard.registry)
                 };
 
@@ -402,13 +407,13 @@ impl VectorSearchActor {
 
     /// Perform a vector search query (thread-safe)
     pub fn search(&self, query: &VectorQueryRequest<256>) -> VectorQueryResponse<5> {
-        let state = self.query_handler.lock().unwrap();
+        let state = self.query_handler.lock().expect("failed to unravel");
         state.search(query)
     }
 
     /// Get current index statistics
     pub fn get_stats(&self) -> (usize, usize) {
-        let state = self.query_handler.lock().unwrap();
+        let state = self.query_handler.lock().expect("failed to unravel");
         (state.registry.next_node_id, state.registry.node_to_event.len())
     }
 }
