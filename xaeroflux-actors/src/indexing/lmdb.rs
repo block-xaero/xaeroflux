@@ -212,6 +212,7 @@ impl LmdbVectorSearchDb {
 #[cfg(test)]
 mod tests {
     use xaeroflux_core::initialize;
+
     use super::*;
     use crate::aof::storage::format::EventKey;
 
