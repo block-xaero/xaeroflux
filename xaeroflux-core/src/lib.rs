@@ -19,7 +19,7 @@ pub mod pool;
 pub mod size;
 pub mod sys;
 pub mod system_paths;
-mod vector_clock;
+pub mod vector_clock;
 pub mod vector_clock_actor;
 
 use std::{

@@ -32,10 +32,11 @@ push-remote       = "origin"
 libc = "0.2.172"
 
 [dependencies]
+parking_lot = "0.12"
 hnsw_rs = "0.3.2"
 rusted-ring = {workspace = true}
 xaeroid = { workspace = true }
-xaeroflux-core = { version = "0.8.1-m6" }
+xaeroflux-core = { path = "../xaeroflux-core" }
 rand = "0.8"
 iroh = {version = "0.90.0", "default-features" = true, features = ["discovery-local-network", "discovery-pkarr-dht"] }
 iroh-gossip = { version = "0.90.0", default-features = false, features = ["net"] }
@@ -48,6 +49,20 @@ anyhow = "1.0.98"
 liblmdb = "0.9.70"
 tempfile = "3.20.0"
 libc = "0.2.172"
+pkcs8 = "0.10.2"
+time = "0.3.41"
+pin-project = "1.1.10"
+url = "2.5.4"
+quinn = "0.11.8"
+quinn-proto = "0.11.12"
+derive_more = "1.0.0"
+bytes = "1.10.1"
+rustls = "0.23.29"
+rand_chacha = "0.3.1"
+futures-lite = "2.6.0"
+futures-core = "0.3.31"
+futures = "0.3.31"
+tracing-subscriber = "0.2.25"
 
 
 [profile.release]
