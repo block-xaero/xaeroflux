@@ -1,14 +1,21 @@
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
+
 use anyhow::Result;
 use bytemuck::{Pod, Zeroable};
-use iroh::Watcher;
 use iroh::{
-    discovery::UserData, endpoint::{Connection, RecvStream, SendStream}, Endpoint,
-    NodeAddr,
-    SecretKey,
+    Endpoint, NodeAddr, SecretKey, Watcher,
+    discovery::UserData,
+    endpoint::{Connection, RecvStream, SendStream},
 };
 use rusted_ring::{PooledEvent, Reader, RingBuffer, Writer};
-use std::{collections::HashMap, sync::{atomic::{AtomicBool, Ordering}, Arc}, time::Duration};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use xaeroflux_core::{hash::blake_hash_slice, pool::XaeroPeerEvent};
 use xaeroid::XaeroID;
 
@@ -40,7 +47,7 @@ impl<const TSHIRT: usize, const RING_CAPACITY: usize> P2pActor<TSHIRT, RING_CAPA
     /// Create new P2P actor with ring buffer
     pub async fn new(
         ring_buffer: &'static RingBuffer<TSHIRT, RING_CAPACITY>,
-        our_xaero_id: XaeroID
+        our_xaero_id: XaeroID,
     ) -> Result<(Self, Writer<TSHIRT, RING_CAPACITY>, Reader<TSHIRT, RING_CAPACITY>)> {
         let xaero_user_data = XaeroUserData {
             xaero_id_hash: blake_hash_slice(&our_xaero_id.did_peer[..our_xaero_id.did_peer_len as usize]),
@@ -71,8 +78,7 @@ impl<const TSHIRT: usize, const RING_CAPACITY: usize> P2pActor<TSHIRT, RING_CAPA
         let sk = SecretKey::from_bytes(&blake_hash_slice(&xaero_id.secret_key));
 
         let user_data_hex = hex::encode(bytemuck::bytes_of(&xaero_user_data));
-        let user_data: UserData = user_data_hex.try_into()
-            .map_err(|_| anyhow::anyhow!("Invalid user data"))?;
+        let user_data: UserData = user_data_hex.try_into().map_err(|_| anyhow::anyhow!("Invalid user data"))?;
 
         let ep = Endpoint::builder()
             .secret_key(sk)
@@ -87,11 +93,7 @@ impl<const TSHIRT: usize, const RING_CAPACITY: usize> P2pActor<TSHIRT, RING_CAPA
     }
 
     /// Start the P2P actor with all tasks
-    pub async fn start(
-        self,
-        writer: Writer<TSHIRT, RING_CAPACITY>,
-        reader: Reader<TSHIRT, RING_CAPACITY>
-    ) -> Result<()> {
+    pub async fn start(self, writer: Writer<TSHIRT, RING_CAPACITY>, reader: Reader<TSHIRT, RING_CAPACITY>) -> Result<()> {
         // Set running flag
         self.running.store(true, Ordering::Relaxed);
 
@@ -210,9 +212,7 @@ impl<const TSHIRT: usize, const RING_CAPACITY: usize> P2pActor<TSHIRT, RING_CAPA
 
                         if !peers.is_empty() {
                             // Broadcast to all peers
-                            let broadcast_results = futures::future::join_all(
-                                peers.into_iter().map(|conn| Self::send_event_to_peer(conn, event))
-                            ).await;
+                            let broadcast_results = futures::future::join_all(peers.into_iter().map(|conn| Self::send_event_to_peer(conn, event))).await;
 
                             // Count successful broadcasts
                             let successful = broadcast_results.iter().filter(|r| r.is_ok()).count();
@@ -310,13 +310,8 @@ impl<const TSHIRT: usize, const RING_CAPACITY: usize> P2pActor<TSHIRT, RING_CAPA
     }
 
     /// Handle individual peer connection
-    async fn handle_connection(
-        event_sender: mpsc::UnboundedSender<PooledEvent<TSHIRT>>,
-        conn: Connection,
-    ) {
-        let remote_node_id = conn.remote_node_id()
-            .map(|id| id.fmt_short())
-            .unwrap_or_else(|_| "unknown".to_string());
+    async fn handle_connection(event_sender: mpsc::UnboundedSender<PooledEvent<TSHIRT>>, conn: Connection) {
+        let remote_node_id = conn.remote_node_id().map(|id| id.fmt_short()).unwrap_or_else(|_| "unknown".to_string());
 
         tracing::info!("Handling connection from peer: {}", remote_node_id);
 
@@ -337,11 +332,7 @@ impl<const TSHIRT: usize, const RING_CAPACITY: usize> P2pActor<TSHIRT, RING_CAPA
     }
 
     /// Handle individual stream
-    async fn handle_stream(
-        event_sender: mpsc::UnboundedSender<PooledEvent<TSHIRT>>,
-        mut send: SendStream,
-        mut recv: RecvStream,
-    ) -> Result<()> {
+    async fn handle_stream(event_sender: mpsc::UnboundedSender<PooledEvent<TSHIRT>>, mut send: SendStream, mut recv: RecvStream) -> Result<()> {
         // Read exactly one PooledEvent
         let mut bytes = [0u8; TSHIRT];
         recv.read_exact(&mut bytes).await?;
@@ -352,8 +343,7 @@ impl<const TSHIRT: usize, const RING_CAPACITY: usize> P2pActor<TSHIRT, RING_CAPA
         tracing::debug!("Received event: type={}, len={}", pooled_event.event_type, pooled_event.len);
 
         // Send to single writer via channel
-        event_sender.send(pooled_event)
-            .map_err(|_| anyhow::anyhow!("Writer task died"))?;
+        event_sender.send(pooled_event).map_err(|_| anyhow::anyhow!("Writer task died"))?;
 
         // Send acknowledgment
         send.write_all(b"ACK").await?;
@@ -406,10 +396,12 @@ impl<const TSHIRT: usize, const RING_CAPACITY: usize> P2pActor<TSHIRT, RING_CAPA
         Ok(XaeroID::zeroed())
     }
 
-
     /// Get current node address (convenience method)
     pub async fn current_node_addr(&self) -> Result<NodeAddr> {
-        self.endpoint.node_addr().initialized().await
+        self.endpoint
+            .node_addr()
+            .initialized()
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to get node address: {:?}", e))
     }
 
@@ -453,9 +445,11 @@ pub fn create_test_event<const TSHIRT: usize>(data: &[u8], event_type: u32) -> P
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use rusted_ring::RingBuffer;
     use std::sync::OnceLock;
+
+    use rusted_ring::RingBuffer;
+
+    use super::*;
 
     const TEST_TSHIRT_SIZE: usize = 1024;
     const TEST_RING_CAPACITY: usize = 16;
@@ -599,10 +593,7 @@ mod tests {
 
         assert_eq!(test_event.len, deserialized.len);
         assert_eq!(test_event.event_type, deserialized.event_type);
-        assert_eq!(
-            &test_event.data[..test_event.len as usize],
-            &deserialized.data[..deserialized.len as usize]
-        );
+        assert_eq!(&test_event.data[..test_event.len as usize], &deserialized.data[..deserialized.len as usize]);
 
         println!("✅ Event serialization working");
     }
@@ -617,9 +608,7 @@ mod tests {
             .expect("Failed to create actor");
 
         // Start actor in background
-        let actor_handle = tokio::spawn(async move {
-            actor.start(writer, reader).await
-        });
+        let actor_handle = tokio::spawn(async move { actor.start(writer, reader).await });
 
         // Let it run for a short time
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -643,8 +632,9 @@ mod tests {
 
 #[cfg(test)]
 mod integration_tests {
-    use super::*;
     use std::sync::OnceLock;
+
+    use super::*;
 
     #[tokio::test]
     #[ignore] // Run with --ignored for integration tests
