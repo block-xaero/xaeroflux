@@ -3,4 +3,4 @@ resolver = "3"
 members = ["xaeroflux", "xaeroflux-actors", "xaeroflux-core"]
 [workspace.dependencies]
 xaeroid = { version = "0.4.1" }
-rusted-ring = { version = "0.5.5" }
+rusted-ring = { version = "0.5.6" }
