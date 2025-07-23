@@ -211,11 +211,13 @@ impl LmdbVectorSearchDb {
 
 #[cfg(test)]
 mod tests {
+    use xaeroflux_core::initialize;
     use super::*;
     use crate::aof::storage::format::EventKey;
 
     #[test]
     fn test_lmdb_vector_search_db_creation() {
+        initialize();
         let db = LmdbVectorSearchDb::new();
         // Basic creation test - if it doesn't panic, it worked
         assert!(true);
