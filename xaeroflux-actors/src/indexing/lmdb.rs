@@ -1,7 +1,7 @@
 use std::{collections::HashMap, error::Error};
 
 use bytemuck::bytes_of;
-use liblmdb::{MDB_RDONLY, MDB_txn, MDB_val, mdb_get, mdb_txn_abort, mdb_txn_begin};
+use liblmdb::{MDB_RDONLY, MDB_txn, MDB_val, mdb_env_set_maxdbs, mdb_get, mdb_txn_abort, mdb_txn_begin};
 use xaeroflux_core::pool::XaeroInternalEvent;
 
 use crate::aof::storage::{format::EventKey, lmdb::LmdbEnv};
@@ -19,8 +19,14 @@ impl Default for LmdbVectorSearchDb {
 
 impl LmdbVectorSearchDb {
     pub fn new() -> Self {
-        match LmdbEnv::new("vector_search") {
-            Ok(e) => LmdbVectorSearchDb { env: e },
+       Self::new_with_path("vector_search_db")
+    }
+
+    pub fn new_with_path(path: &str) -> Self {
+        match LmdbEnv::new(path) {
+            Ok(e) => {
+                LmdbVectorSearchDb { env: e }
+            }
             Err(e) => {
                 panic!("Error creating LmdbVectorSearchDb due to {}", e);
             }
@@ -211,23 +217,66 @@ impl LmdbVectorSearchDb {
 
 #[cfg(test)]
 mod tests {
+    use tempfile::tempdir;
     use xaeroflux_core::initialize;
 
     use super::*;
     use crate::aof::storage::format::EventKey;
 
     #[test]
+    fn test_minimal_lmdb_creation() {
+        use std::ffi::CString;
+        use tempfile::tempdir;
+
+        let dir = tempdir().expect("failed to create temp dir");
+        let path = dir.path().join("minimal_test");
+        std::fs::create_dir_all(&path).expect("failed to create dir");
+
+        unsafe {
+            let mut env = std::ptr::null_mut();
+
+            // Step 1: Create
+            let rc1 = liblmdb::mdb_env_create(&mut env);
+            println!("mdb_env_create: {}", rc1);
+            assert_eq!(rc1, 0);
+
+            // Step 2: Set maxdbs (try very small number)
+            let rc2 = liblmdb::mdb_env_set_maxdbs(env, 2);
+            println!("mdb_env_set_maxdbs(2): {}", rc2);
+
+            // Step 3: Set mapsize
+            let rc3 = liblmdb::mdb_env_set_mapsize(env, 1 << 20); // 1MB instead of 1GB
+            println!("mdb_env_set_mapsize: {}", rc3);
+
+            // Step 4: Open
+            let cs = CString::new(path.to_str().unwrap()).unwrap();
+            let rc4 = liblmdb::mdb_env_open(env, cs.as_ptr(), liblmdb::MDB_CREATE, 0o600);
+            println!("mdb_env_open: {}", rc4);
+
+            if rc4 == 0 {
+                println!("✅ Minimal LMDB creation successful");
+                liblmdb::mdb_env_close(env);
+            } else {
+                println!("❌ mdb_env_open failed with code: {}", rc4);
+            }
+        }
+    }
+
+    #[test]
     fn test_lmdb_vector_search_db_creation() {
         initialize();
-        let db = LmdbVectorSearchDb::new();
-        // Basic creation test - if it doesn't panic, it worked
+        let dir = tempdir().expect("failed to create temp dir");
+        let path = format!("{}/vector_search_creation", dir.path().to_str().unwrap());
+        let db = LmdbVectorSearchDb::new_with_path(&path);
         assert!(true);
         println!("✅ LmdbVectorSearchDb created successfully");
     }
 
     #[test]
     fn test_bulk_search_empty() {
-        let db = LmdbVectorSearchDb::new();
+        let dir = tempdir().expect("failed to create temp dir");
+        let path = format!("{}/bulk_search_empty", dir.path().to_str().unwrap());
+        let db = LmdbVectorSearchDb::new_with_path(&path);
         let empty_keys = vec![];
         let results = db.bulk_search_raw(empty_keys);
         assert!(results.is_empty());
@@ -236,7 +285,9 @@ mod tests {
 
     #[test]
     fn test_bulk_search_nonexistent_keys() {
-        let db = LmdbVectorSearchDb::new();
+        let dir = tempdir().expect("failed to create temp dir");
+        let path = format!("{}/bulk_search_nonexistent", dir.path().to_str().unwrap());
+        let db = LmdbVectorSearchDb::new_with_path(&path);
 
         let fake_keys = vec![
             EventKey {
@@ -262,7 +313,9 @@ mod tests {
 
     #[test]
     fn test_contains_key_nonexistent() {
-        let db = LmdbVectorSearchDb::new();
+        let dir = tempdir().expect("failed to create temp dir");
+        let path = format!("{}/contains_key_test", dir.path().to_str().unwrap());
+        let db = LmdbVectorSearchDb::new_with_path(&path);
 
         let fake_key = EventKey {
             xaero_id_hash: [99; 32],
@@ -278,7 +331,9 @@ mod tests {
 
     #[test]
     fn test_get_raw_nonexistent() {
-        let db = LmdbVectorSearchDb::new();
+        let dir = tempdir().expect("failed to create temp dir");
+        let path = format!("{}/get_raw_test", dir.path().to_str().unwrap());
+        let db = LmdbVectorSearchDb::new_with_path(&path);
 
         let fake_key = EventKey {
             xaero_id_hash: [11; 32],

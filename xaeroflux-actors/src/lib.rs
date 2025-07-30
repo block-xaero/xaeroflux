@@ -9,10 +9,12 @@ use std::{
 };
 
 use rusted_ring::{
-    L_CAPACITY, L_TSHIRT_SIZE, M_CAPACITY, M_TSHIRT_SIZE, PooledEvent, RingBuffer, S_CAPACITY, S_TSHIRT_SIZE, Writer, XL_CAPACITY, XL_TSHIRT_SIZE, XS_CAPACITY, XS_TSHIRT_SIZE,
+    PooledEvent, RingBuffer, Writer, L_CAPACITY, L_TSHIRT_SIZE, M_CAPACITY, M_TSHIRT_SIZE, S_CAPACITY, S_TSHIRT_SIZE, XL_CAPACITY, XL_TSHIRT_SIZE, XS_CAPACITY, XS_TSHIRT_SIZE,
 };
+use xaeroid::XaeroID;
 
-use crate::aof::ring_buffer_actor::AofActor;
+use crate::{aof::ring_buffer_actor::AofActor, networking::p2p::P2pActor};
+
 // ================================================================================================
 // GLOBAL RING BUFFERS - MAIN (EventBus writes to these, AOF/VectorSearch read from these)
 // ================================================================================================
@@ -191,6 +193,7 @@ pub struct XaeroFlux {
     pub event_bus: EventBus,
     pub vector_search: Option<Arc<VectorSearchActor>>,
     pub aof_handle: Option<JoinHandle<()>>,
+    pub p2p_handle: Option<JoinHandle<()>>,
 }
 
 impl Default for XaeroFlux {
@@ -206,6 +209,7 @@ impl XaeroFlux {
             event_bus: EventBus::new(),
             vector_search: None,
             aof_handle: None,
+            p2p_handle: None,
         }
     }
 
@@ -213,6 +217,37 @@ impl XaeroFlux {
     pub fn start_aof(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let aof_actor = AofActor::spin()?;
         self.aof_handle = Some(aof_actor.jh);
+        Ok(())
+    }
+
+    /// Start P2P networking with XaeroID
+    pub fn start_p2p(&mut self, xaero_id: XaeroID) -> Result<(), Box<dyn std::error::Error>> {
+        // Ensure AOF is started first
+        if self.aof_handle.is_none() {
+            return Err("AOF must be started before P2P".into());
+        }
+        let p2p_handle = std::thread::spawn(move || {
+            let rt = tokio::runtime::Handle::current();
+            let handle = rt.spawn(async move {
+                // Get static reference to S ring buffer
+                let s_ring: &'static RingBuffer<S_TSHIRT_SIZE, S_CAPACITY> = S_RING.get_or_init(RingBuffer::new);
+
+                // Create a simple AofState for P2P actor
+                let aof_state = Arc::new(crate::aof::ring_buffer_actor::AofState::new().expect("failed to create ring buffer actor"));
+
+                match P2pActor::<S_TSHIRT_SIZE, S_CAPACITY>::new(s_ring, xaero_id, aof_state).await {
+                    Ok((mut actor, writer, reader)) =>
+                        if let Err(e) = actor.start(writer, reader).await {
+                            tracing::error!("P2P actor failed: {:?}", e);
+                        },
+                    Err(e) => {
+                        tracing::error!("Failed to create P2P actor: {:?}", e);
+                    }
+                }
+            });
+        });
+
+        self.p2p_handle = Some(p2p_handle);
         Ok(())
     }
 
@@ -235,6 +270,16 @@ impl XaeroFlux {
     /// Write event data to optimal ring buffer
     pub fn write_event(&mut self, data: &[u8], event_type: u32) -> Result<(), XaeroFluxError> {
         self.event_bus.write_optimal(data, event_type)
+    }
+
+    /// Send text message via P2P (convenience method)
+    pub fn send_text(&mut self, text: &str) -> Result<(), XaeroFluxError> {
+        self.write_event(text.as_bytes(), 1) // event_type 1 for text
+    }
+
+    /// Send file via P2P (convenience method)
+    pub fn send_file_data(&mut self, file_data: &[u8]) -> Result<(), XaeroFluxError> {
+        self.write_event(file_data, 2) // event_type 2 for files
     }
 
     // ================================================================================================
@@ -361,6 +406,7 @@ mod tests {
         let xf = XaeroFlux::new();
         assert!(xf.vector_search.is_none());
         assert!(xf.aof_handle.is_none());
+        assert!(xf.p2p_handle.is_none());
 
         println!("✅ XaeroFlux created successfully");
     }
@@ -374,6 +420,16 @@ mod tests {
         assert!(result.is_ok());
 
         println!("✅ XaeroFlux write_event works");
+    }
+
+    #[test]
+    fn test_send_text() {
+        let mut xf = XaeroFlux::new();
+
+        let result = xf.send_text("Hello P2P world!");
+        assert!(result.is_ok());
+
+        println!("✅ XaeroFlux send_text works");
     }
 
     #[test]

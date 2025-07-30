@@ -1,4 +1,4 @@
-use rkyv::Archive;
+use rkyv::{Archive, Deserialize, Serialize};
 use xaeroflux_core::{
     hash::sha_256_concat_hash,
     merkle_tree::{XaeroMerkleProof, XaeroMerkleTree, XaeroMerkleTreeOps},
@@ -6,7 +6,7 @@ use xaeroflux_core::{
 
 /// Peak represents a peak in the Merkle Mountain Range (MMR).
 #[repr(C)]
-#[derive(Clone, Copy, Archive, Debug)]
+#[derive(Clone, Copy, Archive, Serialize, Debug)]
 #[rkyv(derive(Debug))]
 pub struct Peak {
     pub height: usize,
@@ -17,7 +17,7 @@ pub struct Peak {
 #[repr(C)]
 #[derive(Clone, Archive, Debug)]
 #[rkyv(derive(Debug))]
-pub struct XaeroMmr {
+pub struct  XaeroMmr {
     pub root: [u8; 32],
     pub peaks: Vec<Peak>,
     pub leaf_count: usize,

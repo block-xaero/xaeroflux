@@ -48,12 +48,32 @@ pub const CRDT_REGISTER_WRITE: u8 = 43;
 pub const CRDT_REGISTER_STATE: u8 = 44;
 
 // Reserve 45-59 for future CRDT types
+
+// Network Event Constants (Base 60+)
 pub const NETWORK_BASE: u8 = 60;
+
+// XSP (XaeroProtocol) Sync Events
+pub const MMR_PEAKS_EXCHANGE: u8 = 60;
+pub const MMR_DIFF: u8 = 61;
+pub const EVENTS_REQUEST: u8 = 62;
+pub const EVENTS_RESPONSE: u8 = 63;
+
+// Additional Network Events
+pub const PEER_CONNECTED: u8 = 64;
+pub const PEER_DISCONNECTED: u8 = 65;
+pub const FILE_TRANSFER_START: u8 = 66;
+pub const FILE_TRANSFER_COMPLETE: u8 = 67;
+pub const AUDIO_CALL_START: u8 = 68;
+pub const AUDIO_CALL_END: u8 = 69;
+pub const VIDEO_CALL_START: u8 = 70;
+pub const VIDEO_CALL_END: u8 = 71;
+
+// Reserve 72-127 for future network events
 
 #[repr(C)]
 /// Discriminant for different categories of events.
 ///
-/// Encodes application, system, metadata, network, and storage events.
+/// Encodes application, system, metadata, and network events.
 #[derive(Debug, Clone, Archive, Serialize, Deserialize, PartialEq, Eq)]
 #[rkyv(derive(Debug))]
 pub enum EventType {
@@ -65,8 +85,6 @@ pub enum EventType {
     MetaEvent(u8),
     /// Networking-level events, e.g., peer discovery or connection state.
     NetworkEvent(u8),
-    /// Storage subsystem events, e.g., segment rollover or compaction.
-    StorageEvent(u8),
 }
 
 impl Default for EventType {
@@ -78,9 +96,7 @@ impl Default for EventType {
 #[repr(C)]
 /// Specific kinds of system events controlling actor lifecycle and system operations.
 ///
-/// Includes basic lifecycle events (start, stop, pause, resume, shutdown, restart, replay),
-/// as well as events indicating payload writes, segment rollovers, page flushes,
-/// MMR appends, and secondary index operations.
+/// Includes basic lifecycle events for actor control.
 #[derive(Debug, Clone, Archive, Serialize, Deserialize, PartialEq, Eq)]
 #[rkyv(derive(Debug))]
 pub enum SystemEventKind {
@@ -96,31 +112,6 @@ pub enum SystemEventKind {
     Shutdown,
     /// Indicates the system or actor should restart.
     Restart,
-    /// Replay control events to rehydrate control bus state.
-    ReplayControl,
-    /// Replay data events to rehydrate application/data bus state.
-    ReplayData,
-    /// Indicates an event payload was written to a page.
-    PayloadWritten,
-    /// Indicates a segment rollover completed successfully.
-    SegmentRolledOver,
-    /// Indicates a segment rollover failed.
-    SegmentRollOverFailed,
-    /// Indicates a page was flushed successfully.
-    PageFlushed,
-    /// Indicates a page flush failed.
-    PageFlushFailed,
-    /// Indicates a leaf hash was appended to the MMR.
-    MmrAppended,
-    /// Indicates appending a leaf hash to the MMR failed.
-    MmrAppendFailed,
-    /// Indicates the secondary index entry was written.
-    SecondaryIndexWritten,
-    /// Indicates writing the secondary index entry failed.
-    SecondaryIndexFailed,
-    SubjectCreated,
-    WorkspaceCreated,
-    ObjectCreated,
 }
 
 impl EventType {
@@ -133,29 +124,17 @@ impl EventType {
         match value {
             0 => EventType::ApplicationEvent(0),
 
-            // SystemEventKind variants (map numbers → enum) - UNCHANGED
+            // SystemEventKind variants (map numbers → enum)
             1 => EventType::SystemEvent(SystemEventKind::Start),
             2 => EventType::SystemEvent(SystemEventKind::Stop),
             3 => EventType::SystemEvent(SystemEventKind::Pause),
             4 => EventType::SystemEvent(SystemEventKind::Resume),
             5 => EventType::SystemEvent(SystemEventKind::Shutdown),
             6 => EventType::SystemEvent(SystemEventKind::Restart),
-            7 => EventType::SystemEvent(SystemEventKind::ReplayControl),
-            8 => EventType::SystemEvent(SystemEventKind::ReplayData),
-            9 => EventType::SystemEvent(SystemEventKind::PayloadWritten),
-            10 => EventType::SystemEvent(SystemEventKind::SegmentRolledOver),
-            11 => EventType::SystemEvent(SystemEventKind::SegmentRollOverFailed),
-            12 => EventType::SystemEvent(SystemEventKind::PageFlushed),
-            13 => EventType::SystemEvent(SystemEventKind::PageFlushFailed),
-            14 => EventType::SystemEvent(SystemEventKind::MmrAppended),
-            15 => EventType::SystemEvent(SystemEventKind::MmrAppendFailed),
-            16 => EventType::SystemEvent(SystemEventKind::SecondaryIndexWritten),
-            17 => EventType::SystemEvent(SystemEventKind::SecondaryIndexFailed),
-            18 => EventType::SystemEvent(SystemEventKind::SubjectCreated),
-            19 => EventType::SystemEvent(SystemEventKind::WorkspaceCreated),
-            20 => EventType::SystemEvent(SystemEventKind::ObjectCreated),
 
-            // CRDT Application Events (30-59)
+            // Reserve 7-29 for future system events
+
+            // CRDT Application Events (30-44)
             CRDT_SET_ADD => EventType::ApplicationEvent(CRDT_SET_ADD),
             CRDT_SET_REMOVE => EventType::ApplicationEvent(CRDT_SET_REMOVE),
             CRDT_SET_STATE => EventType::ApplicationEvent(CRDT_SET_STATE),
@@ -172,9 +151,10 @@ impl EventType {
             CRDT_REGISTER_WRITE => EventType::ApplicationEvent(CRDT_REGISTER_WRITE),
             CRDT_REGISTER_STATE => EventType::ApplicationEvent(CRDT_REGISTER_STATE),
 
-            // Network/Storage events (60+) - Updated range
+            // Reserve 45-59 for future CRDT types
+
+            // Network events (60-127)
             v if (NETWORK_BASE..META_BASE).contains(&v) => EventType::NetworkEvent(v),
-            v if (21..CRDT_BASE).contains(&v) => EventType::StorageEvent(v), // 21-29 for storage
 
             _ => panic!("Invalid event type: {}", value),
         }
@@ -183,32 +163,33 @@ impl EventType {
     pub fn to_u8(&self) -> u8 {
         match self {
             EventType::ApplicationEvent(v) => *v,
-            // System events - UNCHANGED
+
+            // System events
             EventType::SystemEvent(SystemEventKind::Start) => 1,
             EventType::SystemEvent(SystemEventKind::Stop) => 2,
             EventType::SystemEvent(SystemEventKind::Pause) => 3,
             EventType::SystemEvent(SystemEventKind::Resume) => 4,
             EventType::SystemEvent(SystemEventKind::Shutdown) => 5,
             EventType::SystemEvent(SystemEventKind::Restart) => 6,
-            EventType::SystemEvent(SystemEventKind::ReplayControl) => 7,
-            EventType::SystemEvent(SystemEventKind::ReplayData) => 8,
-            EventType::SystemEvent(SystemEventKind::PayloadWritten) => 9,
-            EventType::SystemEvent(SystemEventKind::SegmentRolledOver) => 10,
-            EventType::SystemEvent(SystemEventKind::SegmentRollOverFailed) => 11,
-            EventType::SystemEvent(SystemEventKind::PageFlushed) => 12,
-            EventType::SystemEvent(SystemEventKind::PageFlushFailed) => 13,
-            EventType::SystemEvent(SystemEventKind::MmrAppended) => 14,
-            EventType::SystemEvent(SystemEventKind::MmrAppendFailed) => 15,
-            EventType::SystemEvent(SystemEventKind::SecondaryIndexWritten) => 16,
-            EventType::SystemEvent(SystemEventKind::SecondaryIndexFailed) => 17,
-            EventType::SystemEvent(SystemEventKind::SubjectCreated) => 18,
-            EventType::SystemEvent(SystemEventKind::WorkspaceCreated) => 19,
-            EventType::SystemEvent(SystemEventKind::ObjectCreated) => 20,
 
             EventType::NetworkEvent(v) => *v,
-            EventType::StorageEvent(v) => *v,
             EventType::MetaEvent(v) => META_BASE + *v,
         }
+    }
+
+    /// Check if this is an XSP sync event
+    pub fn is_xsp_sync_event(&self) -> bool {
+        matches!(self, EventType::NetworkEvent(v) if (MMR_PEAKS_EXCHANGE..=EVENTS_RESPONSE).contains(v))
+    }
+
+    /// Check if this is a media stream event
+    pub fn is_media_event(&self) -> bool {
+        matches!(self, EventType::NetworkEvent(v) if (AUDIO_CALL_START..=VIDEO_CALL_END).contains(v))
+    }
+
+    /// Check if this is a file transfer event
+    pub fn is_file_transfer_event(&self) -> bool {
+        matches!(self, EventType::NetworkEvent(v) if (FILE_TRANSFER_START..=FILE_TRANSFER_COMPLETE).contains(v))
     }
 }
 
@@ -229,5 +210,90 @@ pub struct ScanWindow {
     pub start: u64,
     pub end: u64,
 }
+
 unsafe impl Pod for ScanWindow {}
 unsafe impl Zeroable for ScanWindow {}
+
+// Helper functions for XSP events
+impl EventType {
+    /// Create MMR peaks exchange event
+    pub fn mmr_peaks_exchange() -> Self {
+        EventType::NetworkEvent(MMR_PEAKS_EXCHANGE)
+    }
+
+    /// Create MMR diff event
+    pub fn mmr_diff() -> Self {
+        EventType::NetworkEvent(MMR_DIFF)
+    }
+
+    /// Create events request event
+    pub fn events_request() -> Self {
+        EventType::NetworkEvent(EVENTS_REQUEST)
+    }
+
+    /// Create events response event
+    pub fn events_response() -> Self {
+        EventType::NetworkEvent(EVENTS_RESPONSE)
+    }
+
+    /// Create peer connected event
+    pub fn peer_connected() -> Self {
+        EventType::NetworkEvent(PEER_CONNECTED)
+    }
+
+    /// Create peer disconnected event
+    pub fn peer_disconnected() -> Self {
+        EventType::NetworkEvent(PEER_DISCONNECTED)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_xsp_event_constants() {
+        assert_eq!(MMR_PEAKS_EXCHANGE, 60);
+        assert_eq!(MMR_DIFF, 61);
+        assert_eq!(EVENTS_REQUEST, 62);
+        assert_eq!(EVENTS_RESPONSE, 63);
+    }
+
+    #[test]
+    fn test_event_type_conversions() {
+        let event = EventType::mmr_peaks_exchange();
+        assert_eq!(event.to_u8(), MMR_PEAKS_EXCHANGE);
+        assert_eq!(EventType::from_u8(MMR_PEAKS_EXCHANGE), event);
+    }
+
+    #[test]
+    fn test_xsp_sync_detection() {
+        assert!(EventType::mmr_peaks_exchange().is_xsp_sync_event());
+        assert!(EventType::mmr_diff().is_xsp_sync_event());
+        assert!(EventType::events_request().is_xsp_sync_event());
+        assert!(EventType::events_response().is_xsp_sync_event());
+
+        assert!(!EventType::peer_connected().is_xsp_sync_event());
+        assert!(!EventType::ApplicationEvent(CRDT_SET_ADD).is_xsp_sync_event());
+    }
+
+    #[test]
+    fn test_media_event_detection() {
+        let audio_start = EventType::NetworkEvent(AUDIO_CALL_START);
+        let video_end = EventType::NetworkEvent(VIDEO_CALL_END);
+
+        assert!(audio_start.is_media_event());
+        assert!(video_end.is_media_event());
+        assert!(!EventType::mmr_peaks_exchange().is_media_event());
+    }
+
+    #[test]
+    fn test_file_transfer_detection() {
+        let file_start = EventType::NetworkEvent(FILE_TRANSFER_START);
+        let file_complete = EventType::NetworkEvent(FILE_TRANSFER_COMPLETE);
+
+        assert!(file_start.is_file_transfer_event());
+        assert!(file_complete.is_file_transfer_event());
+        assert!(!EventType::mmr_peaks_exchange().is_file_transfer_event());
+    }
+}
