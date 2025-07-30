@@ -17,7 +17,7 @@ pub struct Peak {
 #[repr(C)]
 #[derive(Clone, Archive, Debug)]
 #[rkyv(derive(Debug))]
-pub struct  XaeroMmr {
+pub struct XaeroMmr {
     pub root: [u8; 32],
     pub peaks: Vec<Peak>,
     pub leaf_count: usize,

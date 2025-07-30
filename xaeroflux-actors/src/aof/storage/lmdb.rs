@@ -734,8 +734,7 @@ pub fn get_mmr_meta(arc_env: &Arc<Mutex<LmdbEnv>>) -> Result<Option<MmrMeta>, Bo
         // ADD SIZE CHECK
         if slice.len() != std::mem::size_of::<MmrMeta>() {
             mdb_txn_abort(txn);
-            tracing::warn!("MMR metadata size mismatch: got {} bytes, expected {} bytes",
-                slice.len(), std::mem::size_of::<MmrMeta>());
+            tracing::warn!("MMR metadata size mismatch: got {} bytes, expected {} bytes", slice.len(), std::mem::size_of::<MmrMeta>());
             return Ok(None); // Return None instead of panicking
         }
 

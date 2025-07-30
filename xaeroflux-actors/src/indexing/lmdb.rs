@@ -19,14 +19,12 @@ impl Default for LmdbVectorSearchDb {
 
 impl LmdbVectorSearchDb {
     pub fn new() -> Self {
-       Self::new_with_path("vector_search_db")
+        Self::new_with_path("vector_search_db")
     }
 
     pub fn new_with_path(path: &str) -> Self {
         match LmdbEnv::new(path) {
-            Ok(e) => {
-                LmdbVectorSearchDb { env: e }
-            }
+            Ok(e) => LmdbVectorSearchDb { env: e },
             Err(e) => {
                 panic!("Error creating LmdbVectorSearchDb due to {}", e);
             }
@@ -226,6 +224,7 @@ mod tests {
     #[test]
     fn test_minimal_lmdb_creation() {
         use std::ffi::CString;
+
         use tempfile::tempdir;
 
         let dir = tempdir().expect("failed to create temp dir");
