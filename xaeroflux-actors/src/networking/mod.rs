@@ -1,3 +1,3 @@
 mod discovery;
-pub(crate) mod p2p;
 mod format;
+pub(crate) mod p2p;
