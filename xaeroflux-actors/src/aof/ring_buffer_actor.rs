@@ -8,12 +8,14 @@
 //! - Uses hash index for fast leaf hash lookups
 
 use std::{
+    ops::Range,
     sync::{Arc, Mutex, OnceLock},
     thread::{self, JoinHandle},
     time::Duration,
 };
 
 use bytemuck::{Pod, Zeroable};
+use parking_lot::{RawRwLock, RwLock, lock_api::RwLockReadGuard};
 use rusted_ring::{
     EventPoolFactory, EventUtils, L_CAPACITY, L_TSHIRT_SIZE, M_CAPACITY, M_TSHIRT_SIZE, PooledEvent, Reader, RingBuffer, S_CAPACITY, S_TSHIRT_SIZE, Writer, XL_CAPACITY,
     XL_TSHIRT_SIZE, XS_CAPACITY, XS_TSHIRT_SIZE,
@@ -24,7 +26,7 @@ use xaeroflux_core::{CONF, date_time::emit_secs, hash::blake_hash_slice, pipe::B
 use crate::{L_RING, M_RING, S_RING, XL_RING, XS_RING};
 use crate::{
     aof::storage::{
-        format::{EventKey, MMRMeta},
+        format::{EventKey, MmrMeta},
         lmdb::{LmdbEnv, generate_event_key, get_event_by_hash, get_mmr_meta, push_internal_event_universal, put_mmr_meta, scan_enhanced_range},
     },
     indexing::mmr::{Peak, XaeroMmr, XaeroMmrOps},
@@ -38,7 +40,7 @@ use crate::{
 pub struct AofState {
     pub env: Arc<Mutex<LmdbEnv>>,
     pub sequence_counter: u64,
-    pub mmr: XaeroMmr, // MMR index for cryptographic integrity
+    pub mmr: RwLock<XaeroMmr>, // MMR index for cryptographic integrity
 }
 
 /// Reader multiplexer for all ring buffer sizes
@@ -138,8 +140,12 @@ impl AofState {
         // Recover MMR state from existing events
         let mmr = Self::recover_mmr_from_events(&env)?;
         tracing::info!("Recovered MMR with {} leaves", mmr.leaf_count());
-
-        Ok(Self { env, sequence_counter: 0, mmr })
+        let mmr_rw = RwLock::new(mmr);
+        Ok(Self {
+            env,
+            sequence_counter: 0,
+            mmr: mmr_rw,
+        })
     }
 
     /// Recover MMR state by scanning all existing events in chronological order
@@ -220,7 +226,7 @@ impl AofState {
             Ok(_) => {
                 // 2. Add event hash to MMR index
                 let event_hash = blake_hash_slice(event_data);
-                let _changed_peaks = self.mmr.append(event_hash);
+                let _changed_peaks = self.mmr.write().append(event_hash);
 
                 // 3. Persist MMR metadata to LMDB
                 if let Err(e) = self.persist_mmr_metadata() {
@@ -229,7 +235,7 @@ impl AofState {
 
                 self.sequence_counter += 1;
 
-                tracing::debug!("Event processed: hash={}, MMR leaves={}", hex::encode(event_hash), self.mmr.leaf_count());
+                tracing::debug!("Event processed: hash={}, MMR leaves={}", hex::encode(event_hash), self.mmr.read().leaf_count());
 
                 Ok(())
             }
@@ -254,11 +260,11 @@ impl AofState {
 
     /// Persist MMR metadata to LMDB META database
     fn persist_mmr_metadata(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let mmr_meta = MMRMeta {
-            root_hash: self.mmr.root(),
-            peaks_count: self.mmr.peaks().len(),
-            leaf_count: self.mmr.leaf_count(),
-            segment_meta: Default::default(), // No segments in LMDB-only approach
+        let mmr = self.mmr.read();
+        let mmr_meta = MmrMeta {
+            root_hash: mmr.root(),
+            peaks_count: mmr.peaks().len(),
+            leaf_count: mmr.leaf_count(),
         };
 
         put_mmr_meta(&self.env, &mmr_meta)?;
@@ -428,22 +434,30 @@ impl AofState {
 
     /// Get current MMR peaks for sharing with peers
     pub fn get_mmr_peaks(&self) -> Vec<Peak> {
-        self.mmr.peaks().to_vec()
+        self.mmr.read().peaks().to_vec()
+    }
+
+    pub fn get_mmr_leaf_count(&self) -> usize {
+        self.mmr.read().leaf_count
     }
 
     /// Get MMR root hash
     pub fn get_mmr_root(&self) -> [u8; 32] {
-        self.mmr.root()
+        self.mmr.read().root()
     }
 
     /// Generate MMR proof for a specific leaf index
     pub fn get_mmr_proof(&self, leaf_index: usize) -> Option<xaeroflux_core::merkle_tree::XaeroMerkleProof> {
-        self.mmr.proof(leaf_index)
+        self.mmr.read().proof(leaf_index)
     }
 
     /// Verify an MMR proof
     pub fn verify_mmr_proof(&self, leaf_hash: [u8; 32], proof: &xaeroflux_core::merkle_tree::XaeroMerkleProof, expected_root: [u8; 32]) -> bool {
-        self.mmr.verify(leaf_hash, proof, expected_root)
+        self.mmr.read().verify(leaf_hash, proof, expected_root)
+    }
+
+    pub fn get_leaf_hashes_from_range(&self, leaf_indices_range: Range<usize>) -> Vec<[u8; 32]> {
+        self.mmr.read().leaf_hashes[leaf_indices_range].to_vec()
     }
 }
 
@@ -533,7 +547,7 @@ mod tests {
         // Test MMR integration with event processing
         let test_events = [b"first event".as_slice(), b"second event".as_slice(), b"third event".as_slice()];
 
-        let initial_leaf_count = state.mmr.leaf_count();
+        let initial_leaf_count = state.mmr.read().leaf_count();
 
         for (i, event_data) in test_events.iter().enumerate() {
             state
@@ -547,10 +561,10 @@ mod tests {
                 .expect("Should process event with MMR");
         }
 
-        assert_eq!(state.mmr.leaf_count(), initial_leaf_count + test_events.len(), "MMR should have correct leaf count");
-        assert_ne!(state.mmr.root(), [0; 32], "MMR root should be non-zero");
+        assert_eq!(state.mmr.read().leaf_count(), initial_leaf_count + test_events.len(), "MMR should have correct leaf count");
+        assert_ne!(state.mmr.read().root(), [0; 32], "MMR root should be non-zero");
 
-        println!("✅ MMR integration working: {} leaves", state.mmr.leaf_count());
+        println!("✅ MMR integration working: {} leaves", state.mmr.read().leaf_count());
     }
 
     #[ignore]

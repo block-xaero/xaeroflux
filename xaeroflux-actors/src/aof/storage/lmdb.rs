@@ -17,15 +17,17 @@ use xaeroflux_core::{
     event::{EventType, XaeroEvent},
     hash::{blake_hash_slice, sha_256, sha_256_slice},
     pool::XaeroInternalEvent,
+    vector_clock_actor::XaeroVectorClock,
 };
 
-use super::format::{EventKey, MMRMeta};
+use super::format::{EventKey, MmrMeta};
 
 #[repr(usize)]
 pub enum DBI {
     Aof = 0,
     Meta = 1,
-    HashIndex = 2, // NEW: Hash index database
+    HashIndex = 2, // Leaf hash index db
+    VectorClockIndex = 3,
 }
 
 /// A wrapper around an LMDB environment with three databases: AOF, META, and HASH_INDEX.
@@ -35,7 +37,7 @@ pub enum DBI {
 /// - HASH_INDEX_DB stores hash → EventKey mappings for O(1) leaf hash lookups.
 pub struct LmdbEnv {
     pub env: *mut MDB_env,
-    pub dbis: [MDB_dbi; 3], // CHANGED: Now 3 databases
+    pub dbis: [MDB_dbi; 4],
 }
 
 unsafe impl Sync for LmdbEnv {}
@@ -49,43 +51,51 @@ impl LmdbEnv {
             Err(e) => return Err(e.into()),
         }
 
-        // 1) create & configure env
         let mut env = ptr::null_mut();
         unsafe {
             tracing::info!("Creating LMDB environment at {}", path);
             let sc_create_env = mdb_env_create(&mut env);
+            println!("DEBUG: mdb_env_create = {}", sc_create_env); // ADD THIS
             if sc_create_env != 0 {
                 return Err(Box::new(std::io::Error::from_raw_os_error(sc_create_env)));
             }
 
-            tracing::info!("Configuring LMDB environment");
-            tracing::info!("Setting max DBs to 3"); // CHANGED: Now 3 DBs
-            let sc_set_max_dbs = mdb_env_set_maxdbs(env, 3);
+            tracing::info!("Setting max DBs to 8");
+            let sc_set_max_dbs = mdb_env_set_maxdbs(env, 8);
+            println!("DEBUG: mdb_env_set_maxdbs = {}", sc_set_max_dbs); // ADD THIS
             if sc_set_max_dbs != 0 {
                 return Err(Box::new(std::io::Error::from_raw_os_error(sc_set_max_dbs)));
             }
 
-            tracing::info!("Setting mapsize to 1GB");
-            let sc_set_mapsize = mdb_env_set_mapsize(env, 1 << 30);
+            tracing::info!("Setting mapsize to 1MB for testing");
+            let sc_set_mapsize = mdb_env_set_mapsize(env, 1 << 20); // Use 1MB instead of 1GB
+            println!("DEBUG: mdb_env_set_mapsize = {}", sc_set_mapsize); // ADD THIS
             if sc_set_mapsize != 0 {
                 return Err(Box::new(std::io::Error::from_raw_os_error(sc_set_mapsize)));
             }
 
             let cs = CString::new(path)?;
             let sc_env_open = mdb_env_open(env, cs.as_ptr(), MDB_CREATE, 0o600);
+            println!("DEBUG: mdb_env_open = {}", sc_env_open); // ADD THIS
             if sc_env_open != 0 {
                 return Err(Box::new(std::io::Error::from_raw_os_error(sc_env_open)));
             }
         }
 
+        println!("DEBUG: About to open named databases"); // ADD THIS
         let aof_dbi = unsafe { open_named_db(env, c"/aof".as_ptr())? };
+        println!("DEBUG: Opened aof_dbi = {}", aof_dbi); // ADD THIS
         let meta_dbi = unsafe { open_named_db(env, c"/meta".as_ptr())? };
-        let hash_index_dbi = unsafe { open_named_db(env, c"/hash_index".as_ptr())? }; // NEW
+        println!("DEBUG: Opened meta_dbi = {}", meta_dbi); // ADD THIS
+        let hash_index_dbi = unsafe { open_named_db(env, c"/hash_index".as_ptr())? };
+        println!("DEBUG: Opened hash_index_dbi = {}", hash_index_dbi); // ADD THIS
+        let vector_clock_index_dbi = unsafe { open_named_db(env, c"/vector_clock_index".as_ptr())? };
+        println!("DEBUG: Opened vector_clock_index_dbi = {}", vector_clock_index_dbi); // ADD THIS
 
         Ok(Self {
             env,
-            dbis: [aof_dbi, meta_dbi, hash_index_dbi],
-        }) // CHANGED
+            dbis: [aof_dbi, meta_dbi, hash_index_dbi, vector_clock_index_dbi],
+        })
     }
 }
 
@@ -469,12 +479,182 @@ pub fn push_internal_event_universal(arc_env: &Arc<Mutex<LmdbEnv>>, event_data: 
     }
 }
 
+pub fn encode_peer_timestamp_key(peer_id: [u8; 32], logical_ts: u64) -> [u8; 40] {
+    let mut key = [0u8; 40];
+    key[0..32].copy_from_slice(&peer_id);
+    key[32..40].copy_from_slice(&logical_ts.to_be_bytes());
+    key
+}
+
+///  clock_blake_hash -> clock
+pub fn put_vector_clock_meta(arc_env: &Arc<Mutex<LmdbEnv>>, vector_clock: &XaeroVectorClock) -> Result<[u8; 32], Box<dyn std::error::Error>> {
+    let clock_bytes = bytemuck::bytes_of(vector_clock);
+    let vector_clock_key = blake_hash_slice(clock_bytes);
+    if get_vector_clock_meta(arc_env, vector_clock_key)?.is_some() {
+        return Ok(vector_clock_key); // Already stored
+    }
+    let guard = arc_env.lock().expect("failed to lock env");
+    let env = guard.env;
+    unsafe {
+        let mut txn: *mut MDB_txn = std::ptr::null_mut();
+        let rc = mdb_txn_begin(env, std::ptr::null_mut(), 0, &mut txn);
+        if rc != 0 {
+            return Err(from_lmdb_err(rc));
+        }
+        let mut mdb_key = MDB_val {
+            mv_size: vector_clock_key.len(),
+            mv_data: vector_clock_key.as_ptr() as *mut _,
+        };
+        let mut data_val = MDB_val {
+            mv_size: clock_bytes.len(),
+            mv_data: std::ptr::null_mut(),
+        };
+        let sc = mdb_put(txn, guard.dbis[DBI::VectorClockIndex as usize], &mut mdb_key, &mut data_val, MDB_RESERVE);
+        if sc != 0 {
+            mdb_txn_abort(txn);
+            return Err(from_lmdb_err(sc));
+        }
+        std::ptr::copy_nonoverlapping(clock_bytes.as_ptr(), data_val.mv_data.cast(), clock_bytes.len());
+        let cc = mdb_txn_commit(txn);
+        if cc != 0 {
+            return Err(from_lmdb_err(cc));
+        }
+        Ok(vector_clock_key)
+    }
+}
+pub fn get_vector_clock_meta(arc_env: &Arc<Mutex<LmdbEnv>>, key: [u8; 32]) -> Result<Option<XaeroVectorClock>, Box<dyn std::error::Error>> {
+    let guard = arc_env.lock().expect("failed to lock env");
+    let env = guard.env;
+
+    unsafe {
+        let mut txn: *mut MDB_txn = std::ptr::null_mut();
+        let rc = mdb_txn_begin(env, std::ptr::null_mut(), MDB_RDONLY, &mut txn);
+        if rc != 0 {
+            return Err(from_lmdb_err(rc));
+        }
+
+        let mut key_val = MDB_val {
+            mv_size: key.len(),
+            mv_data: key.as_ptr() as *mut _,
+        };
+        let mut data_val = MDB_val {
+            mv_size: 0,
+            mv_data: std::ptr::null_mut(),
+        };
+
+        let getrc = liblmdb::mdb_get(txn, guard.dbis[DBI::VectorClockIndex as usize], &mut key_val, &mut data_val);
+        if getrc != 0 {
+            mdb_txn_abort(txn);
+            if getrc == liblmdb::MDB_NOTFOUND {
+                return Ok(None);
+            } else {
+                return Err(from_lmdb_err(getrc));
+            }
+        }
+
+        let slice = std::slice::from_raw_parts(data_val.mv_data as *const u8, data_val.mv_size);
+        let clock: &XaeroVectorClock = bytemuck::from_bytes(slice);
+        mdb_txn_abort(txn);
+
+        tracing::debug!("clock found : {clock:?}");
+        Ok(Some(*clock))
+    }
+}
+
+/// peer_key = peer_xaero_id_blake_hash_logical_ts
+/// event is event_key to lookup actual event.
+pub fn put_clock_peer_key_to_event(arc_env: &Arc<Mutex<LmdbEnv>>, peer_id: [u8; 32], logical_ts: u64, event_key: EventKey) -> Result<(), Box<dyn std::error::Error>> {
+    let guard = arc_env.lock().expect("failed to lock env");
+    let env = guard.env;
+
+    unsafe {
+        let mut txn: *mut MDB_txn = std::ptr::null_mut();
+        let rc = mdb_txn_begin(env, std::ptr::null_mut(), 0, &mut txn);
+        if rc != 0 {
+            return Err(from_lmdb_err(rc));
+        }
+        let mut clock_peer_key_bytes = encode_peer_timestamp_key(peer_id, logical_ts);
+        // Use a fixed key for MMR metadata
+        let mut key_val = MDB_val {
+            mv_size: clock_peer_key_bytes.len(),
+            mv_data: clock_peer_key_bytes.as_ptr() as *mut _,
+        };
+        let event_key_bytes = bytemuck::bytes_of(&event_key);
+        let mut data_val = MDB_val {
+            mv_size: event_key_bytes.len(),
+            mv_data: std::ptr::null_mut(),
+        };
+
+        let sc = mdb_put(txn, guard.dbis[DBI::VectorClockIndex as usize], &mut key_val, &mut data_val, MDB_RESERVE);
+        if sc != 0 {
+            mdb_txn_abort(txn);
+            return Err(from_lmdb_err(sc));
+        }
+
+        std::ptr::copy_nonoverlapping(event_key_bytes.as_ptr(), data_val.mv_data.cast(), event_key_bytes.len());
+
+        let cc = mdb_txn_commit(txn);
+        if cc != 0 {
+            return Err(from_lmdb_err(cc));
+        }
+        tracing::debug!("Stored peer key clock to event {event_key_bytes:?}");
+    }
+    Ok(())
+}
+pub fn get_clock_peer_key_to_event(arc_env: Arc<Mutex<LmdbEnv>>, peer_key: [u8; 40]) -> Result<Option<EventKey>, Box<dyn std::error::Error>> {
+    let guard = arc_env.lock().expect("failed to lock env");
+    let env = guard.env;
+
+    unsafe {
+        let mut txn: *mut MDB_txn = std::ptr::null_mut();
+        let rc = mdb_txn_begin(env, std::ptr::null_mut(), MDB_RDONLY, &mut txn);
+        if rc != 0 {
+            return Err(from_lmdb_err(rc));
+        }
+
+        let mut key_val = MDB_val {
+            mv_size: peer_key.len(),
+            mv_data: peer_key.as_ptr() as *mut _,
+        };
+        let mut data_val = MDB_val {
+            mv_size: 0,
+            mv_data: std::ptr::null_mut(),
+        };
+
+        let getrc = liblmdb::mdb_get(txn, guard.dbis[DBI::VectorClockIndex as usize], &mut key_val, &mut data_val);
+        if getrc != 0 {
+            mdb_txn_abort(txn);
+            if getrc == liblmdb::MDB_NOTFOUND {
+                return Ok(None);
+            } else {
+                return Err(from_lmdb_err(getrc));
+            }
+        }
+
+        let slice = std::slice::from_raw_parts(data_val.mv_data as *const u8, data_val.mv_size);
+        let event_key_found = bytemuck::from_bytes(slice);
+        mdb_txn_abort(txn);
+        Ok(Some(*event_key_found))
+    }
+}
+
+pub fn get_events_by_peer_range(arc_env: &Arc<Mutex<LmdbEnv>>, peer_id: [u8; 32], start_ts: u64, end_ts: u64) -> Result<Vec<EventKey>, Box<dyn std::error::Error>> {
+    let mut events = Vec::new();
+    for ts in start_ts..=end_ts {
+        let peer_key = encode_peer_timestamp_key(peer_id, ts);
+        if let Some(event_hash) = get_clock_peer_key_to_event(arc_env.clone(), peer_key)? {
+            events.push(event_hash);
+        }
+    }
+    Ok(events)
+}
+
 // ================================================================================================
 // MMR METADATA STORAGE FUNCTIONS
 // ================================================================================================
 
 /// Store MMR metadata in META DB using a fixed key
-pub fn put_mmr_meta(arc_env: &Arc<Mutex<LmdbEnv>>, mmr_meta: &MMRMeta) -> Result<(), Box<dyn std::error::Error>> {
+pub fn put_mmr_meta(arc_env: &Arc<Mutex<LmdbEnv>>, mmr_meta: &MmrMeta) -> Result<(), Box<dyn std::error::Error>> {
     let guard = arc_env.lock().expect("failed to lock env");
     let env = guard.env;
 
@@ -518,7 +698,7 @@ pub fn put_mmr_meta(arc_env: &Arc<Mutex<LmdbEnv>>, mmr_meta: &MMRMeta) -> Result
 }
 
 /// Get current MMR metadata from META DB
-pub fn get_mmr_meta(arc_env: &Arc<Mutex<LmdbEnv>>) -> Result<Option<MMRMeta>, Box<dyn std::error::Error>> {
+pub fn get_mmr_meta(arc_env: &Arc<Mutex<LmdbEnv>>) -> Result<Option<MmrMeta>, Box<dyn std::error::Error>> {
     let guard = arc_env.lock().expect("failed to lock env");
     let env = guard.env;
 
@@ -550,12 +730,21 @@ pub fn get_mmr_meta(arc_env: &Arc<Mutex<LmdbEnv>>) -> Result<Option<MMRMeta>, Bo
         }
 
         let slice = std::slice::from_raw_parts(data_val.mv_data as *const u8, data_val.mv_size);
-        let meta: &MMRMeta = bytemuck::from_bytes(slice);
+
+        // ADD SIZE CHECK
+        if slice.len() != std::mem::size_of::<MmrMeta>() {
+            mdb_txn_abort(txn);
+            tracing::warn!("MMR metadata size mismatch: got {} bytes, expected {} bytes",
+                slice.len(), std::mem::size_of::<MmrMeta>());
+            return Ok(None); // Return None instead of panicking
+        }
+
+        let meta: &MmrMeta = bytemuck::from_bytes(slice);
         mdb_txn_abort(txn);
 
         let lc = meta.leaf_count;
         let pc = meta.peaks_count;
-        tracing::debug!("Stored MMR metadata: {} leaves, {} peaks", lc, pc);
+        tracing::debug!("Retrieved MMR metadata: {} leaves, {} peaks", lc, pc);
 
         Ok(Some(*meta))
     }
@@ -723,11 +912,10 @@ mod tests {
         let arc_env = Arc::new(Mutex::new(LmdbEnv::new(dir.path().to_str().expect("failed to get path")).expect("failed to create env")));
 
         // Create test MMR metadata
-        let mmr_meta = MMRMeta {
+        let mmr_meta = MmrMeta {
             root_hash: [42u8; 32],
             peaks_count: 5,
             leaf_count: 1000,
-            segment_meta: Default::default(),
         };
 
         // Test storage

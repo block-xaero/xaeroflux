@@ -86,10 +86,8 @@ impl VectorClockState {
         }
     }
 
-    // Fix: Correct tick logic with proper increment after overflow
     pub fn tick(&mut self) {
         let current_wall_time = emit_secs();
-
         if current_wall_time > self.clock.base_ts {
             // Wall clock advanced - reset to new wall time and increment
             self.clock.base_ts = current_wall_time;
