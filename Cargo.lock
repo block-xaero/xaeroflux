@@ -5878,17 +5878,41 @@ dependencies = [
 
 [[package]]
 name = "xaeroflux"
-version = "0.8.1-m6"
+version = "0.9.0-alpha"
 dependencies = [
  "rusted-ring",
- "xaeroflux-actors 0.8.1-m6 (registry+https://github.com/rust-lang/crates.io-index)",
- "xaeroflux-core 0.8.1-m6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "xaeroflux-actors 0.8.1-m6",
+ "xaeroflux-core 0.8.1-m6",
  "xaeroid",
 ]
 
 [[package]]
 name = "xaeroflux-actors"
 version = "0.8.1-m6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "39ac7558b19d75a12f334f3d16d5c427eab39d110b296cd54cf0ce45ef33b316"
+dependencies = [
+ "anyhow",
+ "bytemuck",
+ "hex",
+ "hnsw_rs",
+ "iroh",
+ "iroh-gossip",
+ "libc",
+ "liblmdb",
+ "rand 0.8.5",
+ "rkyv",
+ "rusted-ring",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "xaeroflux-core 0.8.1-m6",
+ "xaeroid",
+]
+
+[[package]]
+name = "xaeroflux-actors"
+version = "0.9.0-alpha"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -5920,37 +5944,15 @@ dependencies = [
  "tracing",
  "tracing-subscriber 0.2.25",
  "url",
- "xaeroflux-core 0.8.1-m6",
- "xaeroid",
-]
-
-[[package]]
-name = "xaeroflux-actors"
-version = "0.8.1-m6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "39ac7558b19d75a12f334f3d16d5c427eab39d110b296cd54cf0ce45ef33b316"
-dependencies = [
- "anyhow",
- "bytemuck",
- "hex",
- "hnsw_rs",
- "iroh",
- "iroh-gossip",
- "libc",
- "liblmdb",
- "rand 0.8.5",
- "rkyv",
- "rusted-ring",
- "tempfile",
- "tokio",
- "tracing",
- "xaeroflux-core 0.8.1-m6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "xaeroflux-core 0.9.0-alpha",
  "xaeroid",
 ]
 
 [[package]]
 name = "xaeroflux-core"
 version = "0.8.1-m6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68613a33b3c2d227560382052b2430e8c22d334022f4e502a03ad42926f0e7bd"
 dependencies = [
  "blake3",
  "bytemuck",
@@ -5976,9 +5978,7 @@ dependencies = [
 
 [[package]]
 name = "xaeroflux-core"
-version = "0.8.1-m6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68613a33b3c2d227560382052b2430e8c22d334022f4e502a03ad42926f0e7bd"
+version = "0.9.0-alpha"
 dependencies = [
  "blake3",
  "bytemuck",
