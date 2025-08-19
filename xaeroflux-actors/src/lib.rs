@@ -1,10 +1,11 @@
 pub mod aof;
 pub mod indexing;
 mod networking;
+mod read_api;
 
 use std::{
     collections::HashMap,
-    sync::{Arc, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
     thread::JoinHandle,
 };
 
@@ -13,8 +14,10 @@ use rusted_ring::{
 };
 use xaeroid::XaeroID;
 
-use crate::{aof::ring_buffer_actor::AofActor, networking::p2p::P2pActor};
-
+use crate::{
+    aof::{ring_buffer_actor::AofActor, storage::lmdb::LmdbEnv},
+    networking::p2p::P2pActor,
+};
 // ================================================================================================
 // GLOBAL RING BUFFERS - MAIN (EventBus writes to these, AOF/VectorSearch read from these)
 // ================================================================================================
@@ -194,6 +197,7 @@ pub struct XaeroFlux {
     pub vector_search: Option<Arc<VectorSearchActor>>,
     pub aof_handle: Option<JoinHandle<()>>,
     pub p2p_handle: Option<JoinHandle<()>>,
+    pub read_handle: Option<Arc<Mutex<LmdbEnv>>>,
 }
 
 impl Default for XaeroFlux {
@@ -210,6 +214,7 @@ impl XaeroFlux {
             vector_search: None,
             aof_handle: None,
             p2p_handle: None,
+            read_handle: None,
         }
     }
 
@@ -217,6 +222,7 @@ impl XaeroFlux {
     pub fn start_aof(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let aof_actor = AofActor::spin()?;
         self.aof_handle = Some(aof_actor.jh);
+        self.read_handle = Some(aof_actor.env);
         Ok(())
     }
 
@@ -262,7 +268,6 @@ impl XaeroFlux {
         ef_construction: usize,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let actor = VectorSearchActor::spin(max_nb_connection, max_elements, max_layer, ef_construction, extractors, vector_dimension)?;
-
         self.vector_search = Some(Arc::new(actor));
         Ok(())
     }
@@ -289,7 +294,6 @@ impl XaeroFlux {
     /// Search using a single vector
     pub fn search_vector(&self, vector: Vec<f32>, k: u32, similarity_threshold: f32) -> Result<VectorQueryResponse<5>, XaeroFluxError> {
         let vector_search = self.vector_search.as_ref().ok_or(XaeroFluxError::VectorSearchNotStarted)?;
-
         let mut query_vector = [0.0f32; 256];
         let copy_len = std::cmp::min(vector.len(), 256);
         query_vector[..copy_len].copy_from_slice(&vector[..copy_len]);

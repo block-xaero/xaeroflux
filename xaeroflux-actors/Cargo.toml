@@ -37,7 +37,7 @@ parking_lot = "0.12"
 hnsw_rs = "0.3.2"
 rusted-ring = {workspace = true}
 xaeroid = { workspace = true }
-xaeroflux-core = { path = "../xaeroflux-core" }
+xaeroflux-core = { version = "0.9.0-alpha" }
 rand = "0.8"
 iroh = {version = "0.90.0", "default-features" = true, features = ["discovery-local-network", "discovery-pkarr-dht"] }
 iroh-gossip = { version = "0.90.0", default-features = false, features = ["net"] }
