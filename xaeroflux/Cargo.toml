@@ -15,5 +15,5 @@ readme = "README.md"
 [dependencies]
 rusted-ring = {workspace = true}
 xaeroid = { workspace = true }
-xaeroflux-core = { version = "0.8.1-m6" }
-xaeroflux-actors = { version = "0.8.1-m6" }
+xaeroflux-core = { version = "0.9.0-alpha" }
+xaeroflux-actors = { version = "0.9.0-alpha" }

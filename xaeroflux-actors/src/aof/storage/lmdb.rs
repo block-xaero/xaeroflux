@@ -264,6 +264,14 @@ pub fn get_event_key_by_hash(arc_env: &Arc<Mutex<LmdbEnv>>, event_hash: [u8; 32]
     }
 }
 
+pub fn get_event_by_event_type<const TSHIRT_SIZE: usize>(  arc_env: &Arc<Mutex<LmdbEnv>>,
+                                                           event_type: EventType, xaero_id: [u8;
+        32]) ->Result<Option<XaeroInternalEvent<TSHIRT_SIZE>>, Box<dyn std::error::Error>> {
+
+
+    Ok(None)
+}
+
 /// Get event data directly by hash (O(1) lookup) - uses hash index then fetches event
 pub fn get_event_by_hash<const TSHIRT_SIZE: usize>(
     arc_env: &Arc<Mutex<LmdbEnv>>,

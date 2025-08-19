@@ -97,3 +97,7 @@ pubspec.lock
 
 # tar gz files
 *.tar.gz
+
+#txt files
+rustc-ice-2025-08-19T13_39_05-56016.txt
+rustc-ice-2025-08-19T19_39_37-68045.txt

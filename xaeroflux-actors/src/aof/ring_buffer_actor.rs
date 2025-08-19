@@ -15,23 +15,23 @@ use std::{
 };
 
 use bytemuck::{Pod, Zeroable};
-use parking_lot::{RawRwLock, RwLock, lock_api::RwLockReadGuard};
+use parking_lot::{lock_api::RwLockReadGuard, RawRwLock, RwLock};
 use rusted_ring::{
-    EventPoolFactory, EventUtils, L_CAPACITY, L_TSHIRT_SIZE, M_CAPACITY, M_TSHIRT_SIZE, PooledEvent, Reader, RingBuffer, S_CAPACITY, S_TSHIRT_SIZE, Writer, XL_CAPACITY,
+    EventPoolFactory, EventUtils, PooledEvent, Reader, RingBuffer, Writer, L_CAPACITY, L_TSHIRT_SIZE, M_CAPACITY, M_TSHIRT_SIZE, S_CAPACITY, S_TSHIRT_SIZE, XL_CAPACITY,
     XL_TSHIRT_SIZE, XS_CAPACITY, XS_TSHIRT_SIZE,
 };
-use xaeroflux_core::{CONF, date_time::emit_secs, hash::blake_hash_slice, pipe::BusKind, pool::XaeroInternalEvent, system_paths};
+use xaeroflux_core::{date_time::emit_secs, hash::blake_hash_slice, pipe::BusKind, pool::XaeroInternalEvent, system_paths, CONF};
 
-// Import global ring buffers from subject.rs
-use crate::{L_RING, M_RING, S_RING, XL_RING, XS_RING};
 use crate::{
     aof::storage::{
         format::{EventKey, MmrMeta},
-        lmdb::{LmdbEnv, generate_event_key, get_event_by_hash, get_mmr_meta, push_internal_event_universal, put_mmr_meta, scan_enhanced_range},
+        lmdb::{generate_event_key, get_event_by_hash, get_mmr_meta, push_internal_event_universal, put_mmr_meta, scan_enhanced_range, LmdbEnv},
     },
     indexing::mmr::{Peak, XaeroMmr, XaeroMmrOps},
+    read_api::PointQuery,
 };
-
+// Import global ring buffers from subject.rs
+use crate::{L_RING, M_RING, S_RING, XL_RING, XS_RING};
 // ================================================================================================
 // TYPES & STRUCTS
 // ================================================================================================
@@ -40,7 +40,7 @@ use crate::{
 pub struct AofState {
     pub env: Arc<Mutex<LmdbEnv>>,
     pub sequence_counter: u64,
-    pub mmr: RwLock<XaeroMmr>, // MMR index for cryptographic integrity
+    pub mmr: RwLock<XaeroMmr>,
 }
 
 /// Reader multiplexer for all ring buffer sizes
@@ -118,6 +118,7 @@ impl ReaderMultiplexer {
 /// AOF Actor - processes events from global ring buffers and persists to LMDB with MMR indexing
 pub struct AofActor {
     pub jh: JoinHandle<()>,
+    pub env: Arc<Mutex<LmdbEnv>>,
 }
 
 // ================================================================================================
@@ -345,6 +346,11 @@ impl AofState {
         Ok(events)
     }
 
+    /// Get events sized by point
+    pub fn get_event_sized_by_point<const SIZE: usize>(point_query: PointQuery<SIZE>) -> Result<Option<XaeroInternalEvent<SIZE>>, Box<dyn std::error::Error>> {
+        Ok(None)
+    }
+
     /// FALLBACK: Old scan-based method (kept for compatibility/debugging)
     pub fn get_events_for_leaf_hashes_legacy(&self, leaf_hashes: &[[u8; 32]]) -> Result<Vec<Vec<u8>>, Box<dyn std::error::Error>> {
         let mut events = Vec::new();
@@ -432,6 +438,10 @@ impl AofState {
         Ok(events)
     }
 
+    pub fn get_env(&self) -> &Arc<Mutex<LmdbEnv>> {
+        &self.env
+    }
+
     /// Get current MMR peaks for sharing with peers
     pub fn get_mmr_peaks(&self) -> Vec<Peak> {
         self.mmr.read().peaks().to_vec()
@@ -469,7 +479,7 @@ impl AofActor {
     /// Create and spawn AOF actor that reads from global ring buffers
     pub fn spin() -> Result<Self, Box<dyn std::error::Error>> {
         let mut state = AofState::new()?;
-
+        let read_only_clone = state.env.clone();
         let jh = thread::spawn(move || {
             tracing::info!("AOF Actor started ");
             tracing::info!("Reading from global ring buffers: XS, S, M, L, XL");
@@ -487,7 +497,7 @@ impl AofActor {
             }
         });
 
-        Ok(Self { jh })
+        Ok(Self { jh, env: read_only_clone })
     }
 
     /// Process event from ring buffer with specific size
