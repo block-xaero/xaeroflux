@@ -293,44 +293,39 @@ impl AofState {
             // This replaces the old O(N) scan approach!
 
             // Try XS size first
-            if !found
-                && let Ok(Some(event)) = get_event_by_hash::<XS_TSHIRT_SIZE>(&self.env, target_hash) {
-                    let event_data = &event.evt.data[..event.evt.len as usize];
-                    events.push(event_data.to_vec());
-                    found = true;
-                }
+            if !found && let Ok(Some(event)) = get_event_by_hash::<XS_TSHIRT_SIZE>(&self.env, target_hash) {
+                let event_data = &event.evt.data[..event.evt.len as usize];
+                events.push(event_data.to_vec());
+                found = true;
+            }
 
             // Try S size
-            if !found
-                && let Ok(Some(event)) = get_event_by_hash::<S_TSHIRT_SIZE>(&self.env, target_hash) {
-                    let event_data = &event.evt.data[..event.evt.len as usize];
-                    events.push(event_data.to_vec());
-                    found = true;
-                }
+            if !found && let Ok(Some(event)) = get_event_by_hash::<S_TSHIRT_SIZE>(&self.env, target_hash) {
+                let event_data = &event.evt.data[..event.evt.len as usize];
+                events.push(event_data.to_vec());
+                found = true;
+            }
 
             // Try M size
-            if !found
-                && let Ok(Some(event)) = get_event_by_hash::<M_TSHIRT_SIZE>(&self.env, target_hash) {
-                    let event_data = &event.evt.data[..event.evt.len as usize];
-                    events.push(event_data.to_vec());
-                    found = true;
-                }
+            if !found && let Ok(Some(event)) = get_event_by_hash::<M_TSHIRT_SIZE>(&self.env, target_hash) {
+                let event_data = &event.evt.data[..event.evt.len as usize];
+                events.push(event_data.to_vec());
+                found = true;
+            }
 
             // Try L size
-            if !found
-                && let Ok(Some(event)) = get_event_by_hash::<L_TSHIRT_SIZE>(&self.env, target_hash) {
-                    let event_data = &event.evt.data[..event.evt.len as usize];
-                    events.push(event_data.to_vec());
-                    found = true;
-                }
+            if !found && let Ok(Some(event)) = get_event_by_hash::<L_TSHIRT_SIZE>(&self.env, target_hash) {
+                let event_data = &event.evt.data[..event.evt.len as usize];
+                events.push(event_data.to_vec());
+                found = true;
+            }
 
             // Try XL size
-            if !found
-                && let Ok(Some(event)) = get_event_by_hash::<XL_TSHIRT_SIZE>(&self.env, target_hash) {
-                    let event_data = &event.evt.data[..event.evt.len as usize];
-                    events.push(event_data.to_vec());
-                    found = true;
-                }
+            if !found && let Ok(Some(event)) = get_event_by_hash::<XL_TSHIRT_SIZE>(&self.env, target_hash) {
+                let event_data = &event.evt.data[..event.evt.len as usize];
+                events.push(event_data.to_vec());
+                found = true;
+            }
 
             if !found {
                 tracing::warn!("Event not found for leaf hash: {}", hex::encode(target_hash));
@@ -354,75 +349,70 @@ impl AofState {
             let mut found = false;
 
             // Search through all possible event sizes using full scan
-            if !found
-                && let Ok(all_events) = unsafe { scan_enhanced_range::<XS_TSHIRT_SIZE>(&self.env, 0, u64::MAX) } {
-                    for event in all_events {
-                        let event_data = &event.evt.data[..event.evt.len as usize];
-                        let hash = blake_hash_slice(event_data);
+            if !found && let Ok(all_events) = unsafe { scan_enhanced_range::<XS_TSHIRT_SIZE>(&self.env, 0, u64::MAX) } {
+                for event in all_events {
+                    let event_data = &event.evt.data[..event.evt.len as usize];
+                    let hash = blake_hash_slice(event_data);
 
-                        if hash == target_hash {
-                            events.push(event_data.to_vec());
-                            found = true;
-                            break;
-                        }
+                    if hash == target_hash {
+                        events.push(event_data.to_vec());
+                        found = true;
+                        break;
                     }
                 }
+            }
 
-            if !found
-                && let Ok(all_events) = unsafe { scan_enhanced_range::<S_TSHIRT_SIZE>(&self.env, 0, u64::MAX) } {
-                    for event in all_events {
-                        let event_data = &event.evt.data[..event.evt.len as usize];
-                        let hash = blake_hash_slice(event_data);
+            if !found && let Ok(all_events) = unsafe { scan_enhanced_range::<S_TSHIRT_SIZE>(&self.env, 0, u64::MAX) } {
+                for event in all_events {
+                    let event_data = &event.evt.data[..event.evt.len as usize];
+                    let hash = blake_hash_slice(event_data);
 
-                        if hash == target_hash {
-                            events.push(event_data.to_vec());
-                            found = true;
-                            break;
-                        }
+                    if hash == target_hash {
+                        events.push(event_data.to_vec());
+                        found = true;
+                        break;
                     }
                 }
+            }
 
-            if !found
-                && let Ok(all_events) = unsafe { scan_enhanced_range::<M_TSHIRT_SIZE>(&self.env, 0, u64::MAX) } {
-                    for event in all_events {
-                        let event_data = &event.evt.data[..event.evt.len as usize];
-                        let hash = blake_hash_slice(event_data);
+            if !found && let Ok(all_events) = unsafe { scan_enhanced_range::<M_TSHIRT_SIZE>(&self.env, 0, u64::MAX) } {
+                for event in all_events {
+                    let event_data = &event.evt.data[..event.evt.len as usize];
+                    let hash = blake_hash_slice(event_data);
 
-                        if hash == target_hash {
-                            events.push(event_data.to_vec());
-                            found = true;
-                            break;
-                        }
+                    if hash == target_hash {
+                        events.push(event_data.to_vec());
+                        found = true;
+                        break;
                     }
                 }
+            }
 
-            if !found
-                && let Ok(all_events) = unsafe { scan_enhanced_range::<L_TSHIRT_SIZE>(&self.env, 0, u64::MAX) } {
-                    for event in all_events {
-                        let event_data = &event.evt.data[..event.evt.len as usize];
-                        let hash = blake_hash_slice(event_data);
+            if !found && let Ok(all_events) = unsafe { scan_enhanced_range::<L_TSHIRT_SIZE>(&self.env, 0, u64::MAX) } {
+                for event in all_events {
+                    let event_data = &event.evt.data[..event.evt.len as usize];
+                    let hash = blake_hash_slice(event_data);
 
-                        if hash == target_hash {
-                            events.push(event_data.to_vec());
-                            found = true;
-                            break;
-                        }
+                    if hash == target_hash {
+                        events.push(event_data.to_vec());
+                        found = true;
+                        break;
                     }
                 }
+            }
 
-            if !found
-                && let Ok(all_events) = unsafe { scan_enhanced_range::<XL_TSHIRT_SIZE>(&self.env, 0, u64::MAX) } {
-                    for event in all_events {
-                        let event_data = &event.evt.data[..event.evt.len as usize];
-                        let hash = blake_hash_slice(event_data);
+            if !found && let Ok(all_events) = unsafe { scan_enhanced_range::<XL_TSHIRT_SIZE>(&self.env, 0, u64::MAX) } {
+                for event in all_events {
+                    let event_data = &event.evt.data[..event.evt.len as usize];
+                    let hash = blake_hash_slice(event_data);
 
-                        if hash == target_hash {
-                            events.push(event_data.to_vec());
-                            found = true;
-                            break;
-                        }
+                    if hash == target_hash {
+                        events.push(event_data.to_vec());
+                        found = true;
+                        break;
                     }
                 }
+            }
         }
 
         Ok(events)
