@@ -1,6 +1,6 @@
 [package]
 name = "xaeroflux-actors"
-version = "0.9.2-alpha"
+version = "0.9.3-alpha"
 edition     = "2024"
 description = "EXPERIMENTAL: actor layer for xaeroflux"
 categories = ["database", "database-implementations"]
@@ -37,10 +37,8 @@ parking_lot = "0.12"
 hnsw_rs = "0.3.2"
 rusted-ring = {workspace = true}
 xaeroid = { workspace = true }
-xaeroflux-core = { version = "0.9.1-alpha" }
-rand = "0.8"
+xaeroflux-core = { version = "0.9.3-alpha" }
 iroh = {version = "0.90.0", "default-features" = true, features = ["discovery-local-network", "discovery-pkarr-dht"] }
-iroh-gossip = { version = "0.90.0", default-features = false, features = ["net"] }
 tokio = { version = "1.45.1", default-features = false, features = ["rt", "macros", "net", "sync"] }
 bytemuck = "1.23.0"
 rkyv = "0.8.10"
@@ -50,20 +48,8 @@ anyhow = "1.0.98"
 liblmdb = "0.9.70"
 tempfile = "3.20.0"
 libc = "0.2.172"
-pkcs8 = "0.10.2"
-time = "0.3.41"
-pin-project = "1.1.10"
-url = "2.5.4"
-quinn = "0.11.8"
-quinn-proto = "0.11.12"
-derive_more = "1.0.0"
-bytes = "1.10.1"
-rustls = "0.23.29"
-rand_chacha = "0.3.1"
 futures-lite = "2.6.0"
 futures-core = "0.3.31"
-futures = "0.3.31"
-tracing-subscriber = "0.2.25"
 
 
 [profile.release]
