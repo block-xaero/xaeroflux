@@ -66,7 +66,7 @@ jobs:
 
       - name: Run all workspace tests
         working-directory: xaeroflux
-        run: RUST_MIN_STACK=64000000 cargo test --workspace --verbose
+        run: RUST_MIN_STACK=64000000 cargo test --lib --tests --workspace --verbose
 
       - name: Run clippy on all targets
         working-directory: xaeroflux
