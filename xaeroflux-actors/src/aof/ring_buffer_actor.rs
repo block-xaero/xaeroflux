@@ -15,23 +15,23 @@ use std::{
 };
 
 use bytemuck::{Pod, Zeroable};
-use parking_lot::{lock_api::RwLockReadGuard, RawRwLock, RwLock};
+use parking_lot::{RawRwLock, RwLock, lock_api::RwLockReadGuard};
 use rusted_ring::{
-    EventPoolFactory, EventUtils, PooledEvent, Reader, RingBuffer, Writer, L_CAPACITY, L_TSHIRT_SIZE, M_CAPACITY, M_TSHIRT_SIZE, S_CAPACITY, S_TSHIRT_SIZE, XL_CAPACITY,
+    EventPoolFactory, EventUtils, L_CAPACITY, L_TSHIRT_SIZE, M_CAPACITY, M_TSHIRT_SIZE, PooledEvent, Reader, RingBuffer, S_CAPACITY, S_TSHIRT_SIZE, Writer, XL_CAPACITY,
     XL_TSHIRT_SIZE, XS_CAPACITY, XS_TSHIRT_SIZE,
 };
-use xaeroflux_core::{date_time::emit_secs, hash::blake_hash_slice, pipe::BusKind, pool::XaeroInternalEvent, system_paths, CONF};
+use xaeroflux_core::{CONF, date_time::emit_secs, hash::blake_hash_slice, pipe::BusKind, pool::XaeroInternalEvent, system_paths};
 
+// Import global ring buffers from subject.rs
+use crate::{L_RING, M_RING, S_RING, XL_RING, XS_RING};
 use crate::{
     aof::storage::{
         format::{EventKey, MmrMeta},
-        lmdb::{generate_event_key, get_event_by_hash, get_mmr_meta, push_internal_event_universal, put_mmr_meta, scan_enhanced_range, LmdbEnv},
+        lmdb::{LmdbEnv, generate_event_key, get_event_by_hash, get_mmr_meta, push_internal_event_universal, put_mmr_meta, scan_enhanced_range},
     },
     indexing::mmr::{Peak, XaeroMmr, XaeroMmrOps},
     read_api::PointQuery,
 };
-// Import global ring buffers from subject.rs
-use crate::{L_RING, M_RING, S_RING, XL_RING, XS_RING};
 // ================================================================================================
 // TYPES & STRUCTS
 // ================================================================================================
@@ -293,49 +293,44 @@ impl AofState {
             // This replaces the old O(N) scan approach!
 
             // Try XS size first
-            if !found {
-                if let Ok(Some(event)) = get_event_by_hash::<XS_TSHIRT_SIZE>(&self.env, target_hash) {
+            if !found
+                && let Ok(Some(event)) = get_event_by_hash::<XS_TSHIRT_SIZE>(&self.env, target_hash) {
                     let event_data = &event.evt.data[..event.evt.len as usize];
                     events.push(event_data.to_vec());
                     found = true;
                 }
-            }
 
             // Try S size
-            if !found {
-                if let Ok(Some(event)) = get_event_by_hash::<S_TSHIRT_SIZE>(&self.env, target_hash) {
+            if !found
+                && let Ok(Some(event)) = get_event_by_hash::<S_TSHIRT_SIZE>(&self.env, target_hash) {
                     let event_data = &event.evt.data[..event.evt.len as usize];
                     events.push(event_data.to_vec());
                     found = true;
                 }
-            }
 
             // Try M size
-            if !found {
-                if let Ok(Some(event)) = get_event_by_hash::<M_TSHIRT_SIZE>(&self.env, target_hash) {
+            if !found
+                && let Ok(Some(event)) = get_event_by_hash::<M_TSHIRT_SIZE>(&self.env, target_hash) {
                     let event_data = &event.evt.data[..event.evt.len as usize];
                     events.push(event_data.to_vec());
                     found = true;
                 }
-            }
 
             // Try L size
-            if !found {
-                if let Ok(Some(event)) = get_event_by_hash::<L_TSHIRT_SIZE>(&self.env, target_hash) {
+            if !found
+                && let Ok(Some(event)) = get_event_by_hash::<L_TSHIRT_SIZE>(&self.env, target_hash) {
                     let event_data = &event.evt.data[..event.evt.len as usize];
                     events.push(event_data.to_vec());
                     found = true;
                 }
-            }
 
             // Try XL size
-            if !found {
-                if let Ok(Some(event)) = get_event_by_hash::<XL_TSHIRT_SIZE>(&self.env, target_hash) {
+            if !found
+                && let Ok(Some(event)) = get_event_by_hash::<XL_TSHIRT_SIZE>(&self.env, target_hash) {
                     let event_data = &event.evt.data[..event.evt.len as usize];
                     events.push(event_data.to_vec());
                     found = true;
                 }
-            }
 
             if !found {
                 tracing::warn!("Event not found for leaf hash: {}", hex::encode(target_hash));
@@ -359,8 +354,8 @@ impl AofState {
             let mut found = false;
 
             // Search through all possible event sizes using full scan
-            if !found {
-                if let Ok(all_events) = unsafe { scan_enhanced_range::<XS_TSHIRT_SIZE>(&self.env, 0, u64::MAX) } {
+            if !found
+                && let Ok(all_events) = unsafe { scan_enhanced_range::<XS_TSHIRT_SIZE>(&self.env, 0, u64::MAX) } {
                     for event in all_events {
                         let event_data = &event.evt.data[..event.evt.len as usize];
                         let hash = blake_hash_slice(event_data);
@@ -372,10 +367,9 @@ impl AofState {
                         }
                     }
                 }
-            }
 
-            if !found {
-                if let Ok(all_events) = unsafe { scan_enhanced_range::<S_TSHIRT_SIZE>(&self.env, 0, u64::MAX) } {
+            if !found
+                && let Ok(all_events) = unsafe { scan_enhanced_range::<S_TSHIRT_SIZE>(&self.env, 0, u64::MAX) } {
                     for event in all_events {
                         let event_data = &event.evt.data[..event.evt.len as usize];
                         let hash = blake_hash_slice(event_data);
@@ -387,10 +381,9 @@ impl AofState {
                         }
                     }
                 }
-            }
 
-            if !found {
-                if let Ok(all_events) = unsafe { scan_enhanced_range::<M_TSHIRT_SIZE>(&self.env, 0, u64::MAX) } {
+            if !found
+                && let Ok(all_events) = unsafe { scan_enhanced_range::<M_TSHIRT_SIZE>(&self.env, 0, u64::MAX) } {
                     for event in all_events {
                         let event_data = &event.evt.data[..event.evt.len as usize];
                         let hash = blake_hash_slice(event_data);
@@ -402,10 +395,9 @@ impl AofState {
                         }
                     }
                 }
-            }
 
-            if !found {
-                if let Ok(all_events) = unsafe { scan_enhanced_range::<L_TSHIRT_SIZE>(&self.env, 0, u64::MAX) } {
+            if !found
+                && let Ok(all_events) = unsafe { scan_enhanced_range::<L_TSHIRT_SIZE>(&self.env, 0, u64::MAX) } {
                     for event in all_events {
                         let event_data = &event.evt.data[..event.evt.len as usize];
                         let hash = blake_hash_slice(event_data);
@@ -417,10 +409,9 @@ impl AofState {
                         }
                     }
                 }
-            }
 
-            if !found {
-                if let Ok(all_events) = unsafe { scan_enhanced_range::<XL_TSHIRT_SIZE>(&self.env, 0, u64::MAX) } {
+            if !found
+                && let Ok(all_events) = unsafe { scan_enhanced_range::<XL_TSHIRT_SIZE>(&self.env, 0, u64::MAX) } {
                     for event in all_events {
                         let event_data = &event.evt.data[..event.evt.len as usize];
                         let hash = blake_hash_slice(event_data);
@@ -432,7 +423,6 @@ impl AofState {
                         }
                     }
                 }
-            }
         }
 
         Ok(events)

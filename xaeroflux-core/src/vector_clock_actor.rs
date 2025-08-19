@@ -212,7 +212,7 @@ impl VectorClockActor {
                 .get()
                 .expect("cannot allocate vector clock");
             let mut reader = rusted_ring::Reader::new(in_buffer);
-            let mut writer = rusted_ring::Writer::new(out_buffer);
+            let writer = rusted_ring::Writer::new(out_buffer);
 
             loop {
                 for event in reader.by_ref() {
