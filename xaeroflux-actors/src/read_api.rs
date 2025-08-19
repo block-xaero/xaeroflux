@@ -134,13 +134,13 @@ impl<const SIZE: usize> ReadApi<SIZE> for XaeroFlux {
 
     fn point(&self, query: PointQuery<SIZE>) -> Result<(), Box<dyn std::error::Error>> {
         match query.event_type {
-            None => Err(Box::new(std::io::Error::new::<&str>(ErrorKind::InvalidInput, "event_type not set".into()))),
+            None => Err(Box::new(std::io::Error::new::<&str>(ErrorKind::InvalidInput, "event_type not set"))),
             Some(event_type) => {
                 let read_handle = self.read_handle.clone();
                 let res = get_event_by_event_type::<SIZE>(&read_handle.expect("read_handle not set"), EventType::ApplicationEvent(event_type as u8), query.xaero_id)?;
                 match res {
                     None => {
-                        return Err(Box::new(std::io::Error::new::<&str>(ErrorKind::InvalidInput, "event_not set".into())));
+                        return Err(Box::new(std::io::Error::new::<&str>(ErrorKind::InvalidInput, "event_not set")));
                     }
                     Some(xaero_internal_event) => {
                         let size = EventPoolFactory::estimate_size(xaero_internal_event.evt.data.len());

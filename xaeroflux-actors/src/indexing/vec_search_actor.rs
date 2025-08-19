@@ -248,12 +248,11 @@ impl VectorSearchState {
 
         // Filter results by similarity threshold and collect EventKeys
         for neighbour in hnsw_results.iter() {
-            if neighbour.distance >= query.similarity_threshold {
-                if let Some(&event_key) = self.registry.node_to_event.get(&neighbour.d_id) {
+            if neighbour.distance >= query.similarity_threshold
+                && let Some(&event_key) = self.registry.node_to_event.get(&neighbour.d_id) {
                     valid_results.push((event_key, neighbour.distance));
                     event_keys_to_fetch.push(event_key);
                 }
-            }
         }
 
         // Batch fetch snapshot data from LMDB

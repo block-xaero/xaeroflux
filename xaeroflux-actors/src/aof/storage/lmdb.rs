@@ -136,10 +136,10 @@ pub unsafe fn open_named_db(env: *mut MDB_env, name_ptr: *const i8) -> Result<MD
         if rc_commit != MDB_SUCCESS as i32 {
             return Err(from_lmdb_err(rc_commit));
         }
-        return Ok(dbi2);
+        Ok(dbi2)
     } else {
         unsafe { mdb_txn_abort(txn) };
-        return Err(from_lmdb_err(rc_open));
+        Err(from_lmdb_err(rc_open))
     }
 }
 
@@ -264,11 +264,11 @@ pub fn get_event_key_by_hash(arc_env: &Arc<Mutex<LmdbEnv>>, event_hash: [u8; 32]
     }
 }
 
-pub fn get_event_by_event_type<const TSHIRT_SIZE: usize>(  arc_env: &Arc<Mutex<LmdbEnv>>,
-                                                           event_type: EventType, xaero_id: [u8;
-        32]) ->Result<Option<XaeroInternalEvent<TSHIRT_SIZE>>, Box<dyn std::error::Error>> {
-
-
+pub fn get_event_by_event_type<const TSHIRT_SIZE: usize>(
+    arc_env: &Arc<Mutex<LmdbEnv>>,
+    event_type: EventType,
+    xaero_id: [u8; 32],
+) -> Result<Option<XaeroInternalEvent<TSHIRT_SIZE>>, Box<dyn std::error::Error>> {
     Ok(None)
 }
 

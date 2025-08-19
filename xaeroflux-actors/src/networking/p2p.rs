@@ -20,7 +20,6 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     sync::{Mutex, mpsc},
 };
-use tracing;
 use xaeroflux_core::{
     date_time::emit_secs,
     hash::blake_hash_slice,
@@ -239,8 +238,8 @@ impl<const TSHIRT: usize, const RING_CAPACITY: usize> P2pActor<TSHIRT, RING_CAPA
             tokio::select! {
                 // Handle incoming connections
                 Some(incoming) = self.endpoint.accept() => {
-                    if let Ok(connecting) = incoming.accept() {
-                        if let Ok(conn) = connecting.await {
+                    if let Ok(connecting) = incoming.accept()
+                        && let Ok(conn) = connecting.await {
                             let peer_node_id = conn.remote_node_id().unwrap();
                             let peer_xaero_id = Self::node_id_to_xaero_id(peer_node_id).unwrap();
                             let peer_id_hash = blake_hash_slice(bytemuck::bytes_of(&peer_xaero_id));
@@ -251,7 +250,6 @@ impl<const TSHIRT: usize, const RING_CAPACITY: usize> P2pActor<TSHIRT, RING_CAPA
                                 tracing::info!("New peer connected: {:?}", peer_id_hash);
                             }
                         }
-                    }
                 },
 
                 // Broadcast events from ring buffer
@@ -273,27 +271,25 @@ impl<const TSHIRT: usize, const RING_CAPACITY: usize> P2pActor<TSHIRT, RING_CAPA
                             xsp_conn.vector_clock_stream.recv.read_exact(&mut buf).await?;
                             let vc = bytemuck::from_bytes::<XaeroVectorClock>(&buf);
                             Ok::<XaeroVectorClock, ReadExactError>(*vc)
-                        }).await {
-                            if let Ok(vc_buf) = vc_result {
+                        }).await
+                            && let Ok(vc_buf) = vc_result {
                                 tracing::info!("Received vector clock from peer {:?}", peer_id);
                                 self.vector_clock_actor.state.merge_peer_clock(&vc_buf);
                             }
-                        }
 
                         // Try to receive events with timeout - using read_exact for known event size
                         if let Ok(event_result) = tokio::time::timeout(Duration::from_millis(1), async {
                             let mut buf = [0u8; TSHIRT];
                             xsp_conn.event_stream.recv.read_exact(&mut buf).await?;
                             Ok::<[u8; TSHIRT], ReadExactError>(buf)
-                        }).await {
-                            if let Ok(event_buf) = event_result {
+                        }).await
+                            && let Ok(event_buf) = event_result {
                                 tracing::info!("Received event from peer {:?}, {} bytes", peer_id, TSHIRT);
                                 // Add to local ring buffer if valid
                                 if let Ok(event) = rusted_ring::EventUtils::create_pooled_event::<TSHIRT>(&event_buf, 0) {
                                     let _ = writer.add(event);
                                 }
                             }
-                        }
 
                         // Try to receive files with timeout
                         if let Ok(file_result) = tokio::time::timeout(Duration::from_millis(1), async {
@@ -301,8 +297,8 @@ impl<const TSHIRT: usize, const RING_CAPACITY: usize> P2pActor<TSHIRT, RING_CAPA
                             xsp_conn.file_stream.recv.read_exact(&mut header_buf).await?;
                             let header = bytemuck::from_bytes::<XaeroFileHeader>(&header_buf);
                             Ok::<XaeroFileHeader, ReadExactError>(*header)
-                        }).await {
-                            if let Ok(file_header) = file_result {
+                        }).await
+                            && let Ok(file_header) = file_result {
                                 tracing::info!("Receiving file from peer {:?}, size: {}", peer_id, file_header.size);
                                 // Read file data
                                 let mut file_data = vec![0u8; file_header.size as usize];
@@ -314,11 +310,10 @@ impl<const TSHIRT: usize, const RING_CAPACITY: usize> P2pActor<TSHIRT, RING_CAPA
                                     }
                                 }
                             }
-                        }
 
                         // Try to receive audio chunks with timeout
-                        if let Some(ref mut audio_stream) = xsp_conn.audio_stream {
-                            if let Ok(audio_result) = tokio::time::timeout(Duration::from_millis(1), async {
+                        if let Some(ref mut audio_stream) = xsp_conn.audio_stream
+                            && let Ok(audio_result) = tokio::time::timeout(Duration::from_millis(1), async {
                                 let mut size_buf = [0u8; 4];
                                 audio_stream.recv.read_exact(&mut size_buf).await?;
                                 let chunk_size = u32::from_le_bytes(size_buf) as usize;
@@ -329,18 +324,16 @@ impl<const TSHIRT: usize, const RING_CAPACITY: usize> P2pActor<TSHIRT, RING_CAPA
                                 } else {
                                     Err(anyhow::anyhow!("Invalid audio chunk size"))
                                 }
-                            }).await {
-                                if let Ok(audio_chunk) = audio_result {
+                            }).await
+                                && let Ok(audio_chunk) = audio_result {
                                     tracing::debug!("Received audio chunk from peer {:?}, {} bytes", peer_id, audio_chunk.len());
                                     // Process audio chunk (play, save, etc.)
                                     // Could add to audio ring buffer or direct to audio output
                                 }
-                            }
-                        }
 
                         // Try to receive video chunks with timeout
-                        if let Some(ref mut video_stream) = xsp_conn.video_stream {
-                            if let Ok(video_result) = tokio::time::timeout(Duration::from_millis(1), async {
+                        if let Some(ref mut video_stream) = xsp_conn.video_stream
+                            && let Ok(video_result) = tokio::time::timeout(Duration::from_millis(1), async {
                                 let mut size_buf = [0u8; 4];
                                 video_stream.recv.read_exact(&mut size_buf).await?;
                                 let chunk_size = u32::from_le_bytes(size_buf) as usize;
@@ -351,14 +344,12 @@ impl<const TSHIRT: usize, const RING_CAPACITY: usize> P2pActor<TSHIRT, RING_CAPA
                                 } else {
                                     Err(anyhow::anyhow!("Invalid video chunk size"))
                                 }
-                            }).await {
-                                if let Ok(video_chunk) = video_result {
+                            }).await
+                                && let Ok(video_chunk) = video_result {
                                     tracing::debug!("Received video chunk from peer {:?}, {} bytes", peer_id, video_chunk.len());
                                     // Process video chunk (decode, display, save, etc.)
                                     // Could add to video ring buffer or direct to video output
                                 }
-                            }
-                        }
                     }
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 } => {},

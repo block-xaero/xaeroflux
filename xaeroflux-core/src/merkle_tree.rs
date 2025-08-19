@@ -121,7 +121,7 @@ impl XaeroMerkleTreeOps for XaeroMerkleTree {
             };
         }
         // symmetrically add the last node if odd number of leaves
-        if data_to_push.len() % 2 != 0 {
+        if !data_to_push.len().is_multiple_of(2) {
             let n = *data_to_push.last().expect("Last node should exist");
             data_to_push.push(n);
             trace!("Added dummy node: {:#?}", hex::encode(n));
@@ -186,7 +186,7 @@ impl XaeroMerkleTreeOps for XaeroMerkleTree {
         }
         let leaf_count = self.total_size - self.leaf_start;
         // symmetrically add the last node if odd number of leaves
-        if (leaf_count + page.len()) % 2 != 0 {
+        if !(leaf_count + page.len()).is_multiple_of(2) {
             let n = *page.last().expect("Last node should exist");
             page.push(n);
             trace!("Added dummy node: {:#?}", hex::encode(n));
@@ -242,7 +242,7 @@ impl XaeroMerkleTreeOps for XaeroMerkleTree {
                 trace!("Found node: {:#?} at index: {}", node, self.leaf_start + i);
                 let mut idx = self.leaf_start + i;
                 while idx > 0 {
-                    if idx % 2 == 0 {
+                    if idx.is_multiple_of(2) {
                         // even index, left child
                         let segment = XaeroMerkleProofSegment {
                             node_hash: self.nodes[idx - 1].node_hash,
