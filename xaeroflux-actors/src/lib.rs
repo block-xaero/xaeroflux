@@ -1,7 +1,7 @@
 pub mod aof;
 pub mod indexing;
-mod networking;
-mod read_api;
+pub mod networking;
+pub mod read_api;
 
 use std::{
     collections::HashMap,
