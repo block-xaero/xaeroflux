@@ -8,7 +8,8 @@ use std::{
 
 use liblmdb::{
     MDB_CREATE, MDB_NOTFOUND, MDB_RDONLY, MDB_RESERVE, MDB_SUCCESS, MDB_cursor_op_MDB_NEXT, MDB_dbi, MDB_env, MDB_txn, MDB_val, mdb_cursor_close, mdb_cursor_get, mdb_cursor_open,
-    mdb_dbi_close, mdb_dbi_open, mdb_env_create, mdb_env_open, mdb_env_set_mapsize, mdb_env_set_maxdbs, mdb_put, mdb_strerror, mdb_txn_abort, mdb_txn_begin, mdb_txn_commit,
+    mdb_dbi_close, mdb_dbi_open, mdb_env_create, mdb_env_open, mdb_env_set_mapsize, mdb_env_set_maxdbs, mdb_get, mdb_put, mdb_strerror, mdb_txn_abort, mdb_txn_begin,
+    mdb_txn_commit,
 };
 use rkyv::{rancor::Failure, util::AlignedVec};
 use rusted_ring::{EventPoolFactory, EventUtils};
@@ -21,6 +22,7 @@ use xaeroflux_core::{
 };
 
 use super::format::{EventKey, MmrMeta};
+use crate::read_api::PointQuery;
 
 #[repr(usize)]
 pub enum DBI {
@@ -262,14 +264,6 @@ pub fn get_event_key_by_hash(arc_env: &Arc<Mutex<LmdbEnv>>, event_hash: [u8; 32]
         tracing::debug!("Found event key for hash: {}", hex::encode(event_hash));
         Ok(Some(*event_key))
     }
-}
-
-pub fn get_event_by_event_type<const TSHIRT_SIZE: usize>(
-    arc_env: &Arc<Mutex<LmdbEnv>>,
-    event_type: EventType,
-    xaero_id: [u8; 32],
-) -> Result<Option<XaeroInternalEvent<TSHIRT_SIZE>>, Box<dyn std::error::Error>> {
-    Ok(None)
 }
 
 /// Get event data directly by hash (O(1) lookup) - uses hash index then fetches event
