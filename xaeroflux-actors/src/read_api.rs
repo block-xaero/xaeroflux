@@ -26,7 +26,7 @@ unsafe impl<const SIZE: usize> Pod for ReplayQuery<SIZE> {}
 unsafe impl<const SIZE: usize> Zeroable for ReplayQuery<SIZE> {}
 
 /// # Read API Infrastructure
-trait ReadApi<const SIZE: usize> {
+pub trait ReadApi<const SIZE: usize> {
     fn init_buffers() -> Result<(), Box<dyn std::error::Error>>;
     fn point(&self, query: PointQuery<SIZE>) -> Result<XaeroInternalEvent<SIZE>, Box<dyn std::error::Error>>;
     fn replay(&self, query: ReplayQuery<SIZE>) -> Result<Vec<XaeroInternalEvent<SIZE>>, Box<dyn std::error::Error>>;
