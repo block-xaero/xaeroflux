@@ -1,6 +1,6 @@
 [package]
 name = "xaeroflux-actors"
-version = "0.9.3-alpha"
+version = "0.9.4-alpha"
 edition     = "2024"
 description = "EXPERIMENTAL: actor layer for xaeroflux"
 categories = ["database", "database-implementations"]
@@ -37,7 +37,7 @@ parking_lot = "0.12"
 hnsw_rs = "0.3.2"
 rusted-ring = {workspace = true}
 xaeroid = { workspace = true }
-xaeroflux-core = { version = "0.9.3-alpha" }
+xaeroflux-core = { version = "0.9.4-alpha" }
 iroh = {version = "0.90.0", "default-features" = true, features = ["discovery-local-network", "discovery-pkarr-dht"] }
 tokio = { version = "1.45.1", default-features = false, features = ["rt", "macros", "net", "sync"] }
 bytemuck = "1.23.0"

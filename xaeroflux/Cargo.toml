@@ -1,6 +1,6 @@
 [package]
 name = "xaeroflux"
-version = "0.9.3-alpha"
+version = "0.9.4-alpha"
 edition = "2024"
 description = "EXPERIMENTAL: actor layer for xaeroflux"
 categories = ["database", "database-implementations"]
@@ -15,5 +15,5 @@ readme = "README.md"
 [dependencies]
 rusted-ring = {workspace = true}
 xaeroid = { workspace = true }
-xaeroflux-core = { version = "0.9.3-alpha" }
-xaeroflux-actors = { version = "0.9.3-alpha" }
+xaeroflux-core = { version = "0.9.4-alpha" }
+xaeroflux-actors = { version = "0.9.4-alpha" }
