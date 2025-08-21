@@ -70,6 +70,21 @@ pub const VIDEO_CALL_END: u8 = 71;
 
 // Reserve 72-127 for future network events
 
+pub const PIN_FLAG: u32 = 0x8000_0000; // High bit = pinned
+
+// Helper functions
+pub fn is_pinned_event(event_type: u32) -> bool {
+    (event_type & PIN_FLAG) != 0
+}
+
+pub fn make_pinned(event_type: u32) -> u32 {
+    event_type | PIN_FLAG
+}
+
+pub fn get_base_event_type(event_type: u32) -> u32 {
+    event_type & !PIN_FLAG  // Remove pin flag to get original type
+}
+
 #[repr(C)]
 /// Discriminant for different categories of events.
 ///
