@@ -1,9 +1,9 @@
-use std::{error::Error, io::ErrorKind, sync::OnceLock};
+use std::{error::Error, io::ErrorKind, iter::Filter, sync::OnceLock};
 
 use bytemuck::{Pod, Zeroable};
 use rusted_ring::{RingBuffer, Writer};
 
-use crate::{indexing::vec_search_actor::VectorQueryRequest, XaeroFlux};
+use crate::{XaeroFlux, indexing::vec_search_actor::VectorQueryRequest};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -42,6 +42,9 @@ pub trait ReadApi<const SIZE: usize> {
 
     fn range_query(&self, query: RangeQuery<SIZE>) -> Result<Vec<XaeroInternalEvent<SIZE>>, Box<dyn std::error::Error>>;
 
+    fn range_query_with_filter<P>(&self, query: RangeQuery<SIZE>, filter: Box<P>) -> Result<Vec<XaeroInternalEvent<SIZE>>, Box<dyn Error>>
+    where
+        P: Fn(&XaeroInternalEvent<SIZE>) -> bool;
     fn replay(&self, query: ReplayQuery<SIZE>) -> Result<Vec<XaeroInternalEvent<SIZE>>, Box<dyn std::error::Error>>;
     fn vector_search(&self, query: VectorQueryRequest<SIZE>) -> Result<Vec<XaeroInternalEvent<SIZE>>, Box<dyn std::error::Error>>;
 }
@@ -75,6 +78,16 @@ impl<const SIZE: usize> ReadApi<SIZE> for XaeroFlux {
         let read_handle = self.read_handle.clone();
         let res = unsafe { get_events_by_event_type::<SIZE>(&read_handle.expect("read_api not ready!"), query.event_type) }?;
         Ok(res)
+    }
+
+    fn range_query_with_filter<P>(&self, query: RangeQuery<SIZE>, filter: Box<P>) -> Result<Vec<XaeroInternalEvent<SIZE>>, Box<dyn Error>>
+    where
+        P: Fn(&XaeroInternalEvent<SIZE>) -> bool,
+    {
+        let read_handle = self.read_handle.clone();
+        let res = unsafe { get_events_by_event_type::<SIZE>(&read_handle.expect("read_api not ready!"), query.event_type) }?;
+        let filtered_result = res.into_iter().filter(filter).collect();
+        Ok(filtered_result)
     }
 
     fn replay(&self, query: ReplayQuery<SIZE>) -> Result<Vec<XaeroInternalEvent<SIZE>>, Box<dyn Error>> {
