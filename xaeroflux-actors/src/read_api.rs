@@ -3,7 +3,7 @@ use std::{error::Error, io::ErrorKind, sync::OnceLock};
 use bytemuck::{Pod, Zeroable};
 use rusted_ring::{RingBuffer, Writer};
 
-use crate::{XaeroFlux, indexing::vec_search_actor::VectorQueryRequest};
+use crate::{indexing::vec_search_actor::VectorQueryRequest, XaeroFlux};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -25,17 +25,30 @@ pub struct ReplayQuery<const SIZE: usize> {
 unsafe impl<const SIZE: usize> Pod for ReplayQuery<SIZE> {}
 unsafe impl<const SIZE: usize> Zeroable for ReplayQuery<SIZE> {}
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct RangeQuery<const SIZE: usize> {
+    pub xaero_id: [u8; 32],
+    pub event_type: u32,
+}
+
+unsafe impl<const SIZE: usize> Pod for RangeQuery<SIZE> {}
+unsafe impl<const SIZE: usize> Zeroable for RangeQuery<SIZE> {}
+
 /// # Read API Infrastructure
 pub trait ReadApi<const SIZE: usize> {
     fn init_buffers() -> Result<(), Box<dyn std::error::Error>>;
     fn point(&self, query: PointQuery<SIZE>) -> Result<XaeroInternalEvent<SIZE>, Box<dyn std::error::Error>>;
+
+    fn range_query(&self, query: RangeQuery<SIZE>) -> Result<Vec<XaeroInternalEvent<SIZE>>, Box<dyn std::error::Error>>;
+
     fn replay(&self, query: ReplayQuery<SIZE>) -> Result<Vec<XaeroInternalEvent<SIZE>>, Box<dyn std::error::Error>>;
     fn vector_search(&self, query: VectorQueryRequest<SIZE>) -> Result<Vec<XaeroInternalEvent<SIZE>>, Box<dyn std::error::Error>>;
 }
 use rusted_ring::{S_CAPACITY, S_TSHIRT_SIZE};
 use xaeroflux_core::pool::XaeroInternalEvent;
 
-use crate::aof::storage::lmdb::get_event_by_hash;
+use crate::aof::storage::lmdb::{get_event_by_hash, get_events_by_event_type};
 
 pub static CONTINUOUS_QUERY_S: OnceLock<RingBuffer<S_TSHIRT_SIZE, S_CAPACITY>> = OnceLock::new();
 
@@ -56,6 +69,12 @@ impl<const SIZE: usize> ReadApi<SIZE> for XaeroFlux {
             None => Err(Box::new(std::io::Error::new::<&str>(ErrorKind::NotFound, "cannot find the point asked for"))),
             Some(event) => Ok(event),
         }
+    }
+
+    fn range_query(&self, query: RangeQuery<SIZE>) -> Result<Vec<XaeroInternalEvent<SIZE>>, Box<dyn Error>> {
+        let read_handle = self.read_handle.clone();
+        let res = unsafe { get_events_by_event_type::<SIZE>(&read_handle.expect("read_api not ready!"), query.event_type) }?;
+        Ok(res)
     }
 
     fn replay(&self, query: ReplayQuery<SIZE>) -> Result<Vec<XaeroInternalEvent<SIZE>>, Box<dyn Error>> {

@@ -7,9 +7,9 @@ use std::{
 };
 
 use liblmdb::{
-    MDB_CREATE, MDB_NOTFOUND, MDB_RDONLY, MDB_RESERVE, MDB_SUCCESS, MDB_cursor_op_MDB_NEXT, MDB_dbi, MDB_env, MDB_txn, MDB_val, mdb_cursor_close, mdb_cursor_get, mdb_cursor_open,
-    mdb_dbi_close, mdb_dbi_open, mdb_env_create, mdb_env_open, mdb_env_set_mapsize, mdb_env_set_maxdbs, mdb_get, mdb_put, mdb_strerror, mdb_txn_abort, mdb_txn_begin,
-    mdb_txn_commit,
+    mdb_cursor_close, mdb_cursor_get, mdb_cursor_open, mdb_dbi_close, mdb_dbi_open, mdb_env_create, mdb_env_open, mdb_env_set_mapsize, mdb_env_set_maxdbs, mdb_get, mdb_put, mdb_strerror, mdb_txn_abort,
+    mdb_txn_begin, mdb_txn_commit, MDB_cursor_op_MDB_NEXT, MDB_dbi, MDB_env, MDB_txn, MDB_val, MDB_CREATE, MDB_NOTFOUND, MDB_RDONLY, MDB_RESERVE,
+    MDB_SUCCESS,
 };
 use rkyv::{rancor::Failure, util::AlignedVec};
 use rusted_ring::{EventPoolFactory, EventUtils};
@@ -850,6 +850,100 @@ pub unsafe fn scan_enhanced_range<const TSHIRT_SIZE: usize>(env: &Arc<Mutex<Lmdb
             }
 
             // 7) Advance the cursor
+            let rc = mdb_cursor_get(cursor, &mut key_val, &mut data_val, MDB_cursor_op_MDB_NEXT);
+            if rc != 0 {
+                break;
+            }
+        }
+
+        // 8) Cleanup
+        mdb_cursor_close(cursor);
+        mdb_txn_abort(rtxn);
+
+        Ok(results)
+    }
+}
+
+pub unsafe fn get_events_by_event_type<const TSHIRT_SIZE: usize>(env: &Arc<Mutex<LmdbEnv>>, event_type: u32) -> anyhow::Result<Vec<XaeroInternalEvent<TSHIRT_SIZE>>> {
+    let mut results = Vec::<XaeroInternalEvent<TSHIRT_SIZE>>::new();
+    let g = env.lock().expect("failed to lock env");
+    let env = g.env;
+
+    unsafe {
+        // 1) Begin a read txn
+        let mut rtxn: *mut MDB_txn = std::ptr::null_mut();
+        let sc_tx_begin = mdb_txn_begin(env, std::ptr::null_mut(), MDB_RDONLY, &mut rtxn);
+        if sc_tx_begin != 0 {
+            return Err(anyhow::anyhow!("Failed to begin read txn: {}", sc_tx_begin));
+        }
+
+        // 2) Open a cursor on that DB
+        let mut cursor = std::ptr::null_mut();
+        let sc_cursor_open = mdb_cursor_open(rtxn, g.dbis[0], &mut cursor);
+        if sc_cursor_open != 0 {
+            mdb_txn_abort(rtxn);
+            return Err(anyhow::anyhow!("Failed to open cursor: {}", sc_cursor_open));
+        }
+
+        // 3) Start from the first key and iterate through all
+        let mut key_val = MDB_val {
+            mv_size: 0,
+            mv_data: std::ptr::null_mut(),
+        };
+        let mut data_val = MDB_val {
+            mv_size: 0,
+            mv_data: std::ptr::null_mut(),
+        };
+
+        // 4) Position to first key
+        let rc = mdb_cursor_get(cursor, &mut key_val, &mut data_val, liblmdb::MDB_cursor_op_MDB_FIRST);
+        if rc != 0 {
+            mdb_cursor_close(cursor);
+            mdb_txn_abort(rtxn);
+            tracing::debug!("Enhanced scan: No first key found");
+            return Ok(results);
+        }
+
+        loop {
+            // 5) Extract the event_type from enhanced key format
+            let raw_key = std::slice::from_raw_parts(key_val.mv_data as *const u8, key_val.mv_size);
+
+            // Ensure we have enough bytes for the enhanced key
+            if raw_key.len() < std::mem::size_of::<EventKey>() {
+                // Skip invalid keys
+                let rc = mdb_cursor_get(cursor, &mut key_val, &mut data_val, MDB_cursor_op_MDB_NEXT);
+                if rc != 0 {
+                    break;
+                }
+                continue;
+            }
+
+            // Extract event_type from offset 72 (fixed: no try_into needed)
+            let event_type_bytes: u8 = raw_key[72];
+
+            // Check if this is the event type we're looking for
+            if event_type as u8 == event_type_bytes {
+                let data_slice = std::slice::from_raw_parts(data_val.mv_data as *const u8, data_val.mv_size);
+
+                // Check if the data size matches XaeroInternalEvent<TSHIRT_SIZE>
+                if data_slice.len() == std::mem::size_of::<XaeroInternalEvent<TSHIRT_SIZE>>() {
+                    // Safe conversion handling alignment
+                    match bytemuck::try_from_bytes::<XaeroInternalEvent<TSHIRT_SIZE>>(data_slice) {
+                        Ok(internal_event) => {
+                            results.push(*internal_event);
+                        }
+                        Err(_) => {
+                            // Copy to properly aligned buffer
+                            let mut aligned_buffer: std::mem::MaybeUninit<XaeroInternalEvent<TSHIRT_SIZE>> = std::mem::MaybeUninit::uninit();
+                            std::ptr::copy_nonoverlapping(data_slice.as_ptr(), aligned_buffer.as_mut_ptr() as *mut u8, data_slice.len());
+                            let internal_event = aligned_buffer.assume_init();
+                            results.push(internal_event);
+                        }
+                    }
+                }
+            }
+
+            // 7) Advance the cursor (moved outside the condition)
             let rc = mdb_cursor_get(cursor, &mut key_val, &mut data_val, MDB_cursor_op_MDB_NEXT);
             if rc != 0 {
                 break;
