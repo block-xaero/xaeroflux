@@ -82,7 +82,7 @@ pub fn make_pinned(event_type: u32) -> u32 {
 }
 
 pub fn get_base_event_type(event_type: u32) -> u32 {
-    event_type & !PIN_FLAG  // Remove pin flag to get original type
+    event_type & !PIN_FLAG // Remove pin flag to get original type
 }
 
 #[repr(C)]
