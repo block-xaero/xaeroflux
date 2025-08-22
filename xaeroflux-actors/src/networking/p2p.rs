@@ -26,10 +26,19 @@ use xaeroflux_core::{
     pool::XaeroPeerEvent,
     vector_clock_actor::{VectorClockActor, XaeroVectorClock},
 };
-use xaeroid::XaeroID;
+use xaeroid::{
+    XaeroID,
+    cache::{XaeroIdCacheS, XaeroIdCacheXS, XaeroIdHotCache},
+};
 
 use crate::{
-    aof::{ring_buffer_actor::AofState, storage::format::MmrMeta},
+    aof::{
+        ring_buffer_actor::AofState,
+        storage::{
+            format::MmrMeta,
+            lmdb::{get_node_id_by_xaero_id, get_xaero_id_by_xaero_id_hash},
+        },
+    },
     networking::format::XaeroFileHeader,
 };
 
@@ -75,8 +84,6 @@ pub struct XspConnection {
     pub mmr_stream: XaeroQuicStream,
     pub event_stream: XaeroQuicStream,
     pub file_stream: XaeroQuicStream,
-    pub video_stream: Option<XaeroQuicStream>,
-    pub audio_stream: Option<XaeroQuicStream>,
 }
 
 impl XspConnection {
@@ -93,13 +100,6 @@ impl XspConnection {
         let (file_sender, file_receiver) = connection.open_bi().await?;
         let file_stream = XaeroQuicStream::new("file$".to_string(), StreamType::File, file_sender, file_receiver);
 
-        // Create audio/video streams immediately for MVP
-        let (audio_sender, audio_receiver) = connection.open_bi().await?;
-        let audio_stream = XaeroQuicStream::new("audio$".to_string(), StreamType::Audio, audio_sender, audio_receiver);
-
-        let (video_sender, video_receiver) = connection.open_bi().await?;
-        let video_stream = XaeroQuicStream::new("video$".to_string(), StreamType::Video, video_sender, video_receiver);
-
         Ok(XspConnection {
             peer_id,
             conn: connection,
@@ -108,8 +108,6 @@ impl XspConnection {
             mmr_stream,
             event_stream,
             file_stream,
-            video_stream: Some(video_stream),
-            audio_stream: Some(audio_stream),
         })
     }
 
@@ -142,30 +140,6 @@ impl XspConnection {
         self.file_stream.send.write_all(&file_data).await?;
         Ok(())
     }
-
-    pub async fn send_audio_chunk(&mut self, audio_data: &[u8]) -> Result<(), Error> {
-        if let Some(ref mut audio_stream) = self.audio_stream {
-            // Send chunk size first (4 bytes)
-            let chunk_size = audio_data.len() as u32;
-            audio_stream.send.write_all(&chunk_size.to_le_bytes()).await?;
-            // Send audio data
-            audio_stream.send.write_all(audio_data).await?;
-            audio_stream.send.flush().await?;
-        }
-        Ok(())
-    }
-
-    pub async fn send_video_chunk(&mut self, video_data: &[u8]) -> Result<(), Error> {
-        if let Some(ref mut video_stream) = self.video_stream {
-            // Send chunk size first (4 bytes)
-            let chunk_size = video_data.len() as u32;
-            video_stream.send.write_all(&chunk_size.to_le_bytes()).await?;
-            // Send video data
-            video_stream.send.write_all(video_data).await?;
-            video_stream.send.flush().await?;
-        }
-        Ok(())
-    }
 }
 
 #[repr(C, align(64))]
@@ -186,6 +160,9 @@ pub struct P2pActor<const TSHIRT: usize, const RING_CAPACITY: usize> {
     running: Arc<AtomicBool>,
     aof_actor: Arc<AofState>,
     vector_clock_actor: VectorClockActor,
+    xaero_id_cache: XaeroIdCacheS,
+    node_id_to_xaero_id_mapping: HashMap<[u8; 32], [u8; 32]>, /* FIXME: remove heap allocation
+                                                               * when time permits */
 }
 
 impl<const TSHIRT: usize, const RING_CAPACITY: usize> P2pActor<TSHIRT, RING_CAPACITY> {
@@ -211,7 +188,6 @@ impl<const TSHIRT: usize, const RING_CAPACITY: usize> P2pActor<TSHIRT, RING_CAPA
             .alpns(vec![b"xsp-1.0".to_vec()])
             .bind()
             .await?;
-
         let actor = Self {
             our_xaero_id: blake_hash_slice(bytemuck::bytes_of(&our_xaero_id)),
             endpoint,
@@ -219,6 +195,8 @@ impl<const TSHIRT: usize, const RING_CAPACITY: usize> P2pActor<TSHIRT, RING_CAPA
             running: Arc::new(AtomicBool::new(false)),
             aof_actor,
             vector_clock_actor: VectorClockActor::new(),
+            xaero_id_cache: XaeroIdCacheS::new(),
+            node_id_to_xaero_id_mapping: HashMap::new(),
         };
 
         let writer = Writer::new(ring_buffer);
@@ -241,7 +219,7 @@ impl<const TSHIRT: usize, const RING_CAPACITY: usize> P2pActor<TSHIRT, RING_CAPA
                     if let Ok(connecting) = incoming.accept()
                         && let Ok(conn) = connecting.await {
                             let peer_node_id = conn.remote_node_id()?;
-                            let peer_xaero_id = Self::node_id_to_xaero_id(peer_node_id)?;
+                            let peer_xaero_id = self.node_id_to_xaero_id(peer_node_id)?;
                             let peer_id_hash = blake_hash_slice(bytemuck::bytes_of(&peer_xaero_id));
 
                             // Create XspConnection with all streams
@@ -310,47 +288,7 @@ impl<const TSHIRT: usize, const RING_CAPACITY: usize> P2pActor<TSHIRT, RING_CAPA
                                     }
                                 }
                             }
-
-                        // Try to receive audio chunks with timeout
-                        if let Some(ref mut audio_stream) = xsp_conn.audio_stream
-                            && let Ok(audio_result) = tokio::time::timeout(Duration::from_millis(1), async {
-                                let mut size_buf = [0u8; 4];
-                                audio_stream.recv.read_exact(&mut size_buf).await?;
-                                let chunk_size = u32::from_le_bytes(size_buf) as usize;
-                                if chunk_size > 0 && chunk_size < 1_000_000 { // 1MB max
-                                    let mut audio_data = vec![0u8; chunk_size];
-                                    audio_stream.recv.read_exact(&mut audio_data).await?;
-                                    Ok(audio_data)
-                                } else {
-                                    Err(anyhow::anyhow!("Invalid audio chunk size"))
-                                }
-                            }).await
-                                && let Ok(audio_chunk) = audio_result {
-                                    tracing::debug!("Received audio chunk from peer {:?}, {} bytes", peer_id, audio_chunk.len());
-                                    // Process audio chunk (play, save, etc.)
-                                    // Could add to audio ring buffer or direct to audio output
-                                }
-
-                        // Try to receive video chunks with timeout
-                        if let Some(ref mut video_stream) = xsp_conn.video_stream
-                            && let Ok(video_result) = tokio::time::timeout(Duration::from_millis(1), async {
-                                let mut size_buf = [0u8; 4];
-                                video_stream.recv.read_exact(&mut size_buf).await?;
-                                let chunk_size = u32::from_le_bytes(size_buf) as usize;
-                                if chunk_size > 0 && chunk_size < 10_000_000 { // 10MB max
-                                    let mut video_data = vec![0u8; chunk_size];
-                                    video_stream.recv.read_exact(&mut video_data).await?;
-                                    Ok(video_data)
-                                } else {
-                                    Err(anyhow::anyhow!("Invalid video chunk size"))
-                                }
-                            }).await
-                                && let Ok(video_chunk) = video_result {
-                                    tracing::debug!("Received video chunk from peer {:?}, {} bytes", peer_id, video_chunk.len());
-                                    // Process video chunk (decode, display, save, etc.)
-                                    // Could add to video ring buffer or direct to video output
-                                }
-                    }
+            }
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 } => {},
 
@@ -378,7 +316,7 @@ impl<const TSHIRT: usize, const RING_CAPACITY: usize> P2pActor<TSHIRT, RING_CAPA
     }
 
     pub async fn connect_to_peer(&mut self, peer_xaero_id: XaeroID) -> Result<()> {
-        let node_id = Self::xaero_id_to_node_id(peer_xaero_id)?;
+        let node_id = Self::xaero_id_to_node_id(self, peer_xaero_id)?;
         let node_addr = NodeAddr::new(node_id);
         let conn = self.endpoint.connect(node_addr, b"xsp-1.0").await?;
         let peer_id_hash = blake_hash_slice(bytemuck::bytes_of(&peer_xaero_id));
@@ -397,33 +335,24 @@ impl<const TSHIRT: usize, const RING_CAPACITY: usize> P2pActor<TSHIRT, RING_CAPA
         self.running.store(false, Ordering::Relaxed);
     }
 
-    pub async fn broadcast_audio_to_peers(&mut self, audio_data: &[u8]) -> Result<()> {
-        for (peer_id, xsp_conn) in &mut self.active_peers {
-            if let Err(e) = xsp_conn.send_audio_chunk(audio_data).await {
-                tracing::warn!("Failed to send audio to peer {:?}: {:?}", peer_id, e);
-            }
-        }
-        Ok(())
-    }
-
-    pub async fn broadcast_video_to_peers(&mut self, video_data: &[u8]) -> Result<()> {
-        for (peer_id, xsp_conn) in &mut self.active_peers {
-            if let Err(e) = xsp_conn.send_video_chunk(video_data).await {
-                tracing::warn!("Failed to send video to peer {:?}: {:?}", peer_id, e);
-            }
-        }
-        Ok(())
-    }
-
-    fn xaero_id_to_node_id(xaero_id: XaeroID) -> Result<iroh::NodeId> {
+    fn xaero_id_to_node_id(&self, xaero_id: XaeroID) -> Result<iroh::NodeId> {
         let xaero_id_bytes = bytemuck::bytes_of(&xaero_id);
         let hash = blake_hash_slice(xaero_id_bytes);
         Ok(iroh::NodeId::from_bytes(&hash)?)
     }
 
-    fn node_id_to_xaero_id(node_id: iroh::NodeId) -> Result<XaeroID> {
+    fn node_id_to_xaero_id(&self, node_id: iroh::NodeId) -> Result<XaeroID> {
         // look up blake3 id to xaero_id
         let n_id = node_id.as_bytes();
-        Ok(XaeroID::zeroed())
+        // assume node id and xaero id hash is same for now.
+        let xaero_id_hash = self.node_id_to_xaero_id_mapping.get(node_id.as_bytes()).unwrap_or_else(|| {
+            // TODO : find xaero_id hash using P2P call for now we just leave it.
+            panic!("failed to grab xaero_id hash for node id gotten!")
+        });
+        let xaero_id_found = get_xaero_id_by_xaero_id_hash(&self.aof_actor.env, *xaero_id_hash).ok().flatten().unwrap_or_else(|| {
+            // TODO: grab xaero id else where.
+            panic!("failed to grab xaero_id hash for node id gotten!");
+        });
+        Ok(*xaero_id_found)
     }
 }
