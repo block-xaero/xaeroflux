@@ -8,9 +8,9 @@ use std::{
 
 use iroh::NodeId;
 use liblmdb::{
-    mdb_cursor_close, mdb_cursor_get, mdb_cursor_open, mdb_dbi_close, mdb_dbi_open, mdb_env_create, mdb_env_open, mdb_env_set_mapsize, mdb_env_set_maxdbs, mdb_get, mdb_put, mdb_strerror, mdb_txn_abort,
-    mdb_txn_begin, mdb_txn_commit, MDB_cursor_op_MDB_NEXT, MDB_dbi, MDB_env, MDB_txn, MDB_val, MDB_CREATE, MDB_NODUPDATA, MDB_NOTFOUND, MDB_RDONLY,
-    MDB_RESERVE, MDB_SUCCESS,
+    MDB_CREATE, MDB_NODUPDATA, MDB_NOTFOUND, MDB_RDONLY, MDB_RESERVE, MDB_SUCCESS, MDB_cursor_op_MDB_NEXT, MDB_dbi, MDB_env, MDB_txn, MDB_val, mdb_cursor_close, mdb_cursor_get,
+    mdb_cursor_open, mdb_dbi_close, mdb_dbi_open, mdb_env_create, mdb_env_open, mdb_env_set_mapsize, mdb_env_set_maxdbs, mdb_get, mdb_put, mdb_strerror, mdb_txn_abort,
+    mdb_txn_begin, mdb_txn_commit,
 };
 use rkyv::{rancor::Failure, util::AlignedVec};
 use rusted_ring::{EventPoolFactory, EventUtils};
@@ -21,7 +21,7 @@ use xaeroflux_core::{
     pool::XaeroInternalEvent,
     vector_clock_actor::XaeroVectorClock,
 };
-use xaeroid::{cache::xaero_id_hash, XaeroID};
+use xaeroid::{XaeroID, cache::xaero_id_hash};
 
 use super::format::{EventKey, MmrMeta};
 use crate::read_api::PointQuery;
