@@ -6,10 +6,11 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use iroh::NodeId;
 use liblmdb::{
     mdb_cursor_close, mdb_cursor_get, mdb_cursor_open, mdb_dbi_close, mdb_dbi_open, mdb_env_create, mdb_env_open, mdb_env_set_mapsize, mdb_env_set_maxdbs, mdb_get, mdb_put, mdb_strerror, mdb_txn_abort,
-    mdb_txn_begin, mdb_txn_commit, MDB_cursor_op_MDB_NEXT, MDB_dbi, MDB_env, MDB_txn, MDB_val, MDB_CREATE, MDB_NOTFOUND, MDB_RDONLY, MDB_RESERVE,
-    MDB_SUCCESS,
+    mdb_txn_begin, mdb_txn_commit, MDB_cursor_op_MDB_NEXT, MDB_dbi, MDB_env, MDB_txn, MDB_val, MDB_CREATE, MDB_NODUPDATA, MDB_NOTFOUND, MDB_RDONLY,
+    MDB_RESERVE, MDB_SUCCESS,
 };
 use rkyv::{rancor::Failure, util::AlignedVec};
 use rusted_ring::{EventPoolFactory, EventUtils};
@@ -20,6 +21,7 @@ use xaeroflux_core::{
     pool::XaeroInternalEvent,
     vector_clock_actor::XaeroVectorClock,
 };
+use xaeroid::{cache::xaero_id_hash, XaeroID};
 
 use super::format::{EventKey, MmrMeta};
 use crate::read_api::PointQuery;
@@ -30,6 +32,8 @@ pub enum DBI {
     Meta = 1,
     HashIndex = 2, // Leaf hash index db
     VectorClockIndex = 3,
+    XaeroIdNodeIdIndex = 4,
+    XaeroIdIndex = 5,
 }
 
 /// A wrapper around an LMDB environment with three databases: AOF, META, and HASH_INDEX.
@@ -39,7 +43,7 @@ pub enum DBI {
 /// - HASH_INDEX_DB stores hash → EventKey mappings for O(1) leaf hash lookups.
 pub struct LmdbEnv {
     pub env: *mut MDB_env,
-    pub dbis: [MDB_dbi; 4],
+    pub dbis: [MDB_dbi; 6],
 }
 
 unsafe impl Sync for LmdbEnv {}
@@ -86,17 +90,20 @@ impl LmdbEnv {
 
         println!("DEBUG: About to open named databases"); // ADD THIS
         let aof_dbi = unsafe { open_named_db(env, c"/aof".as_ptr())? };
-        println!("DEBUG: Opened aof_dbi = {}", aof_dbi); // ADD THIS
+        tracing::debug!("DEBUG: Opened aof_dbi = {}", aof_dbi); // ADD THIS
         let meta_dbi = unsafe { open_named_db(env, c"/meta".as_ptr())? };
-        println!("DEBUG: Opened meta_dbi = {}", meta_dbi); // ADD THIS
+        tracing::debug!("DEBUG: Opened meta_dbi = {}", meta_dbi); // ADD THIS
         let hash_index_dbi = unsafe { open_named_db(env, c"/hash_index".as_ptr())? };
-        println!("DEBUG: Opened hash_index_dbi = {}", hash_index_dbi); // ADD THIS
+        tracing::debug!("DEBUG: Opened hash_index_dbi = {}", hash_index_dbi); // ADD THIS
         let vector_clock_index_dbi = unsafe { open_named_db(env, c"/vector_clock_index".as_ptr())? };
-        println!("DEBUG: Opened vector_clock_index_dbi = {}", vector_clock_index_dbi); // ADD THIS
-
+        tracing::debug!("DEBUG: Opened vector_clock_index_dbi = {}", vector_clock_index_dbi);
+        let xaero_id_node_id_index_dbi = unsafe { open_named_db(env, c"/xaero_id_node_id_index_dbi".as_ptr())? };
+        tracing::debug!("DEBUG: Opened xaero_id_node_id_index_dbi = {xaero_id_node_id_index_dbi:?}");
+        let xaero_id_index_dbi = unsafe { open_named_db(env, c"/xaero_id_index_dbi".as_ptr())? };
+        tracing::debug!("DEBUG: Opened xaero_id_index_dbi = {}", xaero_id_index_dbi);
         Ok(Self {
             env,
-            dbis: [aof_dbi, meta_dbi, hash_index_dbi, vector_clock_index_dbi],
+            dbis: [aof_dbi, meta_dbi, hash_index_dbi, vector_clock_index_dbi, xaero_id_index_dbi, xaero_id_index_dbi],
         })
     }
 }
@@ -179,9 +186,155 @@ pub fn generate_event_key(event_data: &[u8], event_type: u32, timestamp: u64, xa
     }
 }
 
-// ================================================================================================
-// NEW: HASH INDEX FUNCTIONS
-// ================================================================================================
+pub fn put_xaero_id(arc_env: &Arc<Mutex<LmdbEnv>>, xaero_id: XaeroID) -> Result<[u8; 32], Box<dyn std::error::Error>> {
+    let guard = arc_env.lock().expect("failed to lock env");
+    let env = guard.env;
+    let xaero_id_bytes = bytemuck::bytes_of::<XaeroID>(&xaero_id);
+    let xaero_id_hash_calculated = blake_hash_slice(xaero_id_bytes);
+    unsafe {
+        let mut txn: *mut MDB_txn = std::ptr::null_mut();
+        let rc = mdb_txn_begin(env, std::ptr::null_mut(), 0, &mut txn);
+        if rc != 0 {
+            return Err(from_lmdb_err(rc));
+        }
+
+        // Key: 32-byte event hash
+        let mut xaero_id_hash_mdb_val = MDB_val {
+            mv_size: xaero_id_hash_calculated.len(),
+            mv_data: xaero_id_hash_calculated.as_ptr() as *mut _,
+        };
+
+        // value: node_id
+        let mut xaero_id_bytes_mdb_val = MDB_val {
+            mv_size: xaero_id_bytes.len(),
+            mv_data: xaero_id_bytes.as_ptr() as *mut _,
+        };
+
+        let sc = mdb_put(
+            txn,
+            guard.dbis[DBI::XaeroIdIndex as usize],
+            &mut xaero_id_hash_mdb_val,
+            &mut xaero_id_bytes_mdb_val,
+            MDB_NODUPDATA,
+        );
+        if sc != 0 {
+            mdb_txn_abort(txn);
+            return Err(from_lmdb_err(sc));
+        }
+    }
+    Ok(xaero_id_hash_calculated)
+}
+
+pub fn get_xaero_id_by_xaero_id_hash(arc_env: &Arc<Mutex<LmdbEnv>>, xaero_id_hash: [u8; 32]) -> Result<Option<&XaeroID>, Box<dyn std::error::Error>> {
+    let guard = arc_env.lock().expect("failed to lock env");
+    let env = guard.env;
+
+    unsafe {
+        let mut txn: *mut MDB_txn = std::ptr::null_mut();
+        let rc = mdb_txn_begin(env, std::ptr::null_mut(), MDB_RDONLY, &mut txn);
+        if rc != 0 {
+            return Err(from_lmdb_err(rc));
+        }
+
+        let mut key_val = MDB_val {
+            mv_size: xaero_id_hash.len(),
+            mv_data: xaero_id_hash.as_ptr() as *mut _,
+        };
+        let mut data_val = MDB_val {
+            mv_size: 0,
+            mv_data: std::ptr::null_mut(),
+        };
+
+        let getrc = liblmdb::mdb_get(txn, guard.dbis[DBI::XaeroIdIndex as usize], &mut key_val, &mut data_val);
+        if getrc != 0 {
+            mdb_txn_abort(txn);
+            if getrc == liblmdb::MDB_NOTFOUND {
+                return Ok(None);
+            } else {
+                return Err(from_lmdb_err(getrc));
+            }
+        }
+
+        let slice = std::slice::from_raw_parts(data_val.mv_data as *const u8, data_val.mv_size);
+        let xaero_id_found = bytemuck::from_bytes::<XaeroID>(slice);
+        mdb_txn_abort(txn);
+
+        tracing::debug!("Found xaero_id : {xaero_id_found:?} from provided  xaero_id_hash: {:?}", hex::encode(xaero_id_hash));
+        Ok(Some(xaero_id_found))
+    }
+}
+
+pub fn put_xaero_id_to_node_id(arc_env: &Arc<Mutex<LmdbEnv>>, xaero_id: [u8; 32], node_id: &[u8; 32]) -> Result<(), Box<dyn std::error::Error>> {
+    let guard = arc_env.lock().expect("failed to lock env");
+    let env = guard.env;
+
+    unsafe {
+        let mut txn: *mut MDB_txn = std::ptr::null_mut();
+        let rc = mdb_txn_begin(env, std::ptr::null_mut(), 0, &mut txn);
+        if rc != 0 {
+            return Err(from_lmdb_err(rc));
+        }
+
+        // Key: 32-byte event hash
+        let mut xaero_id_hash = MDB_val {
+            mv_size: xaero_id.len(),
+            mv_data: xaero_id.as_ptr() as *mut _,
+        };
+
+        // value: node_id
+        let node_id_bytes = bytemuck::bytes_of(node_id);
+        let mut node_id_val = MDB_val {
+            mv_size: node_id_bytes.len(),
+            mv_data: node_id_bytes.as_ptr() as *mut _,
+        };
+
+        let sc = mdb_put(txn, guard.dbis[DBI::XaeroIdIndex as usize], &mut xaero_id_hash, &mut node_id_val, MDB_NODUPDATA);
+        if sc != 0 {
+            mdb_txn_abort(txn);
+            return Err(from_lmdb_err(sc));
+        }
+    }
+    Ok(())
+}
+
+pub fn get_node_id_by_xaero_id(arc_env: &Arc<Mutex<LmdbEnv>>, xaero_id_hash: [u8; 32]) -> Result<Option<[u8; 32]>, Box<dyn std::error::Error>> {
+    let guard = arc_env.lock().expect("failed to lock env");
+    let env = guard.env;
+
+    unsafe {
+        let mut txn: *mut MDB_txn = std::ptr::null_mut();
+        let rc = mdb_txn_begin(env, std::ptr::null_mut(), MDB_RDONLY, &mut txn);
+        if rc != 0 {
+            return Err(from_lmdb_err(rc));
+        }
+
+        let mut key_val = MDB_val {
+            mv_size: xaero_id_hash.len(),
+            mv_data: xaero_id_hash.as_ptr() as *mut _,
+        };
+        let mut data_val = MDB_val {
+            mv_size: 0,
+            mv_data: std::ptr::null_mut(),
+        };
+
+        let getrc = liblmdb::mdb_get(txn, guard.dbis[DBI::XaeroIdIndex as usize], &mut key_val, &mut data_val);
+        if getrc != 0 {
+            mdb_txn_abort(txn);
+            if getrc == liblmdb::MDB_NOTFOUND {
+                return Ok(None);
+            } else {
+                return Err(from_lmdb_err(getrc));
+            }
+        }
+
+        let slice = std::slice::from_raw_parts(data_val.mv_data as *const u8, data_val.mv_size);
+        let node_id_hash: &[u8; 32] = slice[0..32].try_into()?;
+        mdb_txn_abort(txn);
+
+        tracing::debug!("Found node_id_hash : {:?} from provided : {:?}", hex::encode(node_id_hash), hex::encode(xaero_id_hash));
+        Ok(Some(*node_id_hash))
+    }
+}
 
 /// Store hash → EventKey mapping in HASH_INDEX_DB for O(1) lookups
 pub fn put_hash_index(arc_env: &Arc<Mutex<LmdbEnv>>, event_hash: [u8; 32], event_key: &EventKey) -> Result<(), Box<dyn std::error::Error>> {

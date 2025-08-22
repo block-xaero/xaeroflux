@@ -240,8 +240,8 @@ impl<const TSHIRT: usize, const RING_CAPACITY: usize> P2pActor<TSHIRT, RING_CAPA
                 Some(incoming) = self.endpoint.accept() => {
                     if let Ok(connecting) = incoming.accept()
                         && let Ok(conn) = connecting.await {
-                            let peer_node_id = conn.remote_node_id().unwrap();
-                            let peer_xaero_id = Self::node_id_to_xaero_id(peer_node_id).unwrap();
+                            let peer_node_id = conn.remote_node_id()?;
+                            let peer_xaero_id = Self::node_id_to_xaero_id(peer_node_id)?;
                             let peer_id_hash = blake_hash_slice(bytemuck::bytes_of(&peer_xaero_id));
 
                             // Create XspConnection with all streams
@@ -416,14 +416,14 @@ impl<const TSHIRT: usize, const RING_CAPACITY: usize> P2pActor<TSHIRT, RING_CAPA
     }
 
     fn xaero_id_to_node_id(xaero_id: XaeroID) -> Result<iroh::NodeId> {
-        let hash = blake_hash_slice(&xaero_id.secret_key);
-        let mut node_id_bytes = [0u8; 32];
-        node_id_bytes.copy_from_slice(&hash[..32]);
-        Ok(iroh::NodeId::from_bytes(&node_id_bytes)?)
+        let xaero_id_bytes = bytemuck::bytes_of(&xaero_id);
+        let hash = blake_hash_slice(xaero_id_bytes);
+        Ok(iroh::NodeId::from_bytes(&hash)?)
     }
 
     fn node_id_to_xaero_id(node_id: iroh::NodeId) -> Result<XaeroID> {
         // look up blake3 id to xaero_id
+        let n_id = node_id.as_bytes();
         Ok(XaeroID::zeroed())
     }
 }
