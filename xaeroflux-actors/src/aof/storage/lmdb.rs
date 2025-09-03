@@ -8,20 +8,20 @@ use std::{
 
 use iroh::NodeId;
 use liblmdb::{
-    mdb_cursor_close, mdb_cursor_get, mdb_cursor_open, mdb_dbi_close, mdb_dbi_open, mdb_env_create, mdb_env_open, mdb_env_set_mapsize, mdb_env_set_maxdbs, mdb_get, mdb_put, mdb_strerror, mdb_txn_abort,
-    mdb_txn_begin, mdb_txn_commit, MDB_cursor_op_MDB_NEXT, MDB_dbi, MDB_env, MDB_txn, MDB_val, MDB_CREATE, MDB_NODUPDATA, MDB_NOTFOUND, MDB_RDONLY,
-    MDB_RESERVE, MDB_SUCCESS,
+    MDB_CREATE, MDB_NODUPDATA, MDB_NOTFOUND, MDB_RDONLY, MDB_RESERVE, MDB_SUCCESS, MDB_cursor_op_MDB_NEXT, MDB_dbi, MDB_env, MDB_txn, MDB_val, mdb_cursor_close, mdb_cursor_get,
+    mdb_cursor_open, mdb_dbi_close, mdb_dbi_open, mdb_env_create, mdb_env_open, mdb_env_set_mapsize, mdb_env_set_maxdbs, mdb_get, mdb_put, mdb_strerror, mdb_txn_abort,
+    mdb_txn_begin, mdb_txn_commit,
 };
 use rkyv::{rancor::Failure, util::AlignedVec};
 use rusted_ring::{EventPoolFactory, EventUtils};
 use xaeroflux_core::{
     date_time::emit_secs,
-    event::{get_base_event_type, is_create_event, is_pinned_event, is_update_event, EventType, XaeroEvent},
+    event::{EventType, XaeroEvent, get_base_event_type, is_create_event, is_pinned_event, is_update_event},
     hash::{blake_hash_slice, sha_256, sha_256_slice},
     pool::XaeroInternalEvent,
     vector_clock_actor::XaeroVectorClock,
 };
-use xaeroid::{cache::xaero_id_hash, XaeroID};
+use xaeroid::{XaeroID, cache::xaero_id_hash};
 
 use super::format::{EventKey, MmrMeta};
 use crate::read_api::PointQuery;
@@ -506,7 +506,9 @@ pub fn get_event_by_hash<const TSHIRT_SIZE: usize>(
 pub fn push_xaero_internal_event<const TSHIRT_SIZE: usize>(arc_env: &Arc<Mutex<LmdbEnv>>, xaero_event: &XaeroInternalEvent<TSHIRT_SIZE>) -> Result<(), Box<dyn std::error::Error>> {
     unsafe {
         if !is_pinned_event(xaero_event.evt.event_type) {
-            panic!("This was an unpinned event sent to ") // this should not & cannot happen.
+            tracing::error!("This was an unpinned event sent to "); // this should not & cannot
+            // happen.
+            return Ok(());
         }
         let event_type = get_base_event_type(xaero_event.evt.event_type);
         let env = arc_env.lock().expect("failed to lock env");
@@ -584,13 +586,11 @@ pub fn push_xaero_internal_event<const TSHIRT_SIZE: usize>(arc_env: &Arc<Mutex<L
                 mv_data: event_bytes.as_ptr() as *mut libc::c_void,
             };
 
-            let hash_sc = mdb_put(txn, env.dbis[DBI::CurrentState as usize], &mut entity_id_mdb_key, &mut
-                event_bytes_mdb_val, 0);
+            let hash_sc = mdb_put(txn, env.dbis[DBI::CurrentState as usize], &mut entity_id_mdb_key, &mut event_bytes_mdb_val, 0);
             if hash_sc != 0 {
                 mdb_txn_abort(txn);
                 return Err(from_lmdb_err(hash_sc));
             }
-
         }
 
         tracing::debug!(
@@ -1154,7 +1154,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use tempfile::tempdir;
-    use xaeroflux_core::{date_time::emit_secs, hash::blake_hash_slice, initialize};
+    use xaeroflux_core::{date_time::emit_secs, event::make_pinned, hash::blake_hash_slice, initialize};
 
     use super::*;
 
@@ -1168,9 +1168,9 @@ mod tests {
         let event_data = b"test hash index event";
         let event_hash = blake_hash_slice(event_data);
         let timestamp = emit_secs();
-
+        let event_type = make_pinned(123);
         // Push event (automatically creates hash index)
-        push_internal_event_universal(&arc_env, event_data, 123, timestamp).expect("Failed to push event");
+        push_internal_event_universal(&arc_env, event_data, event_type, timestamp).expect("Failed to push event");
 
         // Test hash index lookup
         let found_key = get_event_key_by_hash(&arc_env, event_hash).expect("Hash lookup failed");
@@ -1243,11 +1243,12 @@ mod tests {
 
         // Test universal push with enhanced scan
         let base_timestamp = emit_secs();
-
+        let universal_one_eventype = make_pinned(101);
+        let universal_two_eventype = make_pinned(102);
         // Push events using universal push function
-        push_internal_event_universal(&arc_env, b"universal_one", 101, base_timestamp).expect("Failed to push universal event 1");
+        push_internal_event_universal(&arc_env, b"universal_one", universal_one_eventype, base_timestamp).expect("Failed to push universal event 1");
 
-        push_internal_event_universal(&arc_env, b"universal_two", 102, base_timestamp + 1).expect("Failed to push universal event 2");
+        push_internal_event_universal(&arc_env, b"universal_two", universal_two_eventype, base_timestamp + 1).expect("Failed to push universal event 2");
 
         // Test enhanced range scan with XS size (since our data is small)
         let scan_start = base_timestamp - 5;
