@@ -1,3 +1,5 @@
+extern crate core;
+
 pub mod aof;
 pub mod indexing;
 pub mod networking;
