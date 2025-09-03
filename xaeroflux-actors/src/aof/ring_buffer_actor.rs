@@ -216,14 +216,16 @@ impl AofState {
     }
 
     /// Process a single enhanced event with peer and vector clock info, including MMR update
-    fn process_event(&mut self, event_data: &[u8], event_type: u8, timestamp: u64, xaero_id_hash: [u8; 32], vector_clock_hash: [u8; 32]) -> Result<(), Box<dyn std::error::Error>> {
-        // Skip noise/debug events
-        if !Self::should_persist_event_type(event_type) {
-            return Ok(());
-        }
-
+    fn process_event(
+        &mut self,
+        event_data: &[u8],
+        event_type: u32,
+        timestamp: u64,
+        xaero_id_hash: [u8; 32],
+        vector_clock_hash: [u8; 32],
+    ) -> Result<(), Box<dyn std::error::Error>> {
         // 1. Store event in LMDB (this also updates hash index automatically)
-        match push_internal_event_universal(&self.env, event_data, event_type as u32, timestamp) {
+        match push_internal_event_universal(&self.env, event_data, event_type, timestamp) {
             Ok(_) => {
                 // 2. Add event hash to MMR index
                 let event_hash = blake_hash_slice(event_data);
@@ -252,7 +254,7 @@ impl AofState {
         // Use empty hashes for legacy events
         self.process_event(
             event_data,
-            event_type,
+            event_type as u32,
             emit_secs(),
             [0; 32], // Empty xaero_id_hash
             [0; 32], // Empty vector_clock_hash
@@ -270,16 +272,6 @@ impl AofState {
 
         put_mmr_meta(&self.env, &mmr_meta)?;
         Ok(())
-    }
-
-    /// Filter out noise events to reduce storage overhead
-    fn should_persist_event_type(event_type: u8) -> bool {
-        match event_type {
-            // Skip debug/trace events
-            250..=255 => false,
-            // Persist application and system events
-            _ => true,
-        }
     }
 
     /// Get events for specific leaf hashes (for peer sync) - NOW USING HASH INDEX!
@@ -415,7 +407,7 @@ impl AofActor {
             // Use enhanced key generation with peer and vector clock info
             return state.process_event(
                 event_data,
-                internal_event.evt.event_type as u8,
+                internal_event.evt.event_type,
                 internal_event.latest_ts,
                 internal_event.xaero_id_hash,
                 internal_event.vector_clock_hash,
@@ -459,14 +451,12 @@ mod tests {
 
         // Test MMR integration with event processing
         let test_events = [b"first event".as_slice(), b"second event".as_slice(), b"third event".as_slice()];
-
         let initial_leaf_count = state.mmr.read().leaf_count();
-
         for (i, event_data) in test_events.iter().enumerate() {
             state
                 .process_event(
                     event_data,
-                    42 + i as u8,
+                    xaeroflux_core::event::make_pinned((5008 + i) as u32),
                     emit_secs() + i as u64,
                     [i as u8; 32],        // Different peer IDs
                     [(i + 10) as u8; 32], // Different vector clocks
@@ -494,7 +484,7 @@ mod tests {
 
         for (i, event_data) in test_events.iter().enumerate() {
             state
-                .process_event(event_data, 100 + i as u8, emit_secs() + i as u64, [i as u8; 32], [(i + 20) as u8; 32])
+                .process_event(event_data, 100 + i as u32, emit_secs() + i as u64, [i as u8; 32], [(i + 20) as u8; 32])
                 .expect("Should process event");
 
             let event_hash = blake_hash_slice(event_data);

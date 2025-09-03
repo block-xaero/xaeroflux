@@ -506,9 +506,11 @@ pub fn get_event_by_hash<const TSHIRT_SIZE: usize>(
 pub fn push_xaero_internal_event<const TSHIRT_SIZE: usize>(arc_env: &Arc<Mutex<LmdbEnv>>, xaero_event: &XaeroInternalEvent<TSHIRT_SIZE>) -> Result<(), Box<dyn std::error::Error>> {
     unsafe {
         if !is_pinned_event(xaero_event.evt.event_type) {
-            tracing::error!("This was an unpinned event sent to "); // this should not & cannot
-            // happen.
-            return Ok(());
+            panic!(
+                "This was an unpinned event you sent to lmdb - make sure your events are
+            pinned, see `make_pinned` in xaeroflux_core crate"
+            ); // this should
+            // not & cannot happen!
         }
         let event_type = get_base_event_type(xaero_event.evt.event_type);
         let env = arc_env.lock().expect("failed to lock env");
