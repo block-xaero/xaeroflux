@@ -16,6 +16,17 @@ pub use crate::{pool::XaeroEvent, vector_clock::VectorClock};
 /// Magic bytes prefix for event headers in paged segments.
 /// Used to identify and slice raw event bytes from storage pages.
 pub static EVENT_HEADER: &[u8; 4] = b"XAER";
+
+/// CREATE event types must be starting from 1008 + any applications may wish
+pub const CREATE_EVENT_TYPE_BASE: u32 = 1008;
+pub const UPDATE_EVENT_TYPE_BASE: u32 = 2008;
+pub const TOMBSTONE_EVENT_TYPE_BASE: u32 = 3008;
+
+pub enum OperationKind {
+    Create,
+    Update,
+    Tombstone,
+}
 /// Base value offset for encoding `MetaEvent` variants in the event type byte.
 pub const META_BASE: u8 = 128;
 
@@ -85,6 +96,29 @@ pub fn get_base_event_type(event_type: u32) -> u32 {
     event_type & !PIN_FLAG // Remove pin flag to get original type
 }
 
+pub fn is_create_event(event_type: u32) -> bool {
+    let base_event_type = get_base_event_type(event_type);
+    match base_event_type {
+        1008..2008 => true,
+        _ => false,
+    }
+}
+
+pub fn is_update_event(event_type: u32) -> bool {
+    let base_event_type = get_base_event_type(event_type);
+    match base_event_type {
+        2008..3008 => true,
+        _ => false,
+    }
+}
+
+pub fn is_tombstone_event(event_type: u32) -> bool {
+    let base_event_type = get_base_event_type(event_type);
+    match base_event_type {
+        3008..4008 => true,
+        _ => false,
+    }
+}
 #[repr(C)]
 /// Discriminant for different categories of events.
 ///
