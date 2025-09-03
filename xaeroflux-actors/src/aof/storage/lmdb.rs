@@ -16,12 +16,11 @@ use rkyv::{rancor::Failure, util::AlignedVec};
 use rusted_ring::{EventPoolFactory, EventUtils};
 use xaeroflux_core::{
     date_time::emit_secs,
-    event::{EventType, XaeroEvent},
+    event::{get_base_event_type, is_create_event, is_pinned_event, is_update_event, EventType, XaeroEvent},
     hash::{blake_hash_slice, sha_256, sha_256_slice},
     pool::XaeroInternalEvent,
     vector_clock_actor::XaeroVectorClock,
 };
-use xaeroflux_core::event::{get_base_event_type, is_pinned_event};
 use xaeroid::{cache::xaero_id_hash, XaeroID};
 
 use super::format::{EventKey, MmrMeta};
@@ -506,11 +505,10 @@ pub fn get_event_by_hash<const TSHIRT_SIZE: usize>(
 /// MODIFIED: Now also updates hash index
 pub fn push_xaero_internal_event<const TSHIRT_SIZE: usize>(arc_env: &Arc<Mutex<LmdbEnv>>, xaero_event: &XaeroInternalEvent<TSHIRT_SIZE>) -> Result<(), Box<dyn std::error::Error>> {
     unsafe {
-        if !is_pinned_event(xaero_event.evt.event_type){
+        if !is_pinned_event(xaero_event.evt.event_type) {
             panic!("This was an unpinned event sent to ") // this should not & cannot happen.
         }
         let event_type = get_base_event_type(xaero_event.evt.event_type);
-        
         let env = arc_env.lock().expect("failed to lock env");
         let mut txn = ptr::null_mut();
         let sc_tx_begin = mdb_txn_begin(env.env, ptr::null_mut(), 0, &mut txn);
@@ -571,6 +569,29 @@ pub fn push_xaero_internal_event<const TSHIRT_SIZE: usize>(arc_env: &Arc<Mutex<L
         }
 
         std::ptr::copy_nonoverlapping(event_key_bytes.as_ptr(), hash_data_val.mv_data.cast(), event_key_bytes.len());
+
+        if is_create_event(event_type) || is_update_event(event_type) {
+            tracing::debug!("event_type : {event_type:?} forces a state change");
+            let mut entity_id = [0u8; 32];
+            entity_id.copy_from_slice(&xaero_event.evt.data[..32]);
+            let mut entity_id_mdb_key = MDB_val {
+                mv_size: entity_id.len(),
+                mv_data: entity_id.as_ptr() as *mut libc::c_void,
+            };
+
+            let mut event_bytes_mdb_val = MDB_val {
+                mv_size: event_bytes.len(),
+                mv_data: event_bytes.as_ptr() as *mut libc::c_void,
+            };
+
+            let hash_sc = mdb_put(txn, env.dbis[DBI::CurrentState as usize], &mut entity_id_mdb_key, &mut
+                event_bytes_mdb_val, 0);
+            if hash_sc != 0 {
+                mdb_txn_abort(txn);
+                return Err(from_lmdb_err(hash_sc));
+            }
+
+        }
 
         tracing::debug!(
             "Pushed XaeroInternalEvent to LMDB: type={}, size={} bytes, ts={}, hash={}",
