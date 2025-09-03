@@ -34,7 +34,7 @@ pub enum DBI {
     VectorClockIndex = 3,
     XaeroIdNodeIdIndex = 4,
     XaeroIdIndex = 5,
-    CurrentState = 6,
+    CurrentStateDBI = 6,
 }
 
 /// A wrapper around an LMDB environment with three databases: AOF, META, and HASH_INDEX.
@@ -588,7 +588,7 @@ pub fn push_xaero_internal_event<const TSHIRT_SIZE: usize>(arc_env: &Arc<Mutex<L
                 mv_data: event_bytes.as_ptr() as *mut libc::c_void,
             };
 
-            let hash_sc = mdb_put(txn, env.dbis[DBI::CurrentState as usize], &mut entity_id_mdb_key, &mut event_bytes_mdb_val, 0);
+            let hash_sc = mdb_put(txn, env.dbis[DBI::CurrentStateDBI as usize], &mut entity_id_mdb_key, &mut event_bytes_mdb_val, 0);
             if hash_sc != 0 {
                 mdb_txn_abort(txn);
                 return Err(from_lmdb_err(hash_sc));
@@ -755,7 +755,45 @@ pub fn get_vector_clock_meta(arc_env: &Arc<Mutex<LmdbEnv>>, key: [u8; 32]) -> Re
         Ok(Some(*clock))
     }
 }
+pub fn get_current_state_by_entity_id<const SIZE: usize>(
+    arc_env: &Arc<Mutex<LmdbEnv>>,
+    entity_id: [u8; 32],
+) -> Result<Option<XaeroInternalEvent<SIZE>>, Box<dyn std::error::Error>> {
+    let guard = arc_env.lock().expect("failed to lock env");
+    let env = guard.env;
 
+    unsafe {
+        let mut txn: *mut MDB_txn = std::ptr::null_mut();
+        let rc = mdb_txn_begin(env, std::ptr::null_mut(), MDB_RDONLY, &mut txn);
+        if rc != 0 {
+            return Err(from_lmdb_err(rc));
+        }
+
+        let mut key_val = MDB_val {
+            mv_size: entity_id.len(),
+            mv_data: entity_id.as_ptr() as *mut _,
+        };
+        let mut data_val = MDB_val {
+            mv_size: 0,
+            mv_data: std::ptr::null_mut(),
+        };
+
+        let getrc = liblmdb::mdb_get(txn, guard.dbis[DBI::CurrentStateDBI as usize], &mut key_val, &mut data_val);
+        if getrc != 0 {
+            mdb_txn_abort(txn);
+            if getrc == liblmdb::MDB_NOTFOUND {
+                return Ok(None);
+            } else {
+                return Err(from_lmdb_err(getrc));
+            }
+        }
+
+        let slice = std::slice::from_raw_parts(data_val.mv_data as *const u8, data_val.mv_size);
+        let event_found = bytemuck::from_bytes::<XaeroInternalEvent<SIZE>>(slice);
+        mdb_txn_abort(txn);
+        Ok(Some(*event_found))
+    }
+}
 /// peer_key = peer_xaero_id_blake_hash_logical_ts
 /// event is event_key to lookup actual event.
 pub fn put_clock_peer_key_to_event(arc_env: &Arc<Mutex<LmdbEnv>>, peer_id: [u8; 32], logical_ts: u64, event_key: EventKey) -> Result<(), Box<dyn std::error::Error>> {
@@ -1159,6 +1197,7 @@ mod tests {
     use xaeroflux_core::{date_time::emit_secs, event::make_pinned, hash::blake_hash_slice, initialize};
 
     use super::*;
+    use crate::*;
 
     #[test]
     fn test_hash_index_functionality() {

@@ -1,4 +1,4 @@
-use std::{error::Error, io::ErrorKind, iter::Filter, sync::OnceLock};
+use std::{error::Error, io::ErrorKind, sync::OnceLock};
 
 use bytemuck::{Pod, Zeroable};
 use rusted_ring::{RingBuffer, Writer};
@@ -47,11 +47,13 @@ pub trait ReadApi<const SIZE: usize> {
         P: Fn(&XaeroInternalEvent<SIZE>) -> bool;
     fn replay(&self, query: ReplayQuery<SIZE>) -> Result<Vec<XaeroInternalEvent<SIZE>>, Box<dyn std::error::Error>>;
     fn vector_search(&self, query: VectorQueryRequest<SIZE>) -> Result<Vec<XaeroInternalEvent<SIZE>>, Box<dyn std::error::Error>>;
+
+    fn find_current_state_by_eid(&self, eid: [u8; 32]) -> Result<Option<XaeroInternalEvent<SIZE>>, Box<dyn std::error::Error>>;
 }
 use rusted_ring::{S_CAPACITY, S_TSHIRT_SIZE};
 use xaeroflux_core::pool::XaeroInternalEvent;
 
-use crate::aof::storage::lmdb::{get_event_by_hash, get_events_by_event_type};
+use crate::aof::storage::lmdb::{get_current_state_by_entity_id, get_event_by_hash, get_events_by_event_type};
 
 pub static CONTINUOUS_QUERY_S: OnceLock<RingBuffer<S_TSHIRT_SIZE, S_CAPACITY>> = OnceLock::new();
 
@@ -96,5 +98,10 @@ impl<const SIZE: usize> ReadApi<SIZE> for XaeroFlux {
 
     fn vector_search(&self, query: VectorQueryRequest<SIZE>) -> Result<Vec<XaeroInternalEvent<SIZE>>, Box<dyn Error>> {
         todo!()
+    }
+
+    fn find_current_state_by_eid(&self, eid: [u8; 32]) -> Result<Option<XaeroInternalEvent<SIZE>>, Box<dyn Error>> {
+        let mut env = self.read_handle.clone().expect("read_api not ready!");
+        get_current_state_by_entity_id(&mut env, eid)
     }
 }
