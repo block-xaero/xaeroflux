@@ -5,7 +5,6 @@ use rusted_ring::{EventUtils, RingBuffer};
 
 use crate::date_time::emit_secs;
 
-// Better approach: Use repr(C) with manual size control
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct XaeroClock {

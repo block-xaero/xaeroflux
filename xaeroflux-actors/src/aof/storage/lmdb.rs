@@ -8,9 +8,9 @@ use std::{
 
 use iroh::NodeId;
 use liblmdb::{
-    MDB_CREATE, MDB_NODUPDATA, MDB_NOTFOUND, MDB_RDONLY, MDB_RESERVE, MDB_SUCCESS, MDB_cursor_op_MDB_NEXT, MDB_dbi, MDB_env, MDB_txn, MDB_val, mdb_cursor_close, mdb_cursor_get,
-    mdb_cursor_open, mdb_dbi_close, mdb_dbi_open, mdb_env_create, mdb_env_open, mdb_env_set_mapsize, mdb_env_set_maxdbs, mdb_get, mdb_put, mdb_strerror, mdb_txn_abort,
-    mdb_txn_begin, mdb_txn_commit,
+    mdb_cursor_close, mdb_cursor_get, mdb_cursor_open, mdb_dbi_close, mdb_dbi_open, mdb_env_create, mdb_env_open, mdb_env_set_mapsize, mdb_env_set_maxdbs, mdb_get, mdb_put, mdb_strerror, mdb_txn_abort,
+    mdb_txn_begin, mdb_txn_commit, MDB_cursor_op_MDB_NEXT, MDB_dbi, MDB_env, MDB_txn, MDB_val, MDB_CREATE, MDB_NODUPDATA, MDB_NOTFOUND, MDB_RDONLY,
+    MDB_RESERVE, MDB_SUCCESS,
 };
 use rkyv::{rancor::Failure, util::AlignedVec};
 use rusted_ring::{EventPoolFactory, EventUtils};
@@ -21,7 +21,8 @@ use xaeroflux_core::{
     pool::XaeroInternalEvent,
     vector_clock_actor::XaeroVectorClock,
 };
-use xaeroid::{XaeroID, cache::xaero_id_hash};
+use xaeroflux_core::event::{get_base_event_type, is_pinned_event};
+use xaeroid::{cache::xaero_id_hash, XaeroID};
 
 use super::format::{EventKey, MmrMeta};
 use crate::read_api::PointQuery;
@@ -34,6 +35,7 @@ pub enum DBI {
     VectorClockIndex = 3,
     XaeroIdNodeIdIndex = 4,
     XaeroIdIndex = 5,
+    CurrentState = 6,
 }
 
 /// A wrapper around an LMDB environment with three databases: AOF, META, and HASH_INDEX.
@@ -43,7 +45,7 @@ pub enum DBI {
 /// - HASH_INDEX_DB stores hash → EventKey mappings for O(1) leaf hash lookups.
 pub struct LmdbEnv {
     pub env: *mut MDB_env,
-    pub dbis: [MDB_dbi; 6],
+    pub dbis: [MDB_dbi; 7],
 }
 
 unsafe impl Sync for LmdbEnv {}
@@ -101,9 +103,19 @@ impl LmdbEnv {
         tracing::debug!("DEBUG: Opened xaero_id_node_id_index_dbi = {xaero_id_node_id_index_dbi:?}");
         let xaero_id_index_dbi = unsafe { open_named_db(env, c"/xaero_id_index_dbi".as_ptr())? };
         tracing::debug!("DEBUG: Opened xaero_id_index_dbi = {}", xaero_id_index_dbi);
+        let current_state_idx = unsafe { open_named_db(env, c"/aof_current_state_index".as_ptr())? };
+        tracing::debug!("DEBUG: Opened current_state_idx = {}", current_state_idx);
         Ok(Self {
             env,
-            dbis: [aof_dbi, meta_dbi, hash_index_dbi, vector_clock_index_dbi, xaero_id_index_dbi, xaero_id_index_dbi],
+            dbis: [
+                aof_dbi,
+                meta_dbi,
+                hash_index_dbi,
+                vector_clock_index_dbi,
+                xaero_id_index_dbi,
+                xaero_id_index_dbi,
+                current_state_idx,
+            ],
         })
     }
 }
@@ -494,6 +506,11 @@ pub fn get_event_by_hash<const TSHIRT_SIZE: usize>(
 /// MODIFIED: Now also updates hash index
 pub fn push_xaero_internal_event<const TSHIRT_SIZE: usize>(arc_env: &Arc<Mutex<LmdbEnv>>, xaero_event: &XaeroInternalEvent<TSHIRT_SIZE>) -> Result<(), Box<dyn std::error::Error>> {
     unsafe {
+        if !is_pinned_event(xaero_event.evt.event_type){
+            panic!("This was an unpinned event sent to ") // this should not & cannot happen.
+        }
+        let event_type = get_base_event_type(xaero_event.evt.event_type);
+        
         let env = arc_env.lock().expect("failed to lock env");
         let mut txn = ptr::null_mut();
         let sc_tx_begin = mdb_txn_begin(env.env, ptr::null_mut(), 0, &mut txn);
