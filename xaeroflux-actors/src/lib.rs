@@ -58,6 +58,8 @@ impl Default for EventBus {
     }
 }
 
+use std::cell::RefCell;
+
 impl EventBus {
     /// Create new EventBus with writers to main ring buffers
     pub fn new() -> Self {
@@ -207,10 +209,14 @@ impl Default for XaeroFlux {
         Self::new()
     }
 }
-
+static XAERO_FLUX: OnceLock<XaeroFlux> = OnceLock::new();
 impl XaeroFlux {
+    pub fn instance() -> Option<&'static XaeroFlux> {
+        XAERO_FLUX.get()
+    }
+
     /// Create a new XaeroFlux instance
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self {
             event_bus: EventBus::new(),
             vector_search: None,
@@ -218,6 +224,10 @@ impl XaeroFlux {
             p2p_handle: None,
             read_handle: None,
         }
+    }
+
+    pub fn read_handle() -> Option<Arc<Mutex<LmdbEnv>>> {
+        XAERO_FLUX.get().and_then(|xf| xf.read_handle.clone())
     }
 
     /// Start the AOF actor
@@ -341,6 +351,30 @@ impl XaeroFlux {
 
         let (total_indexed, active_nodes) = vector_search.get_stats();
         Ok(VectorSearchStats { total_indexed, active_nodes })
+    }
+
+    pub fn initialize() -> Result<(), Box<dyn std::error::Error>> {
+        let mut xf = XaeroFlux::new();
+        xf.start_aof()?;
+        XAERO_FLUX.set(xf).map_err(|_| "Already initialized")?;
+        Ok(())
+    }
+
+    pub fn write_event_static(data: &[u8], event_type: u32) -> Result<(), XaeroFluxError> {
+        thread_local! {
+            static LOCAL_EVENT_BUS: RefCell<Option<EventBus>> = const { RefCell::new(None) };
+        }
+        LOCAL_EVENT_BUS.with(|bus_cell| {
+            let mut bus_ref = bus_cell.borrow_mut();
+
+            // Initialize if needed (lazy init per thread)
+            if bus_ref.is_none() {
+                *bus_ref = Some(EventBus::new());
+            }
+
+            // Write using the thread's local EventBus
+            bus_ref.as_mut().unwrap().write_optimal(data, event_type)
+        })
     }
 }
 
