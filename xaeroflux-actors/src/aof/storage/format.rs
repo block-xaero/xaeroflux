@@ -86,6 +86,15 @@ pub struct EventKey {
 unsafe impl Pod for EventKey {}
 unsafe impl Zeroable for EventKey {}
 
+#[repr(C)]
+#[derive(Copy, Clone, Ord, PartialOrd, PartialEq, Eq, Hash)]
+pub struct EventRelations<const N: usize> {
+    pub entity_id: [u8; 32],
+    pub related_entities: [[u8; 32]; N],
+}
+unsafe impl<const N: usize> Zeroable for EventRelations<N> {}
+unsafe impl<const N: usize> Pod for EventRelations<N> {}
+
 use std::fmt::Debug;
 
 impl Debug for EventKey {

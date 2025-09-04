@@ -28,13 +28,14 @@ use crate::read_api::PointQuery;
 
 #[repr(usize)]
 pub enum DBI {
-    Aof = 0,
-    Meta = 1,
+    AofIndex = 0,
+    MetaIndex = 1,
     HashIndex = 2, // Leaf hash index db
     VectorClockIndex = 3,
     XaeroIdNodeIdIndex = 4,
     XaeroIdIndex = 5,
-    CurrentStateDBI = 6,
+    CurrentStateIndex = 6,
+    RelationsIndex = 7,
 }
 
 /// A wrapper around an LMDB environment with three databases: AOF, META, and HASH_INDEX.
@@ -44,7 +45,7 @@ pub enum DBI {
 /// - HASH_INDEX_DB stores hash → EventKey mappings for O(1) leaf hash lookups.
 pub struct LmdbEnv {
     pub env: *mut MDB_env,
-    pub dbis: [MDB_dbi; 7],
+    pub dbis: [MDB_dbi; 8],
 }
 
 unsafe impl Sync for LmdbEnv {}
@@ -90,20 +91,22 @@ impl LmdbEnv {
         }
 
         println!("DEBUG: About to open named databases"); // ADD THIS
-        let aof_dbi = unsafe { open_named_db(env, c"/aof".as_ptr())? };
+        let aof_dbi = unsafe { open_named_db(env, c"/aof_index".as_ptr())? };
         tracing::debug!("DEBUG: Opened aof_dbi = {}", aof_dbi); // ADD THIS
-        let meta_dbi = unsafe { open_named_db(env, c"/meta".as_ptr())? };
+        let meta_dbi = unsafe { open_named_db(env, c"/meta_index".as_ptr())? };
         tracing::debug!("DEBUG: Opened meta_dbi = {}", meta_dbi); // ADD THIS
         let hash_index_dbi = unsafe { open_named_db(env, c"/hash_index".as_ptr())? };
         tracing::debug!("DEBUG: Opened hash_index_dbi = {}", hash_index_dbi); // ADD THIS
         let vector_clock_index_dbi = unsafe { open_named_db(env, c"/vector_clock_index".as_ptr())? };
         tracing::debug!("DEBUG: Opened vector_clock_index_dbi = {}", vector_clock_index_dbi);
-        let xaero_id_node_id_index_dbi = unsafe { open_named_db(env, c"/xaero_id_node_id_index_dbi".as_ptr())? };
+        let xaero_id_node_id_index_dbi = unsafe { open_named_db(env, c"/xaero_id_node_id_index".as_ptr())? };
         tracing::debug!("DEBUG: Opened xaero_id_node_id_index_dbi = {xaero_id_node_id_index_dbi:?}");
-        let xaero_id_index_dbi = unsafe { open_named_db(env, c"/xaero_id_index_dbi".as_ptr())? };
+        let xaero_id_index_dbi = unsafe { open_named_db(env, c"/xaero_id_index".as_ptr())? };
         tracing::debug!("DEBUG: Opened xaero_id_index_dbi = {}", xaero_id_index_dbi);
-        let current_state_idx = unsafe { open_named_db(env, c"/aof_current_state_index".as_ptr())? };
-        tracing::debug!("DEBUG: Opened current_state_idx = {}", current_state_idx);
+        let current_state_idx_dbi = unsafe { open_named_db(env, c"/aof_current_state_index".as_ptr())? };
+        tracing::debug!("DEBUG: Opened current_state_idx_dbu = {}", current_state_idx_dbi);
+        let relations_idx_dbi = unsafe { open_named_db(env, c"/relations_index".as_ptr())? };
+        tracing::debug!("DEBUG: Opened relations_idx_dbis = {}", relations_idx_dbi);
         Ok(Self {
             env,
             dbis: [
@@ -113,7 +116,8 @@ impl LmdbEnv {
                 vector_clock_index_dbi,
                 xaero_id_index_dbi,
                 xaero_id_index_dbi,
-                current_state_idx,
+                current_state_idx_dbi,
+                relations_idx_dbi,
             ],
         })
     }
@@ -462,7 +466,7 @@ pub fn get_event_by_hash<const TSHIRT_SIZE: usize>(
             mv_data: std::ptr::null_mut(),
         };
 
-        let getrc = liblmdb::mdb_get(txn, guard.dbis[DBI::Aof as usize], &mut key_val, &mut data_val);
+        let getrc = liblmdb::mdb_get(txn, guard.dbis[DBI::AofIndex as usize], &mut key_val, &mut data_val);
         if getrc != 0 {
             mdb_txn_abort(txn);
             if getrc == liblmdb::MDB_NOTFOUND {
@@ -519,7 +523,6 @@ pub fn push_xaero_internal_event<const TSHIRT_SIZE: usize>(arc_env: &Arc<Mutex<L
         if sc_tx_begin != 0 {
             return Err(from_lmdb_err(sc_tx_begin));
         }
-
         // Generate enhanced key with peer and vector clock hashes from the event
         let event_data = &xaero_event.evt.data[..xaero_event.evt.len as usize];
         let key = generate_event_key(
@@ -543,7 +546,7 @@ pub fn push_xaero_internal_event<const TSHIRT_SIZE: usize>(arc_env: &Arc<Mutex<L
             mv_data: std::ptr::null_mut(),
         };
 
-        let sc = mdb_put(txn, env.dbis[DBI::Aof as usize], &mut key_val, &mut data_val, MDB_RESERVE);
+        let sc = mdb_put(txn, env.dbis[DBI::AofIndex as usize], &mut key_val, &mut data_val, MDB_RESERVE);
         if sc != 0 {
             mdb_txn_abort(txn);
             return Err(from_lmdb_err(sc));
@@ -578,6 +581,8 @@ pub fn push_xaero_internal_event<const TSHIRT_SIZE: usize>(arc_env: &Arc<Mutex<L
             tracing::debug!("event_type : {event_type:?} forces a state change");
             let mut entity_id = [0u8; 32];
             entity_id.copy_from_slice(&xaero_event.evt.data[..32]);
+            let mut parent_id_baked_in = [0u8; 32];
+            parent_id_baked_in.copy_from_slice(&event_data[32..64]);
             let mut entity_id_mdb_key = MDB_val {
                 mv_size: entity_id.len(),
                 mv_data: entity_id.as_ptr() as *mut libc::c_void,
@@ -588,7 +593,28 @@ pub fn push_xaero_internal_event<const TSHIRT_SIZE: usize>(arc_env: &Arc<Mutex<L
                 mv_data: event_bytes.as_ptr() as *mut libc::c_void,
             };
 
-            let hash_sc = mdb_put(txn, env.dbis[DBI::CurrentStateDBI as usize], &mut entity_id_mdb_key, &mut event_bytes_mdb_val, 0);
+            let hash_sc = mdb_put(txn, env.dbis[DBI::CurrentStateIndex as usize], &mut entity_id_mdb_key, &mut event_bytes_mdb_val, 0);
+            if hash_sc != 0 {
+                mdb_txn_abort(txn);
+                return Err(from_lmdb_err(hash_sc));
+            }
+            let mut event_id_parent_id_mdb_key = MDB_val {
+                mv_size: entity_id.len(),
+                mv_data: entity_id.as_ptr() as *mut libc::c_void,
+            };
+
+            let mut parent_id_bytes_mdb_val = MDB_val {
+                mv_size: parent_id_baked_in.len(),
+                mv_data: parent_id_baked_in.as_ptr() as *mut libc::c_void,
+            };
+
+            let hash_sc = mdb_put(
+                txn,
+                env.dbis[DBI::RelationsIndex as usize],
+                &mut event_id_parent_id_mdb_key,
+                &mut parent_id_bytes_mdb_val,
+                0,
+            );
             if hash_sc != 0 {
                 mdb_txn_abort(txn);
                 return Err(from_lmdb_err(hash_sc));
@@ -778,7 +804,7 @@ pub fn get_current_state_by_entity_id<const SIZE: usize>(
             mv_data: std::ptr::null_mut(),
         };
 
-        let getrc = liblmdb::mdb_get(txn, guard.dbis[DBI::CurrentStateDBI as usize], &mut key_val, &mut data_val);
+        let getrc = liblmdb::mdb_get(txn, guard.dbis[DBI::CurrentStateIndex as usize], &mut key_val, &mut data_val);
         if getrc != 0 {
             mdb_txn_abort(txn);
             if getrc == liblmdb::MDB_NOTFOUND {
@@ -911,7 +937,7 @@ pub fn put_mmr_meta(arc_env: &Arc<Mutex<LmdbEnv>>, mmr_meta: &MmrMeta) -> Result
             mv_data: std::ptr::null_mut(),
         };
 
-        let sc = mdb_put(txn, guard.dbis[DBI::Meta as usize], &mut key_val, &mut data_val, MDB_RESERVE);
+        let sc = mdb_put(txn, guard.dbis[DBI::MetaIndex as usize], &mut key_val, &mut data_val, MDB_RESERVE);
         if sc != 0 {
             mdb_txn_abort(txn);
             return Err(from_lmdb_err(sc));
@@ -952,7 +978,7 @@ pub fn get_mmr_meta(arc_env: &Arc<Mutex<LmdbEnv>>) -> Result<Option<MmrMeta>, Bo
             mv_data: std::ptr::null_mut(),
         };
 
-        let getrc = liblmdb::mdb_get(txn, guard.dbis[DBI::Meta as usize], &mut key_val, &mut data_val);
+        let getrc = liblmdb::mdb_get(txn, guard.dbis[DBI::MetaIndex as usize], &mut key_val, &mut data_val);
         if getrc != 0 {
             mdb_txn_abort(txn);
             if getrc == liblmdb::MDB_NOTFOUND {
