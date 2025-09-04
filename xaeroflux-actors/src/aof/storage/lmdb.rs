@@ -1,3 +1,4 @@
+use std::slice;
 #[allow(deprecated)]
 use std::{
     ffi::CString,
@@ -578,46 +579,76 @@ pub fn push_xaero_internal_event<const TSHIRT_SIZE: usize>(arc_env: &Arc<Mutex<L
         std::ptr::copy_nonoverlapping(event_key_bytes.as_ptr(), hash_data_val.mv_data.cast(), event_key_bytes.len());
 
         if is_create_event(event_type) || is_update_event(event_type) {
-            tracing::debug!("event_type : {event_type:?} forces a state change");
+            // Extract IDs
             let mut entity_id = [0u8; 32];
-            entity_id.copy_from_slice(&xaero_event.evt.data[..32]);
-            let mut parent_id_baked_in = [0u8; 32];
-            parent_id_baked_in.copy_from_slice(&event_data[32..64]);
-            let mut entity_id_mdb_key = MDB_val {
+            entity_id.copy_from_slice(&event_data[..32]);
+            let mut parent_id = [0u8; 32];
+            parent_id.copy_from_slice(&event_data[32..64]);
+
+            // Update CurrentState
+            let mut entity_id_key = MDB_val {
                 mv_size: entity_id.len(),
                 mv_data: entity_id.as_ptr() as *mut libc::c_void,
             };
-
-            let mut event_bytes_mdb_val = MDB_val {
-                mv_size: event_bytes.len(),
-                mv_data: event_bytes.as_ptr() as *mut libc::c_void,
+            let mut entity_data_val = MDB_val {
+                mv_size: event_data.len(), // Store just entity data, not wrapper
+                mv_data: event_data.as_ptr() as *mut libc::c_void,
             };
 
-            let hash_sc = mdb_put(txn, env.dbis[DBI::CurrentStateIndex as usize], &mut entity_id_mdb_key, &mut event_bytes_mdb_val, 0);
-            if hash_sc != 0 {
+            let sc = mdb_put(txn, env.dbis[DBI::CurrentStateIndex as usize], &mut entity_id_key, &mut entity_data_val, 0);
+            if sc != 0 {
                 mdb_txn_abort(txn);
-                return Err(from_lmdb_err(hash_sc));
+                return Err(from_lmdb_err(sc));
             }
-            let mut event_id_parent_id_mdb_key = MDB_val {
-                mv_size: entity_id.len(),
-                mv_data: entity_id.as_ptr() as *mut libc::c_void,
-            };
 
-            let mut parent_id_bytes_mdb_val = MDB_val {
-                mv_size: parent_id_baked_in.len(),
-                mv_data: parent_id_baked_in.as_ptr() as *mut libc::c_void,
-            };
+            // Update Relations if has parent
+            if parent_id != [0u8; 32] {
+                let mut parent_key = MDB_val {
+                    mv_size: parent_id.len(),
+                    mv_data: parent_id.as_ptr() as *mut libc::c_void,
+                };
 
-            let hash_sc = mdb_put(
-                txn,
-                env.dbis[DBI::RelationsIndex as usize],
-                &mut event_id_parent_id_mdb_key,
-                &mut parent_id_bytes_mdb_val,
-                0,
-            );
-            if hash_sc != 0 {
-                mdb_txn_abort(txn);
-                return Err(from_lmdb_err(hash_sc));
+                // Get existing relations
+                let mut existing_val = MDB_val {
+                    mv_size: 0,
+                    mv_data: std::ptr::null_mut(),
+                };
+
+                let mut entities_buffer = Vec::new();
+                let get_sc = mdb_get(txn, env.dbis[DBI::RelationsIndex as usize], &mut parent_key, &mut existing_val);
+
+                if get_sc == 0 {
+                    // Found existing relations
+                    let existing = slice::from_raw_parts(existing_val.mv_data as *const u8, existing_val.mv_size);
+
+                    // Check if already present
+                    let already_present = existing.chunks_exact(32).any(|chunk| chunk == entity_id);
+
+                    if !already_present {
+                        entities_buffer.extend_from_slice(existing);
+                        entities_buffer.extend_from_slice(&entity_id);
+                    }
+                } else if get_sc == MDB_NOTFOUND {
+                    // First child
+                    entities_buffer.extend_from_slice(&entity_id);
+                } else {
+                    mdb_txn_abort(txn);
+                    return Err(from_lmdb_err(get_sc));
+                }
+
+                // Write back
+                if !entities_buffer.is_empty() {
+                    let mut new_val = MDB_val {
+                        mv_size: entities_buffer.len(),
+                        mv_data: entities_buffer.as_ptr() as *mut libc::c_void,
+                    };
+
+                    let put_sc = mdb_put(txn, env.dbis[DBI::RelationsIndex as usize], &mut parent_key, &mut new_val, 0);
+                    if put_sc != 0 {
+                        mdb_txn_abort(txn);
+                        return Err(from_lmdb_err(put_sc));
+                    }
+                }
             }
         }
 

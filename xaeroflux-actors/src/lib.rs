@@ -1,4 +1,6 @@
 extern crate core;
+extern crate core;
+extern crate core;
 
 pub mod aof;
 pub mod indexing;
