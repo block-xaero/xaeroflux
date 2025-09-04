@@ -353,9 +353,10 @@ impl XaeroFlux {
         Ok(VectorSearchStats { total_indexed, active_nodes })
     }
 
-    pub fn initialize() -> Result<(), Box<dyn std::error::Error>> {
+    pub fn initialize(xaero_id: XaeroID) -> Result<(), Box<dyn std::error::Error>> {
         let mut xf = XaeroFlux::new();
         xf.start_aof()?;
+        xf.start_p2p(xaero_id)?;
         XAERO_FLUX.set(xf).map_err(|_| "Already initialized")?;
         Ok(())
     }
