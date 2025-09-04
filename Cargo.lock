@@ -5303,17 +5303,17 @@ dependencies = [
 
 [[package]]
 name = "xaeroflux"
-version = "0.9.8-alpha.2"
+version = "0.9.8-alpha.3"
 dependencies = [
  "rusted-ring",
- "xaeroflux-actors 0.9.8-alpha.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "xaeroflux-core 0.9.8-alpha.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "xaeroflux-actors 0.9.8-alpha.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "xaeroflux-core 0.9.8-alpha.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "xaeroid",
 ]
 
 [[package]]
 name = "xaeroflux-actors"
-version = "0.9.8-alpha.2"
+version = "0.9.8-alpha.3"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -5331,15 +5331,15 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
- "xaeroflux-core 0.9.8-alpha.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "xaeroflux-core 0.9.8-alpha.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "xaeroid",
 ]
 
 [[package]]
 name = "xaeroflux-actors"
-version = "0.9.8-alpha.2"
+version = "0.9.8-alpha.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b8bbfe4956813a9f4ecf6b75026768a6394948a048f867bebb630b73e79fe0e"
+checksum = "c8f89f1cef2edc8e879cc32bda9fa98802d66206d04cd7313b9bf0616848fdfc"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -5357,13 +5357,13 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
- "xaeroflux-core 0.9.8-alpha.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "xaeroflux-core 0.9.8-alpha.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "xaeroid",
 ]
 
 [[package]]
 name = "xaeroflux-core"
-version = "0.9.8-alpha.2"
+version = "0.9.8-alpha.3"
 dependencies = [
  "blake3",
  "bytemuck",
@@ -5389,9 +5389,9 @@ dependencies = [
 
 [[package]]
 name = "xaeroflux-core"
-version = "0.9.8-alpha.2"
+version = "0.9.8-alpha.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "16d546d47452d4ef62b2b709a81ff8389ce993643913a33ee7e976e4808c9627"
+checksum = "40011c3a7665abfb6a23b0e5fdffc4ed4bb582c4cb012d37dc7062e055664dc8"
 dependencies = [
  "blake3",
  "bytemuck",
