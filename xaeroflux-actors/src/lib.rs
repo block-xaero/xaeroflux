@@ -4,6 +4,7 @@ pub mod aof;
 pub mod indexing;
 pub mod networking;
 pub mod read_api;
+pub mod vector_clock_actor;
 
 use std::{
     collections::HashMap,
@@ -12,7 +13,7 @@ use std::{
 };
 
 use rusted_ring::{
-    L_CAPACITY, L_TSHIRT_SIZE, M_CAPACITY, M_TSHIRT_SIZE, PooledEvent, RingBuffer, S_CAPACITY, S_TSHIRT_SIZE, Writer, XL_CAPACITY, XL_TSHIRT_SIZE, XS_CAPACITY, XS_TSHIRT_SIZE,
+    PooledEvent, RingBuffer, Writer, L_CAPACITY, L_TSHIRT_SIZE, M_CAPACITY, M_TSHIRT_SIZE, S_CAPACITY, S_TSHIRT_SIZE, XL_CAPACITY, XL_TSHIRT_SIZE, XS_CAPACITY, XS_TSHIRT_SIZE,
 };
 use xaeroid::XaeroID;
 
@@ -59,6 +60,7 @@ impl Default for EventBus {
 }
 
 use std::cell::RefCell;
+
 
 impl EventBus {
     /// Create new EventBus with writers to main ring buffers
@@ -194,7 +196,10 @@ pub struct VectorSearchStats {
     pub active_nodes: usize,
 }
 
-use crate::indexing::vec_search_actor::{VectorQueryRequest, VectorQueryResponse, VectorSearchActor};
+use crate::{
+    indexing::vec_search_actor::{VectorQueryRequest, VectorQueryResponse, VectorSearchActor},
+    vector_clock_actor::VectorClockActor,
+};
 
 pub struct XaeroFlux {
     pub event_bus: EventBus,
@@ -202,6 +207,7 @@ pub struct XaeroFlux {
     pub aof_handle: Option<JoinHandle<()>>,
     pub p2p_handle: Option<JoinHandle<()>>,
     pub read_handle: Option<Arc<Mutex<LmdbEnv>>>,
+    pub vector_clock_actor: Option<JoinHandle<()>>,
 }
 
 impl Default for XaeroFlux {
@@ -223,6 +229,7 @@ impl XaeroFlux {
             aof_handle: None,
             p2p_handle: None,
             read_handle: None,
+            vector_clock_actor: None,
         }
     }
 
@@ -236,6 +243,10 @@ impl XaeroFlux {
         self.aof_handle = Some(aof_actor.jh);
         self.read_handle = Some(aof_actor.env);
         Ok(())
+    }
+
+    pub fn start_vc_actor(&mut self) -> Result<JoinHandle<()>, Box<dyn std::error::Error>> {
+        VectorClockActor::new().spin()
     }
 
     /// Start P2P networking with XaeroID

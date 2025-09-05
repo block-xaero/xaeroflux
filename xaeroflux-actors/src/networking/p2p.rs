@@ -24,7 +24,7 @@ use xaeroflux_core::{
     date_time::emit_secs,
     hash::blake_hash_slice,
     pool::XaeroPeerEvent,
-    vector_clock_actor::{VectorClockActor, XaeroVectorClock},
+    vector_clock::XaeroVectorClock,
 };
 use xaeroid::{
     XaeroID,
@@ -32,6 +32,7 @@ use xaeroid::{
 };
 
 use crate::{
+    vector_clock_actor,
     aof::{
         ring_buffer_actor::AofState,
         storage::{
@@ -41,6 +42,7 @@ use crate::{
     },
     networking::format::XaeroFileHeader,
 };
+use crate::vector_clock_actor::VectorClockActor;
 
 pub struct XaeroQuicStream {
     pub name: String,

@@ -20,7 +20,7 @@ mod desktop_config {
 #[cfg(any(target_os = "ios", target_os = "android"))]
 use mobile_config::*;
 
-use crate::vector_clock_actor::XaeroVectorClock;
+use crate::vector_clock::XaeroVectorClock;
 
 pub enum XaeroEvent {
     XS(XaeroEventSized<64>),

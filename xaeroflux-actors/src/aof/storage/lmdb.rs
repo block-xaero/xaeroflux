@@ -20,10 +20,9 @@ use xaeroflux_core::{
     event::{EventType, XaeroEvent, get_base_event_type, is_create_event, is_pinned_event, is_update_event},
     hash::{blake_hash_slice, sha_256, sha_256_slice},
     pool::XaeroInternalEvent,
-    vector_clock_actor::XaeroVectorClock,
 };
 use xaeroid::{XaeroID, cache::xaero_id_hash};
-
+use xaeroflux_core::vector_clock::XaeroVectorClock;
 use super::format::{EventKey, MmrMeta};
 use crate::read_api::PointQuery;
 

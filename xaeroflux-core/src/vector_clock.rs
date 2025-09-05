@@ -4,6 +4,8 @@ use bytemuck::{Pod, Zeroable};
 use rkyv::{Archive, Deserialize, Serialize};
 use xaeroid::XaeroID;
 
+use crate::date_time::emit_secs;
+
 #[repr(C)]
 #[derive(Debug, Clone, Archive, Serialize, Deserialize)]
 pub struct VectorClock {
@@ -85,3 +87,60 @@ impl Ord for VectorClock {
         self.latest_timestamp.cmp(&other.latest_timestamp)
     }
 }
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct XaeroClock {
+    pub base_ts: u64,          // 8 bytes
+    pub latest_timestamp: u16, // 2 bytes
+    pub _pad: [u8; 6],         // 6 bytes padding = 16 bytes total
+}
+
+unsafe impl Pod for XaeroClock {}
+unsafe impl Zeroable for XaeroClock {}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct XaeroVectorClockEntry(pub [u8; 32], pub XaeroClock); // 32 + 16 = 48 bytes
+unsafe impl Pod for XaeroVectorClockEntry {}
+unsafe impl Zeroable for XaeroVectorClockEntry {}
+
+impl Default for XaeroClock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl XaeroClock {
+    pub fn with_base(base_ts: u64, latest_timestamp: u16) -> Self {
+        Self {
+            base_ts,
+            latest_timestamp,
+            _pad: [0; 6],
+        }
+    }
+
+    pub fn new() -> Self {
+        Self {
+            base_ts: emit_secs(),
+            latest_timestamp: 0, // Start at 0, tick() will increment
+            _pad: [0; 6],
+        }
+    }
+
+    pub fn logical_timestamp(&self) -> u64 {
+        self.base_ts + self.latest_timestamp as u64
+    }
+}
+
+// Support 10 peers - increase structure size
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct XaeroVectorClock {
+    pub clock: XaeroClock,                  // 16 bytes
+    pub peers: [XaeroVectorClockEntry; 10], // 10 * 48 = 480 bytes
+    pub _pad: [u8; 8],                      /* 8 bytes padding
+                                             * Total: 16 + 480 + 8 = 504 bytes */
+}
+unsafe impl Pod for XaeroVectorClock {}
+unsafe impl Zeroable for XaeroVectorClock {}
