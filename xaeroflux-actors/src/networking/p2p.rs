@@ -42,6 +42,7 @@ use crate::{
     },
     networking::format::XaeroFileHeader,
 };
+use crate::aof::storage::lmdb::LmdbEnv;
 use crate::vector_clock_actor::VectorClockActor;
 
 pub struct XaeroQuicStream {
@@ -172,6 +173,7 @@ impl<const TSHIRT: usize, const RING_CAPACITY: usize> P2pActor<TSHIRT, RING_CAPA
         ring_buffer: &'static RingBuffer<TSHIRT, RING_CAPACITY>,
         our_xaero_id: XaeroID,
         aof_actor: Arc<AofState>,
+        lmdb_env: Arc<std::sync::Mutex<LmdbEnv>>
     ) -> Result<(Self, Writer<TSHIRT, RING_CAPACITY>, Reader<TSHIRT, RING_CAPACITY>)> {
         let xaero_user_data = XaeroUserData {
             xaero_id_hash: blake_hash_slice(&our_xaero_id.did_peer[..our_xaero_id.did_peer_len as usize]),
@@ -196,7 +198,7 @@ impl<const TSHIRT: usize, const RING_CAPACITY: usize> P2pActor<TSHIRT, RING_CAPA
             active_peers: HashMap::new(),
             running: Arc::new(AtomicBool::new(false)),
             aof_actor,
-            vector_clock_actor: VectorClockActor::new(),
+            vector_clock_actor: VectorClockActor::new(lmdb_env),
             xaero_id_cache: XaeroIdCacheS::new(),
             node_id_to_xaero_id_mapping: HashMap::new(),
         };

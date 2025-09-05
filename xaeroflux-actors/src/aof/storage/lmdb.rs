@@ -938,6 +938,101 @@ pub fn get_events_by_peer_range(arc_env: &Arc<Mutex<LmdbEnv>>, peer_id: [u8; 32]
     Ok(events)
 }
 
+// Add a special key for current VC
+const CURRENT_VC_KEY: &[u8] = b"__current_vc__";
+
+pub fn put_current_vc(
+    arc_env: &Arc<Mutex<LmdbEnv>>,
+    vc_hash: [u8; 32]
+) -> Result<(), Box<dyn std::error::Error>> {
+    let guard = arc_env.lock().expect("failed to lock env");
+    let env = guard.env;
+
+    unsafe {
+        let mut txn: *mut MDB_txn = std::ptr::null_mut();
+        let rc = mdb_txn_begin(env, std::ptr::null_mut(), 0, &mut txn);
+        if rc != 0 {
+            return Err(from_lmdb_err(rc));
+        }
+
+        // Fixed key for current VC
+        let mut key_val = MDB_val {
+            mv_size: CURRENT_VC_KEY.len(),
+            mv_data: CURRENT_VC_KEY.as_ptr() as *mut _,
+        };
+
+        let mut data_val = MDB_val {
+            mv_size: 32,
+            mv_data: vc_hash.as_ptr() as *mut _,
+        };
+
+        let sc = mdb_put(
+            txn,
+            guard.dbis[DBI::VectorClockIndex as usize],
+            &mut key_val,
+            &mut data_val,
+            0
+        );
+
+        if sc != 0 {
+            mdb_txn_abort(txn);
+            return Err(from_lmdb_err(sc));
+        }
+
+        mdb_txn_commit(txn);
+        Ok(())
+    }
+}
+
+pub fn get_current_vc_hash(
+    arc_env: &Arc<Mutex<LmdbEnv>>
+) -> Result<[u8; 32], Box<dyn std::error::Error>> {
+    let guard = arc_env.lock().expect("failed to lock env");
+    let env = guard.env;
+
+    unsafe {
+        let mut txn: *mut MDB_txn = std::ptr::null_mut();
+        let rc = mdb_txn_begin(env, std::ptr::null_mut(), MDB_RDONLY, &mut txn);
+        if rc != 0 {
+            return Err(from_lmdb_err(rc));
+        }
+
+        let mut key_val = MDB_val {
+            mv_size: CURRENT_VC_KEY.len(),
+            mv_data: CURRENT_VC_KEY.as_ptr() as *mut _,
+        };
+
+        let mut data_val = MDB_val {
+            mv_size: 0,
+            mv_data: std::ptr::null_mut(),
+        };
+
+        let getrc = mdb_get(
+            txn,
+            guard.dbis[DBI::VectorClockIndex as usize],
+            &mut key_val,
+            &mut data_val
+        );
+
+        if getrc != 0 {
+            mdb_txn_abort(txn);
+            if getrc == MDB_NOTFOUND {
+                // Return zero hash if not found
+                return Ok([0; 32]);
+            }
+            return Err(from_lmdb_err(getrc));
+        }
+
+        let mut vc_hash = [0u8; 32];
+        vc_hash.copy_from_slice(
+            std::slice::from_raw_parts(data_val.mv_data as *const u8, 32)
+        );
+
+        mdb_txn_abort(txn);
+        Ok(vc_hash)
+    }
+}
+
 // ================================================================================================
 // MMR METADATA STORAGE FUNCTIONS
 // ================================================================================================

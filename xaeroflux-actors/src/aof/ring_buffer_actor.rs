@@ -127,18 +127,11 @@ pub struct AofActor {
 
 impl AofState {
     /// Create new AOF state with LMDB environment and recovered MMR
-    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(env: Arc<Mutex<LmdbEnv>>) -> Result<Self, Box<dyn std::error::Error>> {
         // Get base path from config
         let c = CONF.get().expect("failed to unravel config");
         let base_path = &c.aof.file_path;
 
-        // Construct subject-specific path based on bus kind
-        let lmdb_path = system_paths::emit_path_with_prefix(base_path.to_str().expect("path_invalid_for_aof"), "aof");
-
-        tracing::info!("Creating AOF LMDB at path: {}", lmdb_path);
-        let env = Arc::new(Mutex::new(LmdbEnv::new(&lmdb_path)?));
-
-        // Recover MMR state from existing events
         let mmr = Self::recover_mmr_from_events(&env)?;
         tracing::info!("Recovered MMR with {} leaves", mmr.leaf_count());
         let mmr_rw = RwLock::new(mmr);
@@ -372,8 +365,8 @@ impl AofState {
 
 impl AofActor {
     /// Create and spawn AOF actor that reads from global ring buffers
-    pub fn spin() -> Result<Self, Box<dyn std::error::Error>> {
-        let mut state = AofState::new()?;
+    pub fn spin(lmdb_env: Arc<Mutex<LmdbEnv>>) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut state = AofState::new(lmdb_env)?;
         let read_only_clone = state.env.clone();
         let jh = thread::spawn(move || {
             tracing::info!("AOF Actor started ");
@@ -447,7 +440,12 @@ mod tests {
     fn test_mmr_integration() {
         xaeroflux_core::initialize();
 
-        let mut state = AofState::new().expect("Failed to create AOF state");
+        let mut state = AofState::new(Arc::new(Mutex::new(LmdbEnv::new("/tmp/xaero-test-data")
+            .unwrap
+        ()))).expect
+        ("Failed to create \
+        AOF \
+        state");
 
         // Test MMR integration with event processing
         let test_events = [b"first event".as_slice(), b"second event".as_slice(), b"third event".as_slice()];
@@ -475,7 +473,12 @@ mod tests {
     fn test_hash_index_lookup_performance() {
         xaeroflux_core::initialize();
 
-        let mut state = AofState::new().expect("Failed to create AOF state");
+        let mut state = AofState::new(Arc::new(Mutex::new(LmdbEnv::new("/tmp/xaero-test-data")
+            .unwrap
+            ()))).expect
+        ("Failed to create \
+        AOF \
+        state");
 
         // Store some test events
         let test_events = [b"hash_index_test_1".as_slice(), b"hash_index_test_2".as_slice(), b"hash_index_test_3".as_slice()];

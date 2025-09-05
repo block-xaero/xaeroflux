@@ -61,7 +61,6 @@ impl Default for EventBus {
 
 use std::cell::RefCell;
 
-
 impl EventBus {
     /// Create new EventBus with writers to main ring buffers
     pub fn new() -> Self {
@@ -210,11 +209,6 @@ pub struct XaeroFlux {
     pub vector_clock_actor: Option<JoinHandle<()>>,
 }
 
-impl Default for XaeroFlux {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 static XAERO_FLUX: OnceLock<XaeroFlux> = OnceLock::new();
 impl XaeroFlux {
     pub fn instance() -> Option<&'static XaeroFlux> {
@@ -222,14 +216,18 @@ impl XaeroFlux {
     }
 
     /// Create a new XaeroFlux instance
-    fn new() -> Self {
+    fn new(data_dir: &str) -> Self {
+        let lmdb_env = Arc::new(Mutex::new(
+            LmdbEnv::new(data_dir).expect(format!("failed to create lmdb env on {data_dir:?} provided").as_str()),
+        ));
+        let jh = VectorClockActor::new(lmdb_env).spin().expect("Should create a vector clock actor --");
         Self {
             event_bus: EventBus::new(),
             vector_search: None,
             aof_handle: None,
             p2p_handle: None,
             read_handle: None,
-            vector_clock_actor: None,
+            vector_clock_actor: Some(jh),
         }
     }
 
@@ -238,19 +236,15 @@ impl XaeroFlux {
     }
 
     /// Start the AOF actor
-    pub fn start_aof(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let aof_actor = AofActor::spin()?;
+    pub fn start_aof(&mut self, env: Arc<Mutex<LmdbEnv>>) -> Result<(), Box<dyn std::error::Error>> {
+        let aof_actor = AofActor::spin(env)?;
         self.aof_handle = Some(aof_actor.jh);
         self.read_handle = Some(aof_actor.env);
         Ok(())
     }
 
-    pub fn start_vc_actor(&mut self) -> Result<JoinHandle<()>, Box<dyn std::error::Error>> {
-        VectorClockActor::new().spin()
-    }
-
     /// Start P2P networking with XaeroID
-    pub fn start_p2p(&mut self, xaero_id: XaeroID) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn start_p2p(&mut self, xaero_id: XaeroID, lmdb_env: Arc<Mutex<LmdbEnv>>) -> Result<(), Box<dyn std::error::Error>> {
         // Ensure AOF is started first
         if self.aof_handle.is_none() {
             return Err("AOF must be started before P2P".into());
@@ -262,9 +256,9 @@ impl XaeroFlux {
                 let s_ring: &'static RingBuffer<S_TSHIRT_SIZE, S_CAPACITY> = S_RING.get_or_init(RingBuffer::new);
 
                 // Create a simple AofState for P2P actor
-                let aof_state = Arc::new(crate::aof::ring_buffer_actor::AofState::new().expect("failed to create ring buffer actor"));
+                let aof_state = Arc::new(crate::aof::ring_buffer_actor::AofState::new(lmdb_env.clone()).expect("failed to create ring buffer actor"));
 
-                match P2pActor::<S_TSHIRT_SIZE, S_CAPACITY>::new(s_ring, xaero_id, aof_state).await {
+                match P2pActor::<S_TSHIRT_SIZE, S_CAPACITY>::new(s_ring, xaero_id, aof_state, lmdb_env.clone()).await {
                     Ok((mut actor, writer, reader)) =>
                         if let Err(e) = actor.start(writer, reader).await {
                             tracing::error!("P2P actor failed: {:?}", e);
@@ -364,10 +358,11 @@ impl XaeroFlux {
         Ok(VectorSearchStats { total_indexed, active_nodes })
     }
 
-    pub fn initialize(xaero_id: XaeroID) -> Result<(), Box<dyn std::error::Error>> {
-        let mut xf = XaeroFlux::new();
-        xf.start_aof()?;
-        xf.start_p2p(xaero_id)?;
+    pub fn initialize(xaero_id: XaeroID, data_dir: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let lmdb_env = Arc::new(Mutex::new(LmdbEnv::new(data_dir)?));
+        let mut xf = XaeroFlux::new(data_dir);
+        xf.start_aof(lmdb_env.clone())?;
+        xf.start_p2p(xaero_id, lmdb_env.clone())?;
         XAERO_FLUX.set(xf).map_err(|_| "Already initialized")?;
         Ok(())
     }
@@ -421,6 +416,9 @@ impl std::error::Error for XaeroFluxError {}
 
 #[cfg(test)]
 mod tests {
+    use std::time::SystemTime;
+    use xaeroflux_core::date_time::emit_nanos;
+    use xaeroflux_core::event::EventType::SystemEvent;
     use super::*;
 
     #[test]
@@ -455,7 +453,8 @@ mod tests {
 
     #[test]
     fn test_xaeroflux_creation() {
-        let xf = XaeroFlux::new();
+        let nano = emit_nanos();
+        let xf = XaeroFlux::new(format!("/tmp/xaero-test-data/{nano:?}").as_str());
         assert!(xf.vector_search.is_none());
         assert!(xf.aof_handle.is_none());
         assert!(xf.p2p_handle.is_none());
@@ -465,7 +464,10 @@ mod tests {
 
     #[test]
     fn test_xaeroflux_write_event() {
-        let mut xf = XaeroFlux::new();
+        let nano = emit_nanos();
+        let path_str = format!("/tmp/xaero-test-data/{nano:?}");
+        let path = path_str.as_str();
+        let mut xf = XaeroFlux::new(path);
 
         let test_data = b"test event data";
         let result = xf.write_event(test_data, 42);
@@ -476,7 +478,10 @@ mod tests {
 
     #[test]
     fn test_send_text() {
-        let mut xf = XaeroFlux::new();
+        let nano = emit_nanos();
+        let path_str = format!("/tmp/xaero-test-data/{nano:?}");
+        let path = path_str.as_str();
+        let mut xf = XaeroFlux::new(path);
 
         let result = xf.send_text("Hello P2P world!");
         assert!(result.is_ok());
@@ -486,7 +491,10 @@ mod tests {
 
     #[test]
     fn test_oversized_data() {
-        let mut xf = XaeroFlux::new();
+        let nano = emit_nanos();
+        let path_str = format!("/tmp/xaero-test-data/{nano:?}");
+        let path = path_str.as_str();
+        let mut xf = XaeroFlux::new(path);
 
         let oversized_data = vec![0u8; 20000]; // Larger than XL
         let result = xf.write_event(&oversized_data, 42);
