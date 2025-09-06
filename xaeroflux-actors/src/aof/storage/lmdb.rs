@@ -937,7 +937,53 @@ pub fn get_events_by_peer_range(arc_env: &Arc<Mutex<LmdbEnv>>, peer_id: [u8; 32]
     }
     Ok(events)
 }
+pub fn get_children_entitities_by_entity_id(arc_env: &Arc<Mutex<LmdbEnv>>, entity_id: [u8; 32])
+    -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let guard = arc_env.lock().expect("failed to lock env");
+    let env = guard.env;
 
+    unsafe {
+        let mut txn: *mut MDB_txn = std::ptr::null_mut();
+        let rc = mdb_txn_begin(env, std::ptr::null_mut(), MDB_RDONLY, &mut txn);
+        if rc != 0 {
+            return Err(from_lmdb_err(rc));
+        }
+
+        let mut key_val = MDB_val {
+            mv_size: entity_id.len(),
+            mv_data: entity_id.as_ptr() as *mut _,
+        };
+
+        let mut data_val = MDB_val {
+            mv_size: 0,
+            mv_data: std::ptr::null_mut(),
+        };
+
+        let getrc = mdb_get(
+            txn,
+            guard.dbis[DBI::RelationsIndex as usize],
+            &mut key_val,
+            &mut data_val
+        );
+
+        if getrc != 0 {
+            mdb_txn_abort(txn);
+            if getrc == MDB_NOTFOUND {
+                // Return zero hash if not found
+                return Ok(vec![]);
+            }
+            return Err(from_lmdb_err(getrc));
+        }
+
+        let mut entities_found = Vec::new();
+        entities_found.copy_from_slice(
+            std::slice::from_raw_parts(data_val.mv_data as *const u8, 32)
+        );
+
+        mdb_txn_abort(txn);
+        Ok(entities_found)
+    }
+}
 // Add a special key for current VC
 const CURRENT_VC_KEY: &[u8] = b"__current_vc__";
 
