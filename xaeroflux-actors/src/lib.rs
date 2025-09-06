@@ -211,8 +211,8 @@ pub struct XaeroFlux {
 
 static XAERO_FLUX: OnceLock<XaeroFlux> = OnceLock::new();
 impl XaeroFlux {
-    pub fn instance() -> Option<&'static XaeroFlux> {
-        XAERO_FLUX.get()
+    pub fn instance(data_dir: &str) -> Option<&'static XaeroFlux> {
+        Some(XAERO_FLUX.get_or_init(|| XaeroFlux::new(data_dir)))
     }
 
     /// Create a new XaeroFlux instance
@@ -416,9 +416,8 @@ impl std::error::Error for XaeroFluxError {}
 
 #[cfg(test)]
 mod tests {
-    use std::time::SystemTime;
     use xaeroflux_core::date_time::emit_nanos;
-    use xaeroflux_core::event::EventType::SystemEvent;
+
     use super::*;
 
     #[test]

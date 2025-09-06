@@ -64,8 +64,6 @@ pub static CONTINUOUS_QUERY_S_WRITER: OnceLock<Writer<S_TSHIRT_SIZE, S_CAPACITY>
 
 impl<const SIZE: usize> ReadApi<SIZE> for XaeroFlux {
     fn init_buffers() -> Result<(), Box<dyn Error>> {
-        // TODO: This is for querying p2p stuff that comes in
-        // TODO: this is also for stuff that clients may react to.
         CONTINUOUS_QUERY_S_WRITER.get_or_init(|| Writer::new(CONTINUOUS_QUERY_S.get_or_init(RingBuffer::new)));
         Ok(())
     }
