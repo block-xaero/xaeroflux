@@ -2,5 +2,5 @@
 resolver = "3"
 members = ["xaeroflux", "xaeroflux-actors", "xaeroflux-core"]
 [workspace.dependencies]
-xaeroid = { version = "0.4.1" }
+xaeroid = { path = "../xaeroID" }
 rusted-ring = { version = "0.5.6" }

@@ -8,11 +8,7 @@ use std::{
 };
 
 use iroh::NodeId;
-use liblmdb::{
-    MDB_CREATE, MDB_NODUPDATA, MDB_NOTFOUND, MDB_RDONLY, MDB_RESERVE, MDB_SUCCESS, MDB_cursor_op_MDB_NEXT, MDB_dbi, MDB_env, MDB_txn, MDB_val, mdb_cursor_close, mdb_cursor_get,
-    mdb_cursor_open, mdb_dbi_close, mdb_dbi_open, mdb_env_create, mdb_env_open, mdb_env_set_mapsize, mdb_env_set_maxdbs, mdb_get, mdb_put, mdb_strerror, mdb_txn_abort,
-    mdb_txn_begin, mdb_txn_commit,
-};
+use liblmdb::{MDB_CREATE, MDB_NODUPDATA, MDB_NOTFOUND, MDB_RDONLY, MDB_RESERVE, MDB_SUCCESS, MDB_cursor_op_MDB_NEXT, MDB_dbi, MDB_env, MDB_txn, MDB_val, mdb_cursor_close, mdb_cursor_get, mdb_cursor_open, mdb_dbi_close, mdb_dbi_open, mdb_env_create, mdb_env_open, mdb_env_set_mapsize, mdb_env_set_maxdbs, mdb_get, mdb_put, mdb_strerror, mdb_txn_abort, mdb_txn_begin, mdb_txn_commit, MDB_NOSUBDIR};
 use rkyv::{rancor::Failure, util::AlignedVec};
 use rusted_ring::{EventPoolFactory, EventUtils};
 use xaeroflux_core::{
@@ -76,13 +72,13 @@ impl LmdbEnv {
             }
 
             tracing::info!("Setting mapsize to 1MB for testing");
-            let sc_set_mapsize = mdb_env_set_mapsize(env, 1 << 20); // Use 1MB instead of 1GB
-            println!("DEBUG: mdb_env_set_mapsize = {}", sc_set_mapsize); // ADD THIS
+            let sc_set_mapsize = mdb_env_set_mapsize(env, 1 << 20);
+            println!("DEBUG: mdb_env_set_mapsize = {}", sc_set_mapsize);
             if sc_set_mapsize != 0 {
                 return Err(Box::new(std::io::Error::from_raw_os_error(sc_set_mapsize)));
             }
-
-            let cs = CString::new(path)?;
+            let db_file_path = format!("{}/data.mdb", path);
+            let cs = CString::new(db_file_path)?;
             let sc_env_open = mdb_env_open(env, cs.as_ptr(), MDB_CREATE, 0o600);
             println!("DEBUG: mdb_env_open = {}", sc_env_open); // ADD THIS
             if sc_env_open != 0 {
@@ -133,7 +129,7 @@ pub unsafe fn open_named_db(env: *mut MDB_env, name_ptr: *const i8) -> Result<MD
     }
 
     let mut dbi: MDB_dbi = 0;
-    let rc_open = unsafe { mdb_dbi_open(txn, name_ptr, 0, &mut dbi) };
+    let rc_open = unsafe { mdb_dbi_open(txn, name_ptr, MDB_NOSUBDIR | MDB_CREATE, &mut dbi) };
     if rc_open == MDB_SUCCESS as i32 {
         let rc_commit = unsafe { mdb_txn_commit(txn) };
         if rc_commit != MDB_SUCCESS as i32 {
