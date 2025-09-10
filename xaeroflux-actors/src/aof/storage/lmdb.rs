@@ -6,7 +6,7 @@ use std::{
     ptr,
     sync::{Arc, Mutex},
 };
-
+use std::ffi::CStr;
 use iroh::NodeId;
 use liblmdb::{MDB_CREATE, MDB_NODUPDATA, MDB_NOTFOUND, MDB_RDONLY, MDB_RESERVE, MDB_SUCCESS, MDB_cursor_op_MDB_NEXT, MDB_dbi, MDB_env, MDB_txn, MDB_val, mdb_cursor_close, mdb_cursor_get, mdb_cursor_open, mdb_dbi_close, mdb_dbi_open, mdb_env_create, mdb_env_open, mdb_env_set_mapsize, mdb_env_set_maxdbs, mdb_get, mdb_put, mdb_strerror, mdb_txn_abort, mdb_txn_begin, mdb_txn_commit, MDB_NOSUBDIR};
 use rkyv::{rancor::Failure, util::AlignedVec};
@@ -49,39 +49,35 @@ unsafe impl Send for LmdbEnv {}
 
 impl LmdbEnv {
     pub fn new(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        let res = std::fs::create_dir_all(path);
-        match res {
-            Ok(_) => {}
-            Err(e) => return Err(e.into()),
-        }
+        std::fs::create_dir_all(path)?;
 
         let mut env = ptr::null_mut();
         unsafe {
             tracing::info!("Creating LMDB environment at {}", path);
-            let sc_create_env = mdb_env_create(&mut env);
-            println!("DEBUG: mdb_env_create = {}", sc_create_env); // ADD THIS
-            if sc_create_env != 0 {
-                return Err(Box::new(std::io::Error::from_raw_os_error(sc_create_env)));
-            }
 
-            tracing::info!("Setting max DBs to 8");
-            let sc_set_max_dbs = mdb_env_set_maxdbs(env, 8);
-            println!("DEBUG: mdb_env_set_maxdbs = {}", sc_set_max_dbs); // ADD THIS
-            if sc_set_max_dbs != 0 {
-                return Err(Box::new(std::io::Error::from_raw_os_error(sc_set_max_dbs)));
-            }
+            mdb_env_create(&mut env);
+            mdb_env_set_maxdbs(env, 8);
 
-            tracing::info!("Setting mapsize to 1MB for testing");
-            let sc_set_mapsize = mdb_env_set_mapsize(env, 1 << 20);
-            println!("DEBUG: mdb_env_set_mapsize = {}", sc_set_mapsize);
-            if sc_set_mapsize != 0 {
-                return Err(Box::new(std::io::Error::from_raw_os_error(sc_set_mapsize)));
-            }
-            let db_file_path = format!("{}/data.mdb", path);
-            let cs = CString::new(db_file_path)?;
-            let sc_env_open = mdb_env_open(env, cs.as_ptr(), MDB_CREATE, 0o600);
-            println!("DEBUG: mdb_env_open = {}", sc_env_open); // ADD THIS
+            // Smaller map size as suggested in the thread
+            mdb_env_set_mapsize(env, 32 * 1024 * 1024); // 32MB
+
+            // FIXME: Apple sandboxing dislikes lock.mdb file!
+            const MDB_NOLOCK: u32 = 0x400000;
+            const MDB_NOSUBDIR: u32 = 0x4000;
+
+            // Point to a specific file when using NOSUBDIR
+            let db_file = format!("{}/cyan.mdb", path);
+            let cs = CString::new(db_file)?;
+
+            // This exact combination worked for Electron apps
+            let flags = MDB_NOSUBDIR | MDB_NOLOCK | MDB_CREATE;
+            let sc_env_open = mdb_env_open(env, cs.as_ptr(), flags, 0o664);
+
+            tracing::info!("mdb_env_open result: {}", sc_env_open);
+
             if sc_env_open != 0 {
+                let err_str = CStr::from_ptr(mdb_strerror(sc_env_open)).to_string_lossy();
+                tracing::error!("LMDB open failed: {} - {}", sc_env_open, err_str);
                 return Err(Box::new(std::io::Error::from_raw_os_error(sc_env_open)));
             }
         }
@@ -129,7 +125,7 @@ pub unsafe fn open_named_db(env: *mut MDB_env, name_ptr: *const i8) -> Result<MD
     }
 
     let mut dbi: MDB_dbi = 0;
-    let rc_open = unsafe { mdb_dbi_open(txn, name_ptr, MDB_NOSUBDIR | MDB_CREATE, &mut dbi) };
+    let rc_open = unsafe { mdb_dbi_open(txn, name_ptr, 0, &mut dbi) };
     if rc_open == MDB_SUCCESS as i32 {
         let rc_commit = unsafe { mdb_txn_commit(txn) };
         if rc_commit != MDB_SUCCESS as i32 {

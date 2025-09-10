@@ -27,6 +27,8 @@ pub struct VectorClockState {
 
 impl VectorClockState {
     pub fn new(lmdb_env: Arc<Mutex<LmdbEnv>>) -> VectorClockState {
+        VC_DELTA_INPUT_RING.get_or_init(RingBuffer::new);
+        VC_DELTA_OUTPUT_RING.get_or_init(RingBuffer::new);
         VectorClockState {
             clock: XaeroClock::new(),
             lru_cache: HashMap::with_capacity(100),

@@ -13,7 +13,7 @@ use std::{
 };
 
 use rusted_ring::{
-    PooledEvent, RingBuffer, Writer, L_CAPACITY, L_TSHIRT_SIZE, M_CAPACITY, M_TSHIRT_SIZE, S_CAPACITY, S_TSHIRT_SIZE, XL_CAPACITY, XL_TSHIRT_SIZE, XS_CAPACITY, XS_TSHIRT_SIZE,
+    L_CAPACITY, L_TSHIRT_SIZE, M_CAPACITY, M_TSHIRT_SIZE, PooledEvent, RingBuffer, S_CAPACITY, S_TSHIRT_SIZE, Writer, XL_CAPACITY, XL_TSHIRT_SIZE, XS_CAPACITY, XS_TSHIRT_SIZE,
 };
 use xaeroid::XaeroID;
 
@@ -41,6 +41,20 @@ pub static P2P_M_RING: OnceLock<RingBuffer<M_TSHIRT_SIZE, M_CAPACITY>> = OnceLoc
 pub static P2P_L_RING: OnceLock<RingBuffer<L_TSHIRT_SIZE, L_CAPACITY>> = OnceLock::new();
 pub static P2P_XL_RING: OnceLock<RingBuffer<XL_TSHIRT_SIZE, XL_CAPACITY>> = OnceLock::new();
 
+
+// Tokio runtime for iroh p2p QUIC stuff.
+static TOKIO_RUNTIME: OnceLock<Runtime> = OnceLock::new();
+
+fn get_runtime() -> &'static Runtime {
+    TOKIO_RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(4) // FIXME: magic number needs to be part of config!
+            .enable_all()
+            .build()
+            .expect("Failed to create Tokio runtime")
+    })
+}
+
 // ================================================================================================
 // EVENT BUS - JUST HOUSES WRITERS
 // ================================================================================================
@@ -60,6 +74,7 @@ impl Default for EventBus {
 }
 
 use std::cell::RefCell;
+use tokio::runtime::Runtime;
 
 impl EventBus {
     /// Create new EventBus with writers to main ring buffers
@@ -250,7 +265,7 @@ impl XaeroFlux {
             return Err("AOF must be started before P2P".into());
         }
         let p2p_handle = std::thread::spawn(move || {
-            let rt = tokio::runtime::Handle::current();
+            let rt = get_runtime();
             let handle = rt.spawn(async move {
                 // Get static reference to S ring buffer
                 let s_ring: &'static RingBuffer<S_TSHIRT_SIZE, S_CAPACITY> = S_RING.get_or_init(RingBuffer::new);

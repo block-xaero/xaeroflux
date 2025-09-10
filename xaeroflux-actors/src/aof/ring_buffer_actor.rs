@@ -15,23 +15,23 @@ use std::{
 };
 
 use bytemuck::{Pod, Zeroable};
-use parking_lot::{RawRwLock, RwLock, lock_api::RwLockReadGuard};
+use parking_lot::{lock_api::RwLockReadGuard, RawRwLock, RwLock};
 use rusted_ring::{
-    EventPoolFactory, EventUtils, L_CAPACITY, L_TSHIRT_SIZE, M_CAPACITY, M_TSHIRT_SIZE, PooledEvent, Reader, RingBuffer, S_CAPACITY, S_TSHIRT_SIZE, Writer, XL_CAPACITY,
+    EventPoolFactory, EventUtils, PooledEvent, Reader, RingBuffer, Writer, L_CAPACITY, L_TSHIRT_SIZE, M_CAPACITY, M_TSHIRT_SIZE, S_CAPACITY, S_TSHIRT_SIZE, XL_CAPACITY,
     XL_TSHIRT_SIZE, XS_CAPACITY, XS_TSHIRT_SIZE,
 };
-use xaeroflux_core::{CONF, date_time::emit_secs, hash::blake_hash_slice, pipe::BusKind, pool::XaeroInternalEvent, system_paths};
+use xaeroflux_core::{date_time::emit_secs, hash::blake_hash_slice, pipe::BusKind, pool::XaeroInternalEvent, system_paths, CONF};
 
-// Import global ring buffers from subject.rs
-use crate::{L_RING, M_RING, S_RING, XL_RING, XS_RING};
 use crate::{
     aof::storage::{
         format::{EventKey, MmrMeta},
-        lmdb::{LmdbEnv, generate_event_key, get_event_by_hash, get_mmr_meta, push_internal_event_universal, put_mmr_meta, scan_enhanced_range},
+        lmdb::{generate_event_key, get_event_by_hash, get_mmr_meta, push_internal_event_universal, put_mmr_meta, scan_enhanced_range, LmdbEnv},
     },
     indexing::mmr::{Peak, XaeroMmr, XaeroMmrOps},
     read_api::PointQuery,
 };
+// Import global ring buffers from subject.rs
+use crate::{L_RING, M_RING, S_RING, XL_RING, XS_RING};
 // ================================================================================================
 // TYPES & STRUCTS
 // ================================================================================================
@@ -129,9 +129,6 @@ impl AofState {
     /// Create new AOF state with LMDB environment and recovered MMR
     pub fn new(env: Arc<Mutex<LmdbEnv>>) -> Result<Self, Box<dyn std::error::Error>> {
         // Get base path from config
-        let c = CONF.get().expect("failed to unravel config");
-        let base_path = &c.aof.file_path;
-
         let mmr = Self::recover_mmr_from_events(&env)?;
         tracing::info!("Recovered MMR with {} leaves", mmr.leaf_count());
         let mmr_rw = RwLock::new(mmr);
@@ -440,12 +437,7 @@ mod tests {
     fn test_mmr_integration() {
         xaeroflux_core::initialize();
 
-        let mut state = AofState::new(Arc::new(Mutex::new(LmdbEnv::new("/tmp/xaero-test-data")
-            .unwrap
-        ()))).expect
-        ("Failed to create \
-        AOF \
-        state");
+        let mut state = AofState::new(Arc::new(Mutex::new(LmdbEnv::new("/tmp/xaero-test-data").unwrap()))).expect("Failed to create AOF state");
 
         // Test MMR integration with event processing
         let test_events = [b"first event".as_slice(), b"second event".as_slice(), b"third event".as_slice()];
@@ -473,12 +465,7 @@ mod tests {
     fn test_hash_index_lookup_performance() {
         xaeroflux_core::initialize();
 
-        let mut state = AofState::new(Arc::new(Mutex::new(LmdbEnv::new("/tmp/xaero-test-data")
-            .unwrap
-            ()))).expect
-        ("Failed to create \
-        AOF \
-        state");
+        let mut state = AofState::new(Arc::new(Mutex::new(LmdbEnv::new("/tmp/xaero-test-data").unwrap()))).expect("Failed to create AOF state");
 
         // Store some test events
         let test_events = [b"hash_index_test_1".as_slice(), b"hash_index_test_2".as_slice(), b"hash_index_test_3".as_slice()];
