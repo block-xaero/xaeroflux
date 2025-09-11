@@ -41,7 +41,6 @@ pub static P2P_M_RING: OnceLock<RingBuffer<M_TSHIRT_SIZE, M_CAPACITY>> = OnceLoc
 pub static P2P_L_RING: OnceLock<RingBuffer<L_TSHIRT_SIZE, L_CAPACITY>> = OnceLock::new();
 pub static P2P_XL_RING: OnceLock<RingBuffer<XL_TSHIRT_SIZE, XL_CAPACITY>> = OnceLock::new();
 
-
 // Tokio runtime for iroh p2p QUIC stuff.
 static TOKIO_RUNTIME: OnceLock<Runtime> = OnceLock::new();
 
@@ -74,6 +73,7 @@ impl Default for EventBus {
 }
 
 use std::cell::RefCell;
+
 use tokio::runtime::Runtime;
 
 impl EventBus {

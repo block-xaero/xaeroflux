@@ -20,30 +20,24 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     sync::{Mutex, mpsc},
 };
-use xaeroflux_core::{
-    date_time::emit_secs,
-    hash::blake_hash_slice,
-    pool::XaeroPeerEvent,
-    vector_clock::XaeroVectorClock,
-};
+use xaeroflux_core::{date_time::emit_secs, hash::blake_hash_slice, pool::XaeroPeerEvent, vector_clock::XaeroVectorClock};
 use xaeroid::{
     XaeroID,
     cache::{XaeroIdCacheS, XaeroIdCacheXS, XaeroIdHotCache},
 };
 
 use crate::{
-    vector_clock_actor,
     aof::{
         ring_buffer_actor::AofState,
         storage::{
             format::MmrMeta,
-            lmdb::{get_node_id_by_xaero_id, get_xaero_id_by_xaero_id_hash},
+            lmdb::{LmdbEnv, get_node_id_by_xaero_id, get_xaero_id_by_xaero_id_hash},
         },
     },
     networking::format::XaeroFileHeader,
+    vector_clock_actor,
+    vector_clock_actor::VectorClockActor,
 };
-use crate::aof::storage::lmdb::LmdbEnv;
-use crate::vector_clock_actor::VectorClockActor;
 
 pub struct XaeroQuicStream {
     pub name: String,
@@ -173,7 +167,7 @@ impl<const TSHIRT: usize, const RING_CAPACITY: usize> P2pActor<TSHIRT, RING_CAPA
         ring_buffer: &'static RingBuffer<TSHIRT, RING_CAPACITY>,
         our_xaero_id: XaeroID,
         aof_actor: Arc<AofState>,
-        lmdb_env: Arc<std::sync::Mutex<LmdbEnv>>
+        lmdb_env: Arc<std::sync::Mutex<LmdbEnv>>,
     ) -> Result<(Self, Writer<TSHIRT, RING_CAPACITY>, Reader<TSHIRT, RING_CAPACITY>)> {
         let xaero_user_data = XaeroUserData {
             xaero_id_hash: blake_hash_slice(&our_xaero_id.did_peer[..our_xaero_id.did_peer_len as usize]),
