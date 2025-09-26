@@ -52,14 +52,12 @@ pub trait ReadApi {
     fn vector_search<const SIZE: usize>(&self, query: VectorQueryRequest<SIZE>) -> Result<Vec<XaeroInternalEvent<SIZE>>, Box<dyn std::error::Error>>;
 
     fn find_current_state_by_eid<const SIZE: usize>(&self, eid: [u8; 32]) -> Result<Option<XaeroInternalEvent<SIZE>>, Box<dyn std::error::Error>>;
-
-    fn get_current_vc_hash(&self) -> Result<[u8; 32], Box<dyn std::error::Error>>;
 }
 use rusted_ring::{S_CAPACITY, S_TSHIRT_SIZE};
 use xaeroflux_core::pool::XaeroInternalEvent;
 use xaeroid::XaeroID;
 
-use crate::aof::storage::lmdb::{get_current_state_by_entity_id, get_current_vc_hash, get_event_by_hash, get_events_by_event_type, get_vector_clock_meta};
+use crate::aof::storage::lmdb::{get_current_state_by_entity_id, get_current_vector_clock, get_event_by_hash, get_events_by_event_type};
 
 pub static CONTINUOUS_QUERY_S: OnceLock<RingBuffer<S_TSHIRT_SIZE, S_CAPACITY>> = OnceLock::new();
 
@@ -108,10 +106,5 @@ impl ReadApi for XaeroFlux {
     fn find_current_state_by_eid<const SIZE: usize>(&self, eid: [u8; 32]) -> Result<Option<XaeroInternalEvent<SIZE>>, Box<dyn Error>> {
         let mut env = self.read_handle.clone().expect("read_api not ready!");
         get_current_state_by_entity_id(&mut env, eid)
-    }
-
-    fn get_current_vc_hash(&self) -> Result<[u8; 32], Box<dyn std::error::Error>> {
-        let env = self.read_handle.clone().expect("read_handle_not_ready");
-        get_current_vc_hash(&env)
     }
 }

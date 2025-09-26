@@ -4,7 +4,6 @@ pub mod wal;
 
 use std::sync::Once;
 
-use tracing_subscriber::fmt::time::UtcTime;
 static INIT: Once = Once::new();
 
 #[cfg(feature = "diagnostics")]

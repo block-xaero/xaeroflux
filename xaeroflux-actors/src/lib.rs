@@ -34,7 +34,6 @@ pub static STANDARD_RING: OnceLock<RingBuffer<512, 2048>> = OnceLock::new();
 pub static L_RING: OnceLock<RingBuffer<L_TSHIRT_SIZE, L_CAPACITY>> = OnceLock::new();
 pub static XL_RING: OnceLock<RingBuffer<XL_TSHIRT_SIZE, XL_CAPACITY>> = OnceLock::new();
 
-
 pub static P2P_XS_RING: OnceLock<RingBuffer<XS_TSHIRT_SIZE, XS_CAPACITY>> = OnceLock::new();
 pub static P2P_S_RING: OnceLock<RingBuffer<S_TSHIRT_SIZE, S_CAPACITY>> = OnceLock::new();
 pub static P2P_M_RING: OnceLock<RingBuffer<M_TSHIRT_SIZE, M_CAPACITY>> = OnceLock::new();
@@ -45,13 +44,7 @@ pub static P2P_XL_RING: OnceLock<RingBuffer<XL_TSHIRT_SIZE, XL_CAPACITY>> = Once
 static TOKIO_RUNTIME: OnceLock<Runtime> = OnceLock::new();
 
 fn get_runtime() -> &'static Runtime {
-    TOKIO_RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(4)
-            .enable_all()
-            .build()
-            .expect("Failed to create Tokio runtime")
-    })
+    TOKIO_RUNTIME.get_or_init(|| tokio::runtime::Builder::new_current_thread().enable_all().build().expect("Failed to create Tokio runtime"))
 }
 
 // ================================================================================================
@@ -129,7 +122,7 @@ impl EventBus {
     /// Helper to write data to optimal ring buffer
     pub fn write_optimal(&mut self, data: &[u8], event_type: u32) -> Result<(), XaeroFluxError> {
         let data_len = data.len();
-        let ids_encountered = data.chunks_exact(32).take_while(|e| if *e == [0u8; 32] { false } else { true }).count();
+        let ids_encountered = data.chunks_exact(32).take_while(|e| *e != [0u8; 32]).count();
         let entity_parent_ids = ids_encountered * 32 + 32;
         tracing::info!("########## xaeroflux write_optimal recvd : {data_len:#?}");
         tracing::info!("########## xaeroflux write_optimal recvd (- entity_parent_ids) : {:#?}", data_len - entity_parent_ids);
@@ -229,7 +222,6 @@ use crate::{
     vector_clock_actor::VectorClockActor,
 };
 
-
 pub struct XaeroFlux {
     pub event_bus: EventBus,
     pub vector_search: Option<Arc<VectorSearchActor>>,
@@ -249,7 +241,7 @@ impl XaeroFlux {
     /// Create a new XaeroFlux instance
     fn new(data_dir: &str) -> Self {
         let lmdb_env = Arc::new(Mutex::new(
-            LmdbEnv::new(data_dir).expect(format!("failed to create lmdb env on {data_dir:?} provided").as_str()),
+            LmdbEnv::new(data_dir).unwrap_or_else(|_| panic!("failed to create lmdb env on {data_dir:?} provided")),
         ));
         let jh = VectorClockActor::new(lmdb_env).spin().expect("Should create a vector clock actor --");
         Self {
@@ -291,8 +283,8 @@ impl XaeroFlux {
                 let aof_state = Arc::new(crate::aof::ring_buffer_actor::AofState::new(lmdb_env.clone()).expect("failed to create ring buffer actor"));
 
                 match P2pActor::<S_TSHIRT_SIZE, S_CAPACITY>::new(s_ring, xaero_id, aof_state, lmdb_env.clone()).await {
-                    Ok((mut actor, writer, reader)) =>
-                        if let Err(e) = actor.start(writer, reader).await {
+                    Ok((mut actor, writer, reader, vc_reader)) =>
+                        if let Err(e) = actor.start(writer, reader, vc_reader).await {
                             tracing::error!("P2P actor failed: {e:?}");
                         },
                     Err(e) => {
@@ -334,7 +326,6 @@ impl XaeroFlux {
     pub fn send_file_data(&mut self, file_data: &[u8]) -> Result<(), XaeroFluxError> {
         self.write_event(file_data, 2) // event_type 2 for files
     }
-
 
     /// Search using a single vector
     pub fn search_vector(&self, vector: Vec<f32>, k: u32, similarity_threshold: f32) -> Result<VectorQueryResponse<5>, XaeroFluxError> {

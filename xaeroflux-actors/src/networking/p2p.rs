@@ -1,11 +1,10 @@
 use std::{
     collections::HashMap,
-    net::Shutdown::Read,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Error, Result};
@@ -90,6 +89,7 @@ impl XspConnMeta {
     }
 }
 
+// Add activity tracking for energy efficiency
 pub struct XspConnection {
     pub our_xaero_id: [u8; 32],
     pub peer_id: [u8; 32],
@@ -99,6 +99,10 @@ pub struct XspConnection {
     pub event_stream: XaeroQuicStream,
     pub file_stream: XaeroQuicStream,
     pub ping_stream: XaeroQuicStream,
+    // Energy efficiency fields
+    pub last_activity: Instant,
+    pub poll_interval: Duration,
+    pub idle_counter: u32,
     lmdb_env: Arc<std::sync::Mutex<LmdbEnv>>,
 }
 
@@ -109,9 +113,6 @@ impl XspConnection {
 
         let (vc_sender, vc_receiver) = connection.open_bi().await?;
         let vector_clock_stream = XaeroQuicStream::new("vc$".to_string(), StreamType::VectorClock, vc_sender, vc_receiver);
-
-        let (mmr_sender, mmr_receiver) = connection.open_bi().await?;
-        let mmr_stream = XaeroQuicStream::new("mmr$".to_string(), StreamType::Mmr, mmr_sender, mmr_receiver);
 
         let (file_sender, file_receiver) = connection.open_bi().await?;
         let file_stream = XaeroQuicStream::new("file$".to_string(), StreamType::File, file_sender, file_receiver);
@@ -128,25 +129,25 @@ impl XspConnection {
             event_stream,
             file_stream,
             ping_stream,
+            last_activity: Instant::now(),
+            poll_interval: Duration::from_millis(1),
+            idle_counter: 0,
             lmdb_env,
         })
     }
 
     pub async fn request_xaero_id(&mut self) -> Result<XaeroID> {
         let xaero_zero_id = XaeroID::zeroed();
-        let full_xid = get_xaero_id_by_xaero_id_hash(&self.lmdb_env, self.our_xaero_id)?.unwrap_or_else(|| &xaero_zero_id);
+        let full_xid = get_xaero_id_by_xaero_id_hash(&self.lmdb_env, self.our_xaero_id)?.unwrap_or(&xaero_zero_id);
         let xid_bytes = &XaeroPing { sender_id: *full_xid };
         let ping = bytemuck::bytes_of(xid_bytes);
-        let res = self.ping_stream.send.write_all(ping).await?;
+        self.ping_stream.send.write_all(ping).await?;
         let mut response_bytes = vec![0u8; std::mem::size_of::<XaeroID>()];
         let res = tokio::time::timeout(Duration::from_secs(5), async {
-            let res = self.ping_stream.recv.read_exact(&mut response_bytes).await;
-            match res {
-                Ok(_) => response_bytes,
-                Err(e) => panic!("failed to grab xaero_id due to: {:?}", e),
-            }
+            self.ping_stream.recv.read_exact(&mut response_bytes).await?;
+            Ok::<Vec<u8>, Error>(response_bytes)
         })
-        .await?;
+        .await??;
         let xaero_id_of_peer = bytemuck::from_bytes::<XaeroID>(res.as_slice());
         Ok(*xaero_id_of_peer)
     }
@@ -158,7 +159,7 @@ impl XspConnection {
         Ok(())
     }
 
-    pub async fn send_event<const TSHIRT: usize>(&mut self, event: &XaeroPeerEvent<TSHIRT>) -> Result<(), Error> {
+    pub async fn send_event<const TSHIRT: usize>(&mut self, event: &PooledEvent<TSHIRT>) -> Result<(), Error> {
         let event_bytes = bytemuck::bytes_of(event);
         self.event_stream.send.write_all(event_bytes).await?;
         self.event_stream.send.flush().await?;
@@ -170,7 +171,6 @@ impl XspConnection {
         let file_data = tokio::fs::read(loc).await?;
         let crc32 = checksum_file(Crc32IsoHdlc, loc, Some(CHUNK_SIZE))?;
 
-        // Send header
         let header = XaeroFileHeader {
             magic: *b"XAER",
             size: file_data.len() as u64,
@@ -179,6 +179,25 @@ impl XspConnection {
         self.file_stream.send.write_all(bytemuck::bytes_of(&header)).await?;
         self.file_stream.send.write_all(&file_data).await?;
         Ok(())
+    }
+
+    // Check if we should poll this connection
+    pub fn should_poll(&self) -> bool {
+        self.last_activity.elapsed() >= self.poll_interval
+    }
+
+    // Mark activity and reset interval
+    pub fn mark_active(&mut self) {
+        self.last_activity = Instant::now();
+        self.idle_counter = 0;
+        self.poll_interval = Duration::from_millis(1);
+    }
+
+    // Increase backoff for idle connection
+    pub fn mark_idle(&mut self) {
+        self.idle_counter += 1;
+        // Exponential backoff: 1ms, 2ms, 4ms, ..., max 1s
+        self.poll_interval = self.poll_interval.mul_f32(2.0).min(Duration::from_secs(1));
     }
 }
 
@@ -193,7 +212,6 @@ pub struct XaeroUserData {
 unsafe impl Pod for XaeroUserData {}
 unsafe impl Zeroable for XaeroUserData {}
 
-/// Minimal P2P Actor
 pub struct P2pActor<const TSHIRT: usize, const RING_CAPACITY: usize> {
     our_xaero_id: [u8; 32],
     endpoint: Endpoint,
@@ -203,7 +221,7 @@ pub struct P2pActor<const TSHIRT: usize, const RING_CAPACITY: usize> {
     vector_clock_actor: VectorClockActor,
     xaero_id_cache: XaeroIdCacheS,
     node_id_to_xaero_id_mapping: HashMap<[u8; 32], [u8; 32]>,
-    last_vc_sync: HashMap<[u8; 32], u64>,
+    last_global_vc_sync: Instant,
     lmdb_env: Arc<std::sync::Mutex<LmdbEnv>>,
 }
 
@@ -214,26 +232,24 @@ impl<const TSHIRT: usize, const RING_CAPACITY: usize> P2pActor<TSHIRT, RING_CAPA
         aof_actor: Arc<AofState>,
         lmdb_env: Arc<std::sync::Mutex<LmdbEnv>>,
     ) -> Result<(Self, Writer<TSHIRT, RING_CAPACITY>, Reader<TSHIRT, RING_CAPACITY>, Reader<1024, 1>)> {
-        let xid = match put_xaero_id(&lmdb_env.clone(), our_xaero_id) {
-            Ok(xid_hash) => xid_hash,
-            Err(e) => {
-                panic!("failed to cache in our xaero_id {:?}", our_xaero_id)
-            }
-        };
+        let xid = put_xaero_id(&lmdb_env, our_xaero_id)?;
+
         let vc_clock_res = get_current_vector_clock(&lmdb_env);
         let hash_to_vc_clock = match vc_clock_res {
             Ok(vc_clock) => {
-                let vc = vc_clock.expect("failed to obtain vector clock");
+                let vc = vc_clock.unwrap_or_else(XaeroVectorClock::zeroed);
                 (blake_hash_slice(bytemuck::bytes_of(&vc)), vc)
             }
-            Err(e) => {
-                panic!("failed to get current vector clock {e:?}")
+            Err(_) => {
+                let default_vc = XaeroVectorClock::zeroed();
+                (blake_hash_slice(bytemuck::bytes_of(&default_vc)), default_vc)
             }
         };
+
         let xaero_user_data = XaeroUserData {
             xaero_id_hash: xid,
             vector_clock_hash: hash_to_vc_clock.0,
-            topic: our_xaero_id.credential.proofs.to_vec().get(0).expect("failed to get zk proof for topic").zk_proof,
+            topic: our_xaero_id.credential.proofs.to_vec().first().expect("failed to get zk proof for topic").zk_proof,
         };
 
         let sk = SecretKey::from_bytes(&blake_hash_slice(&our_xaero_id.secret_key));
@@ -248,6 +264,7 @@ impl<const TSHIRT: usize, const RING_CAPACITY: usize> P2pActor<TSHIRT, RING_CAPA
             .alpns(vec![b"xsp-1.0".to_vec()])
             .bind()
             .await?;
+
         let actor = Self {
             our_xaero_id: blake_hash_slice(bytemuck::bytes_of(&our_xaero_id)),
             endpoint,
@@ -257,23 +274,29 @@ impl<const TSHIRT: usize, const RING_CAPACITY: usize> P2pActor<TSHIRT, RING_CAPA
             vector_clock_actor: VectorClockActor::new(lmdb_env.clone()),
             xaero_id_cache: XaeroIdCacheS::new(),
             node_id_to_xaero_id_mapping: HashMap::new(),
-            last_vc_sync: HashMap::new(),
+            last_global_vc_sync: Instant::now(),
             lmdb_env,
         };
 
         let writer = Writer::new(ring_buffer);
         let reader = Reader::new(ring_buffer);
         let vc_updates_reader = Reader::new(VC_DELTA_OUTPUT_RING.get().expect("failed to initialize vc delta ring buffer"));
+
         Ok((actor, writer, reader, vc_updates_reader))
     }
 
     pub async fn start(&mut self, mut writer: Writer<TSHIRT, RING_CAPACITY>, mut reader: Reader<TSHIRT, RING_CAPACITY>, mut vc_updates_reader: Reader<1024, 1>) -> Result<()> {
         self.running.store(true, Ordering::Relaxed);
-        tracing::info!("Starting P2P actor");
+        tracing::info!("Starting energy-efficient P2P actor");
 
         let mut cleanup_timer = tokio::time::interval(Duration::from_secs(30));
+        let mut vc_sync_timer = tokio::time::interval(Duration::from_secs(30));
 
-        // Main loop
+        // Reusable buffers to reduce allocations
+        let mut event_buf = vec![0u8; TSHIRT];
+        let mut vc_buf = [0u8; 504];
+        let mut ping_buf = [0u8; std::mem::size_of::<XaeroPing>()];
+
         while self.running.load(Ordering::Relaxed) {
             tokio::select! {
                 // Handle incoming connections
@@ -284,7 +307,6 @@ impl<const TSHIRT: usize, const RING_CAPACITY: usize> P2pActor<TSHIRT, RING_CAPA
                             let peer_xaero_id = self.node_id_to_xaero_id(peer_node_id).await?;
                             let peer_id_hash = blake_hash_slice(bytemuck::bytes_of(&peer_xaero_id));
 
-                            // Create XspConnection with all streams
                             if let Ok(xsp_conn) = XspConnection::new(
                                 self.lmdb_env.clone(),
                                 self.our_xaero_id,
@@ -293,122 +315,93 @@ impl<const TSHIRT: usize, const RING_CAPACITY: usize> P2pActor<TSHIRT, RING_CAPA
                                 conn
                             ).await {
                                 self.active_peers.insert(peer_id_hash, xsp_conn);
-                                tracing::info!("New peer connected: {:?}", peer_id_hash);
+                                tracing::info!("New peer connected: {:?}", hex::encode(peer_id_hash));
                             }
                         }
                 },
 
                 // Broadcast events from ring buffer
                 Some(event) = async { reader.next() } => {
-                    for (peer_id, xsp_conn) in &mut self.active_peers {
-                        if let Err(e) = Self::send_event_to_peer_static(xsp_conn, event).await {
-                            tracing::warn!("Failed to send to peer {:?}: {:?}", peer_id, e);
-                        }
+                    for xsp_conn in self.active_peers.values_mut() {
+                        // Non-blocking send
+                        let _ = xsp_conn.send_event(&event).await;
                     }
                 },
 
-                // Handle incoming messages from all peers
+                // Process incoming messages - energy efficient with backoff
                 _ = async {
+                    let mut processed_any = false;
+
                     for (peer_id, xsp_conn) in &mut self.active_peers {
-                        // Handle ping/pong
-                        if let Ok(ping_response) = tokio::time::timeout(Duration::from_millis(1), async {
-                            let mut ping_buff = [0u8; std::mem::size_of::<XaeroPing>()];
-                            match xsp_conn.ping_stream.recv.read_exact(&mut ping_buff).await {
-                                Ok(_) => {},
-                                Err(e) => {
-                                    warn!("Failed to read PING response from peer {:?}: {:?}", peer_id, e);
-                                }
-                            }
-                            ping_buff
-                        }).await {
-                            let pong = bytemuck::from_bytes::<XaeroPing>(&ping_response);
-                            tracing::info!("Got pong from peer {:?}, going to cache it!", peer_id);
-                            self.xaero_id_cache.insert(pong.sender_id);
+                        // Skip if not time to poll this peer yet
+                        if !xsp_conn.should_poll() {
+                            continue;
                         }
 
-                        // Try to receive vector clock with timeout
-                        if let Ok(vc_result) = tokio::time::timeout(Duration::from_secs(10), async {
-                            let mut buf = [0u8; 504]; // Exact size for XaeroVectorClock
-                            xsp_conn.vector_clock_stream.recv.read_exact(&mut buf).await?;
-                            let vc = bytemuck::from_bytes::<XaeroVectorClock>(&buf);
-                            Ok::<XaeroVectorClock, ReadExactError>(*vc)
-                        }).await
-                            && let Ok(vc_buf) = vc_result {
-                                tracing::info!("Received vector clock from peer {:?}", peer_id);
-                                let event = EventUtils::create_pooled_event(
-                                    bytemuck::bytes_of(&vc_buf),
-                                    10001u32
-                                ).expect("failed to create an event");
-                                self.vector_clock_actor.writer.add(event);
+                        let mut had_activity = false;
+
+                        // Try to receive event (non-blocking with short timeout)
+                        if let Ok(Ok(_)) = tokio::time::timeout(
+                            Duration::from_micros(100),
+                            xsp_conn.event_stream.recv.read_exact(&mut event_buf)
+                        ).await
+                            && let Ok(event) = EventUtils::create_pooled_event::<TSHIRT>(&event_buf, 0) {
+                                writer.add(event);
+                                had_activity = true;
+                                processed_any = true;
+                                tracing::debug!("Received event from peer {:?}", hex::encode(peer_id));
                             }
 
-                        // Sync vector clocks
-                        tracing::info!("Sync vector clocks {:?}", peer_id);
-                        if let Some(lastSync) = self.last_vc_sync.get(peer_id) {
-                            if emit_secs().saturating_sub(*lastSync) >= 30 {
-                                // get current vc
-                                match get_current_vector_clock(&self.lmdb_env.clone()) {
-                                    Ok(vcOpt) => {
-                                        let vc = vcOpt.expect("failed to unravel vector clock received from LMDB");
-                                        let vc_updated_bytes = bytemuck::bytes_of(&vc);
-                                        match xsp_conn.vector_clock_stream.send.write_all(vc_updated_bytes).await {
-                                            Ok(_) => {
-                                                tracing::info!("Successfully send to peer {:?}", peer_id);
-                                            }
-                                            Err(e) => {
-                                                tracing::error!("Failed to send vector clock: {:?}", e);
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        tracing::warn!("Failed to get current vector clock: {:?}", e);
-                                    }
-                                }
-                            }
+                        // Try to receive vector clock
+                        if let Ok(Ok(_)) = tokio::time::timeout(
+                            Duration::from_micros(100),
+                            xsp_conn.vector_clock_stream.recv.read_exact(&mut vc_buf)
+                        ).await {
+                            let vc = bytemuck::from_bytes::<XaeroVectorClock>(&vc_buf);
+                            let event = EventUtils::create_pooled_event(
+                                bytemuck::bytes_of(vc),
+                                10001u32
+                            ).expect("failed to create VC event");
+                            self.vector_clock_actor.writer.add(event);
+                            had_activity = true;
+                            processed_any = true;
+                            tracing::debug!("Received VC from peer {:?}", hex::encode(peer_id));
                         }
 
-                        // Try to receive events with timeout
-                        if let Ok(event_result) = tokio::time::timeout(Duration::from_millis(1), async {
-                            let mut buf = [0u8; TSHIRT];
-                            xsp_conn.event_stream.recv.read_exact(&mut buf).await?;
-                            Ok::<[u8; TSHIRT], ReadExactError>(buf)
-                        }).await
-                            && let Ok(event_buf) = event_result {
-                                tracing::info!("Received event from peer {:?}, {} bytes", peer_id, TSHIRT);
-                                // Add to local ring buffer if valid
-                                if let Ok(event) = rusted_ring::EventUtils::create_pooled_event::<TSHIRT>(&event_buf, 0) {
-                                    let _ = writer.add(event);
-                                }
-                            }
-
-                        // Try to receive files with timeout
-                        if let Ok(file_result) = tokio::time::timeout(Duration::from_millis(1), async {
-                            let mut header_buf = [0u8; std::mem::size_of::<XaeroFileHeader>()];
-                            xsp_conn.file_stream.recv.read_exact(&mut header_buf).await?;
-                            let header = bytemuck::from_bytes::<XaeroFileHeader>(&header_buf);
-                            Ok::<XaeroFileHeader, ReadExactError>(*header)
-                        }).await
-                            && let Ok(file_header) = file_result {
-                                tracing::info!("Receiving file from peer {:?}, size: {}", peer_id, file_header.size);
-                                // Read file data
-                                let mut file_data = vec![0u8; file_header.size as usize];
-                                if xsp_conn.file_stream.recv.read_exact(&mut file_data).await.is_ok() {
-                                    // Verify CRC and save file
-                                    let filename = format!("received_file_{}.tmp", emit_secs());
-                                    if tokio::fs::write(&filename, &file_data).await.is_ok() {
-                                        tracing::info!("Saved received file: {}", filename);
-                                    }
-                                }
-                            }
+                        // Update activity tracking
+                        if had_activity {
+                            xsp_conn.mark_active();
+                        } else {
+                            xsp_conn.mark_idle();
+                        }
                     }
-                    tokio::time::sleep(Duration::from_millis(10)).await;
+
+                    // Dynamic sleep based on activity
+                    if processed_any {
+                        tokio::time::sleep(Duration::from_millis(1)).await;
+                    } else {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
                 } => {},
+
+                // Periodic vector clock sync (every 30s)
+                _ = vc_sync_timer.tick() => {
+                    if let Ok(Some(our_vc)) = get_current_vector_clock(&self.lmdb_env) {
+                        let vc_bytes = bytemuck::bytes_of(&our_vc);
+                        for (peer_id, xsp_conn) in &mut self.active_peers {
+                            if let Err(e) = xsp_conn.vector_clock_stream.send.write_all(vc_bytes).await {
+                                tracing::warn!("Failed to send VC to {:?}: {:?}", hex::encode(peer_id), e);
+                            }
+                        }
+                        tracing::info!("Broadcast vector clock to {} peers", self.active_peers.len());
+                    }
+                },
 
                 // Cleanup dead connections
                 _ = cleanup_timer.tick() => {
                     self.active_peers.retain(|peer_id, xsp_conn| {
                         if xsp_conn.conn.close_reason().is_some() {
-                            tracing::info!("Removing dead peer: {:?}", peer_id);
+                            tracing::info!("Removing dead peer: {:?}", hex::encode(peer_id));
                             false
                         } else {
                             true
@@ -422,13 +415,11 @@ impl<const TSHIRT: usize, const RING_CAPACITY: usize> P2pActor<TSHIRT, RING_CAPA
     }
 
     async fn send_event_to_peer_static(xsp_conn: &mut XspConnection, event: PooledEvent<TSHIRT>) -> Result<()> {
-        let event_bytes = bytemuck::bytes_of(&event);
-        xsp_conn.event_stream.send.write_all(event_bytes).await?;
-        Ok(())
+        xsp_conn.send_event(&event).await
     }
 
     pub async fn connect_to_peer(&mut self, peer_xaero_id: XaeroID) -> Result<()> {
-        let node_id = Self::xaero_id_to_node_id(self, peer_xaero_id)?;
+        let node_id = self.xaero_id_to_node_id(peer_xaero_id)?;
         let node_addr = NodeAddr::new(node_id);
         let conn = self.endpoint.connect(node_addr, b"xsp-1.0").await?;
         let peer_id_hash = blake_hash_slice(bytemuck::bytes_of(&peer_xaero_id));
@@ -454,13 +445,10 @@ impl<const TSHIRT: usize, const RING_CAPACITY: usize> P2pActor<TSHIRT, RING_CAPA
 
     async fn node_id_to_xaero_id(&mut self, node_id: iroh::NodeId) -> Result<XaeroID, anyhow::Error> {
         let n_id = node_id.as_bytes();
-
-        // First check if we have the hash mapping
         let xaero_id_hash_opt = self.node_id_to_xaero_id_mapping.get(n_id).cloned();
 
         match xaero_id_hash_opt {
             Some(xaero_id_hash) => {
-                // Try to get from storage
                 if let Ok(Some(xaero_id)) = get_xaero_id_by_xaero_id_hash(&self.aof_actor.env, xaero_id_hash) {
                     return Ok(*xaero_id);
                 }
@@ -469,27 +457,19 @@ impl<const TSHIRT: usize, const RING_CAPACITY: usize> P2pActor<TSHIRT, RING_CAPA
                 }
                 if let Some(peer_conn) = self.active_peers.get_mut(n_id) {
                     let r_x_id = peer_conn.request_xaero_id().await?;
-
-                    // Store for future use
                     put_xaero_id(&self.aof_actor.env, r_x_id)?;
-
                     return Ok(r_x_id);
                 }
-
                 Err(anyhow::anyhow!("XaeroID not in storage and no active connection"))
             }
             None => {
-                // No hash mapping, try to request from peer directly
                 if let Some(peer_conn) = self.active_peers.get_mut(n_id) {
                     let r_x_id = peer_conn.request_xaero_id().await?;
-
-                    // Store the mapping for next time
                     let hash = blake_hash_slice(bytemuck::bytes_of(&r_x_id));
                     self.node_id_to_xaero_id_mapping.insert(*n_id, hash);
                     put_xaero_id(&self.aof_actor.env, r_x_id)?;
                     return Ok(r_x_id);
                 }
-
                 Err(anyhow::anyhow!("No XaeroID hash mapping and no active connection"))
             }
         }

@@ -24,8 +24,6 @@ pub struct XaeroMmr {
     pub leaf_hashes: Vec<[u8; 32]>,
 }
 
-
-
 pub trait XaeroMmrOps {
     /// Append one new leaf hash.
     /// ```markdown

@@ -7,27 +7,26 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use super::format::{EventKey, MmrMeta};
-use crate::read_api::PointQuery;
 use anyhow::anyhow;
 use iroh::NodeId;
 use liblmdb::{
-    mdb_cursor_close, mdb_cursor_get, mdb_cursor_open, mdb_dbi_close, mdb_dbi_open, mdb_env_create,
-    mdb_env_open, mdb_env_set_mapsize, mdb_env_set_maxdbs, mdb_get, mdb_put, mdb_strerror, mdb_txn_abort,
-    mdb_txn_begin, mdb_txn_commit, MDB_cursor_op_MDB_NEXT, MDB_dbi, MDB_env, MDB_txn, MDB_val,
-    MDB_CREATE, MDB_NODUPDATA, MDB_NOSUBDIR, MDB_NOTFOUND, MDB_RDONLY, MDB_RESERVE, MDB_SUCCESS,
+    MDB_CREATE, MDB_NODUPDATA, MDB_NOSUBDIR, MDB_NOTFOUND, MDB_RDONLY, MDB_RESERVE, MDB_SUCCESS, MDB_cursor_op_MDB_NEXT, MDB_dbi, MDB_env, MDB_txn, MDB_val, mdb_cursor_close,
+    mdb_cursor_get, mdb_cursor_open, mdb_dbi_close, mdb_dbi_open, mdb_env_create, mdb_env_open, mdb_env_set_mapsize, mdb_env_set_maxdbs, mdb_get, mdb_put, mdb_strerror,
+    mdb_txn_abort, mdb_txn_begin, mdb_txn_commit,
 };
 use rkyv::{rancor::Failure, util::AlignedVec};
 use rusted_ring::{EventPoolFactory, EventSize, EventUtils};
-use xaeroflux_core::hash::blake_hash;
 use xaeroflux_core::{
     date_time::emit_secs,
-    event::{get_base_event_type, is_create_event, is_pinned_event, is_update_event, EventType, XaeroEvent},
-    hash::{blake_hash_slice, sha_256, sha_256_slice},
+    event::{EventType, XaeroEvent, get_base_event_type, is_create_event, is_pinned_event, is_update_event},
+    hash::{blake_hash, blake_hash_slice, sha_256, sha_256_slice},
     pool::XaeroInternalEvent,
     vector_clock::XaeroVectorClock,
 };
-use xaeroid::{cache::xaero_id_hash, XaeroID};
+use xaeroid::{XaeroID, cache::xaero_id_hash};
+
+use super::format::{EventKey, MmrMeta};
+use crate::read_api::PointQuery;
 
 // T-shirt sizes as constants
 pub const XS_SIZE: usize = 128;
@@ -231,13 +230,7 @@ impl Drop for LmdbEnv {
 }
 
 /// Generates event key
-pub fn generate_event_key(
-    event_data: &[u8],
-    event_type: u32,
-    timestamp: u64,
-    xaero_id_hash: [u8; 32],
-    vector_clock_hash: [u8; 32]
-) -> EventKey {
+pub fn generate_event_key(event_data: &[u8], event_type: u32, timestamp: u64, xaero_id_hash: [u8; 32], vector_clock_hash: [u8; 32]) -> EventKey {
     EventKey {
         xaero_id_hash,
         vector_clock_hash,
@@ -272,10 +265,7 @@ fn decode_size_byte(byte: u8) -> Option<usize> {
 }
 
 /// Push event with size-specific database selection
-pub fn push_xaero_internal_event<const TSHIRT_SIZE: usize>(
-    arc_env: &Arc<Mutex<LmdbEnv>>,
-    xaero_event: &XaeroInternalEvent<TSHIRT_SIZE>
-) -> Result<(), Box<dyn std::error::Error>> {
+pub fn push_xaero_internal_event<const TSHIRT_SIZE: usize>(arc_env: &Arc<Mutex<LmdbEnv>>, xaero_event: &XaeroInternalEvent<TSHIRT_SIZE>) -> Result<(), Box<dyn std::error::Error>> {
     unsafe {
         let event_type = get_base_event_type(xaero_event.evt.event_type);
         let env = arc_env.lock().expect("failed to lock env");
@@ -336,13 +326,7 @@ pub fn push_xaero_internal_event<const TSHIRT_SIZE: usize>(
             mv_data: std::ptr::null_mut(),
         };
 
-        let hash_sc = mdb_put(
-            txn,
-            env.dbis[DBI::HashIndex as usize],
-            &mut hash_key_val,
-            &mut hash_data_val,
-            MDB_RESERVE
-        );
+        let hash_sc = mdb_put(txn, env.dbis[DBI::HashIndex as usize], &mut hash_key_val, &mut hash_data_val, MDB_RESERVE);
         if hash_sc != 0 {
             mdb_txn_abort(txn);
             return Err(from_lmdb_err(hash_sc));
@@ -351,91 +335,72 @@ pub fn push_xaero_internal_event<const TSHIRT_SIZE: usize>(
         std::ptr::copy_nonoverlapping(hash_value.as_ptr(), hash_data_val.mv_data.cast(), hash_value.len());
 
         // Handle CurrentState and Relations updates
-        if is_create_event(event_type) || is_update_event(event_type) {
-            if event_data.len() >= 64 {
-                let mut entity_id = [0u8; 32];
-                entity_id.copy_from_slice(&event_data[..32]);
-                let mut parent_id = [0u8; 32];
-                parent_id.copy_from_slice(&event_data[32..64]);
+        if (is_create_event(event_type) || is_update_event(event_type)) && event_data.len() >= 64 {
+            let mut entity_id = [0u8; 32];
+            entity_id.copy_from_slice(&event_data[..32]);
+            let mut parent_id = [0u8; 32];
+            parent_id.copy_from_slice(&event_data[32..64]);
 
-                // Store in CurrentState with size indicator
-                let mut entity_id_key = MDB_val {
-                    mv_size: entity_id.len(),
-                    mv_data: entity_id.as_ptr() as *mut libc::c_void,
+            // Store in CurrentState with size indicator
+            let mut entity_id_key = MDB_val {
+                mv_size: entity_id.len(),
+                mv_data: entity_id.as_ptr() as *mut libc::c_void,
+            };
+
+            let mut state_value = Vec::with_capacity(event_bytes.len() + 1);
+            state_value.extend_from_slice(event_bytes);
+            state_value.push(encode_size_byte(TSHIRT_SIZE));
+
+            let mut entity_data_val = MDB_val {
+                mv_size: state_value.len(),
+                mv_data: state_value.as_ptr() as *mut libc::c_void,
+            };
+
+            let sc = mdb_put(txn, env.dbis[DBI::CurrentStateIndex as usize], &mut entity_id_key, &mut entity_data_val, 0);
+            if sc != 0 {
+                mdb_txn_abort(txn);
+                return Err(from_lmdb_err(sc));
+            }
+
+            // Handle relations
+            if parent_id != [0u8; 32] {
+                let mut parent_key = MDB_val {
+                    mv_size: parent_id.len(),
+                    mv_data: parent_id.as_ptr() as *mut libc::c_void,
                 };
 
-                let mut state_value = Vec::with_capacity(event_bytes.len() + 1);
-                state_value.extend_from_slice(event_bytes);
-                state_value.push(encode_size_byte(TSHIRT_SIZE));
-
-                let mut entity_data_val = MDB_val {
-                    mv_size: state_value.len(),
-                    mv_data: state_value.as_ptr() as *mut libc::c_void,
+                let mut existing_val = MDB_val {
+                    mv_size: 0,
+                    mv_data: std::ptr::null_mut(),
                 };
 
-                let sc = mdb_put(
-                    txn,
-                    env.dbis[DBI::CurrentStateIndex as usize],
-                    &mut entity_id_key,
-                    &mut entity_data_val,
-                    0
-                );
-                if sc != 0 {
+                let mut entities_buffer = Vec::new();
+                let get_sc = mdb_get(txn, env.dbis[DBI::RelationsIndex as usize], &mut parent_key, &mut existing_val);
+
+                if get_sc == 0 {
+                    let existing = slice::from_raw_parts(existing_val.mv_data as *const u8, existing_val.mv_size);
+                    let already_present = existing.chunks_exact(32).any(|chunk| chunk == entity_id);
+                    if !already_present {
+                        entities_buffer.extend_from_slice(existing);
+                        entities_buffer.extend_from_slice(&entity_id);
+                    }
+                } else if get_sc == MDB_NOTFOUND {
+                    entities_buffer.extend_from_slice(&entity_id);
+                } else {
                     mdb_txn_abort(txn);
-                    return Err(from_lmdb_err(sc));
+                    return Err(from_lmdb_err(get_sc));
                 }
 
-                // Handle relations
-                if parent_id != [0u8; 32] {
-                    let mut parent_key = MDB_val {
-                        mv_size: parent_id.len(),
-                        mv_data: parent_id.as_ptr() as *mut libc::c_void,
+                if !entities_buffer.is_empty() {
+                    let mut new_val = MDB_val {
+                        mv_size: entities_buffer.len(),
+                        mv_data: entities_buffer.as_ptr() as *mut libc::c_void,
                     };
 
-                    let mut existing_val = MDB_val {
-                        mv_size: 0,
-                        mv_data: std::ptr::null_mut(),
-                    };
-
-                    let mut entities_buffer = Vec::new();
-                    let get_sc = mdb_get(
-                        txn,
-                        env.dbis[DBI::RelationsIndex as usize],
-                        &mut parent_key,
-                        &mut existing_val
-                    );
-
-                    if get_sc == 0 {
-                        let existing = slice::from_raw_parts(existing_val.mv_data as *const u8, existing_val.mv_size);
-                        let already_present = existing.chunks_exact(32).any(|chunk| chunk == entity_id);
-                        if !already_present {
-                            entities_buffer.extend_from_slice(existing);
-                            entities_buffer.extend_from_slice(&entity_id);
-                        }
-                    } else if get_sc == MDB_NOTFOUND {
-                        entities_buffer.extend_from_slice(&entity_id);
-                    } else {
+                    let put_sc = mdb_put(txn, env.dbis[DBI::RelationsIndex as usize], &mut parent_key, &mut new_val, 0);
+                    if put_sc != 0 {
                         mdb_txn_abort(txn);
-                        return Err(from_lmdb_err(get_sc));
-                    }
-
-                    if !entities_buffer.is_empty() {
-                        let mut new_val = MDB_val {
-                            mv_size: entities_buffer.len(),
-                            mv_data: entities_buffer.as_ptr() as *mut libc::c_void,
-                        };
-
-                        let put_sc = mdb_put(
-                            txn,
-                            env.dbis[DBI::RelationsIndex as usize],
-                            &mut parent_key,
-                            &mut new_val,
-                            0
-                        );
-                        if put_sc != 0 {
-                            mdb_txn_abort(txn);
-                            return Err(from_lmdb_err(put_sc));
-                        }
+                        return Err(from_lmdb_err(put_sc));
                     }
                 }
             }
@@ -458,12 +423,7 @@ pub fn push_xaero_internal_event<const TSHIRT_SIZE: usize>(
 }
 
 /// Universal push function that estimates size and routes to correct DB
-pub fn push_internal_event_universal(
-    arc_env: &Arc<Mutex<LmdbEnv>>,
-    event_data: &[u8],
-    event_type: u32,
-    timestamp: u64
-) -> Result<(), Box<dyn std::error::Error>> {
+pub fn push_internal_event_universal(arc_env: &Arc<Mutex<LmdbEnv>>, event_data: &[u8], event_type: u32, timestamp: u64) -> Result<(), Box<dyn std::error::Error>> {
     let estimated_size = EventPoolFactory::estimate_size(event_data.len());
 
     match estimated_size {
@@ -549,12 +509,7 @@ pub fn get_event_by_hash<const TSHIRT_SIZE: usize>(
             mv_data: std::ptr::null_mut(),
         };
 
-        let getrc = liblmdb::mdb_get(
-            txn,
-            guard.dbis[DBI::HashIndex as usize],
-            &mut hash_key_val,
-            &mut hash_data_val
-        );
+        let getrc = liblmdb::mdb_get(txn, guard.dbis[DBI::HashIndex as usize], &mut hash_key_val, &mut hash_data_val);
         if getrc != 0 {
             mdb_txn_abort(txn);
             if getrc == liblmdb::MDB_NOTFOUND {
@@ -564,10 +519,7 @@ pub fn get_event_by_hash<const TSHIRT_SIZE: usize>(
             }
         }
 
-        let hash_value = std::slice::from_raw_parts(
-            hash_data_val.mv_data as *const u8,
-            hash_data_val.mv_size
-        );
+        let hash_value = std::slice::from_raw_parts(hash_data_val.mv_data as *const u8, hash_data_val.mv_size);
 
         // Extract EventKey (all but last byte)
         let event_key_bytes = &hash_value[..hash_value.len() - 1];
@@ -603,13 +555,8 @@ pub fn get_event_by_hash<const TSHIRT_SIZE: usize>(
             }
             Err(_) => {
                 // Handle alignment
-                let mut aligned: std::mem::MaybeUninit<XaeroInternalEvent<TSHIRT_SIZE>> =
-                    std::mem::MaybeUninit::uninit();
-                std::ptr::copy_nonoverlapping(
-                    data_slice.as_ptr(),
-                    aligned.as_mut_ptr() as *mut u8,
-                    data_slice.len()
-                );
+                let mut aligned: std::mem::MaybeUninit<XaeroInternalEvent<TSHIRT_SIZE>> = std::mem::MaybeUninit::uninit();
+                std::ptr::copy_nonoverlapping(data_slice.as_ptr(), aligned.as_mut_ptr() as *mut u8, data_slice.len());
                 mdb_txn_abort(txn);
                 Ok(Some(aligned.assume_init()))
             }
@@ -618,11 +565,7 @@ pub fn get_event_by_hash<const TSHIRT_SIZE: usize>(
 }
 
 /// Scan events from a specific size database
-pub unsafe fn scan_range_sized<const TSHIRT_SIZE: usize>(
-    env: &Arc<Mutex<LmdbEnv>>,
-    start_ts: u64,
-    end_ts: u64
-) -> anyhow::Result<Vec<XaeroInternalEvent<TSHIRT_SIZE>>> {
+pub unsafe fn scan_range_sized<const TSHIRT_SIZE: usize>(env: &Arc<Mutex<LmdbEnv>>, start_ts: u64, end_ts: u64) -> anyhow::Result<Vec<XaeroInternalEvent<TSHIRT_SIZE>>> {
     let mut results = Vec::new();
     let g = env.lock().expect("failed to lock env");
     let env_ptr = g.env;
@@ -651,12 +594,7 @@ pub unsafe fn scan_range_sized<const TSHIRT_SIZE: usize>(
             mv_data: std::ptr::null_mut(),
         };
 
-        let rc = mdb_cursor_get(
-            cursor,
-            &mut key_val,
-            &mut data_val,
-            liblmdb::MDB_cursor_op_MDB_FIRST
-        );
+        let rc = mdb_cursor_get(cursor, &mut key_val, &mut data_val, liblmdb::MDB_cursor_op_MDB_FIRST);
         if rc != 0 {
             mdb_cursor_close(cursor);
             mdb_txn_abort(rtxn);
@@ -671,23 +609,15 @@ pub unsafe fn scan_range_sized<const TSHIRT_SIZE: usize>(
                 let ts = u64::from_be_bytes(ts_bytes);
 
                 if ts >= start_ts && ts < end_ts {
-                    let data_slice = std::slice::from_raw_parts(
-                        data_val.mv_data as *const u8,
-                        data_val.mv_size
-                    );
+                    let data_slice = std::slice::from_raw_parts(data_val.mv_data as *const u8, data_val.mv_size);
 
                     // No size checking needed - we know it's the right size!
                     match bytemuck::try_from_bytes::<XaeroInternalEvent<TSHIRT_SIZE>>(data_slice) {
                         Ok(event) => results.push(*event),
                         Err(_) => {
                             // Handle alignment
-                            let mut aligned: std::mem::MaybeUninit<XaeroInternalEvent<TSHIRT_SIZE>> =
-                                std::mem::MaybeUninit::uninit();
-                            std::ptr::copy_nonoverlapping(
-                                data_slice.as_ptr(),
-                                aligned.as_mut_ptr() as *mut u8,
-                                data_slice.len()
-                            );
+                            let mut aligned: std::mem::MaybeUninit<XaeroInternalEvent<TSHIRT_SIZE>> = std::mem::MaybeUninit::uninit();
+                            std::ptr::copy_nonoverlapping(data_slice.as_ptr(), aligned.as_mut_ptr() as *mut u8, data_slice.len());
                             results.push(aligned.assume_init());
                         }
                     }
@@ -696,12 +626,7 @@ pub unsafe fn scan_range_sized<const TSHIRT_SIZE: usize>(
                 }
             }
 
-            let rc = mdb_cursor_get(
-                cursor,
-                &mut key_val,
-                &mut data_val,
-                MDB_cursor_op_MDB_NEXT
-            );
+            let rc = mdb_cursor_get(cursor, &mut key_val, &mut data_val, MDB_cursor_op_MDB_NEXT);
             if rc != 0 {
                 break;
             }
@@ -714,10 +639,7 @@ pub unsafe fn scan_range_sized<const TSHIRT_SIZE: usize>(
 }
 
 /// Get events by event type from sized database
-pub unsafe fn get_events_by_event_type<const TSHIRT_SIZE: usize>(
-    env: &Arc<Mutex<LmdbEnv>>,
-    event_type: u32
-) -> anyhow::Result<Vec<XaeroInternalEvent<TSHIRT_SIZE>>> {
+pub unsafe fn get_events_by_event_type<const TSHIRT_SIZE: usize>(env: &Arc<Mutex<LmdbEnv>>, event_type: u32) -> anyhow::Result<Vec<XaeroInternalEvent<TSHIRT_SIZE>>> {
     let mut results = Vec::new();
     let g = env.lock().expect("failed to lock env");
     let env_ptr = g.env;
@@ -761,21 +683,13 @@ pub unsafe fn get_events_by_event_type<const TSHIRT_SIZE: usize>(
                 let stored_event_type = raw_key[72];
 
                 if base_event_type == stored_event_type {
-                    let data_slice = std::slice::from_raw_parts(
-                        data_val.mv_data as *const u8,
-                        data_val.mv_size
-                    );
+                    let data_slice = std::slice::from_raw_parts(data_val.mv_data as *const u8, data_val.mv_size);
 
                     match bytemuck::try_from_bytes::<XaeroInternalEvent<TSHIRT_SIZE>>(data_slice) {
                         Ok(event) => results.push(*event),
                         Err(_) => {
-                            let mut aligned: std::mem::MaybeUninit<XaeroInternalEvent<TSHIRT_SIZE>> =
-                                std::mem::MaybeUninit::uninit();
-                            std::ptr::copy_nonoverlapping(
-                                data_slice.as_ptr(),
-                                aligned.as_mut_ptr() as *mut u8,
-                                data_slice.len()
-                            );
+                            let mut aligned: std::mem::MaybeUninit<XaeroInternalEvent<TSHIRT_SIZE>> = std::mem::MaybeUninit::uninit();
+                            std::ptr::copy_nonoverlapping(data_slice.as_ptr(), aligned.as_mut_ptr() as *mut u8, data_slice.len());
                             results.push(aligned.assume_init());
                         }
                     }
@@ -791,8 +705,7 @@ pub unsafe fn get_events_by_event_type<const TSHIRT_SIZE: usize>(
         mdb_cursor_close(cursor);
         mdb_txn_abort(rtxn);
 
-        tracing::info!("get_events_by_event_type: Found {} events of type {} in size-{} DB",
-            results.len(), event_type, TSHIRT_SIZE);
+        tracing::info!("get_events_by_event_type: Found {} events of type {} in size-{} DB", results.len(), event_type, TSHIRT_SIZE);
         Ok(results)
     }
 }
@@ -821,12 +734,7 @@ pub fn get_current_state_by_entity_id<const SIZE: usize>(
             mv_data: std::ptr::null_mut(),
         };
 
-        let getrc = liblmdb::mdb_get(
-            txn,
-            guard.dbis[DBI::CurrentStateIndex as usize],
-            &mut key_val,
-            &mut data_val
-        );
+        let getrc = liblmdb::mdb_get(txn, guard.dbis[DBI::CurrentStateIndex as usize], &mut key_val, &mut data_val);
         if getrc != 0 {
             mdb_txn_abort(txn);
             if getrc == liblmdb::MDB_NOTFOUND {
@@ -836,10 +744,7 @@ pub fn get_current_state_by_entity_id<const SIZE: usize>(
             }
         }
 
-        let data = std::slice::from_raw_parts(
-            data_val.mv_data as *const u8,
-            data_val.mv_size
-        );
+        let data = std::slice::from_raw_parts(data_val.mv_data as *const u8, data_val.mv_size);
 
         // Skip size byte at the end
         let event_data = &data[..data.len() - 1];
@@ -850,13 +755,8 @@ pub fn get_current_state_by_entity_id<const SIZE: usize>(
                 Ok(Some(*event))
             }
             Err(_) => {
-                let mut aligned: std::mem::MaybeUninit<XaeroInternalEvent<SIZE>> =
-                    std::mem::MaybeUninit::uninit();
-                std::ptr::copy_nonoverlapping(
-                    event_data.as_ptr(),
-                    aligned.as_mut_ptr() as *mut u8,
-                    event_data.len()
-                );
+                let mut aligned: std::mem::MaybeUninit<XaeroInternalEvent<SIZE>> = std::mem::MaybeUninit::uninit();
+                std::ptr::copy_nonoverlapping(event_data.as_ptr(), aligned.as_mut_ptr() as *mut u8, event_data.len());
                 mdb_txn_abort(txn);
                 Ok(Some(aligned.assume_init()))
             }
@@ -905,8 +805,7 @@ pub fn put_xaero_id(arc_env: &Arc<Mutex<LmdbEnv>>, xaero_id: XaeroID) -> Result<
     Ok(xaero_id_hash_calculated)
 }
 
-pub fn get_xaero_id_by_xaero_id_hash(arc_env: &Arc<Mutex<LmdbEnv>>, xaero_id_hash: [u8; 32]) ->
-                                                                                             Result<Option<&XaeroID>, anyhow::Error> {
+pub fn get_xaero_id_by_xaero_id_hash(arc_env: &Arc<Mutex<LmdbEnv>>, xaero_id_hash: [u8; 32]) -> Result<Option<&XaeroID>, anyhow::Error> {
     let guard = arc_env.lock().expect("failed to lock env");
     let env = guard.env;
 
@@ -1017,11 +916,7 @@ pub fn get_node_id_by_xaero_id(arc_env: &Arc<Mutex<LmdbEnv>>, xaero_id_hash: [u8
     }
 }
 
-
-pub fn create_or_update_vector_clock(arc_env: &Arc<Mutex<LmdbEnv>>, vector_clock:
-&XaeroVectorClock) ->
-                                                                                      Result<[u8;
-    32], Box<dyn std::error::Error>> {
+pub fn create_or_update_vector_clock(arc_env: &Arc<Mutex<LmdbEnv>>, vector_clock: &XaeroVectorClock) -> Result<[u8; 32], Box<dyn std::error::Error>> {
     let clock_bytes = bytemuck::bytes_of(vector_clock);
     let vector_clock_key = blake_hash("current_vector_clock");
     let guard = arc_env.lock().expect("failed to lock env");
@@ -1054,8 +949,7 @@ pub fn create_or_update_vector_clock(arc_env: &Arc<Mutex<LmdbEnv>>, vector_clock
     }
 }
 
-pub fn get_current_vector_clock(arc_env: &Arc<Mutex<LmdbEnv>>) -> Result<Option<XaeroVectorClock>,
-    Box<dyn std::error::Error>> {
+pub fn get_current_vector_clock(arc_env: &Arc<Mutex<LmdbEnv>>) -> Result<Option<XaeroVectorClock>, anyhow::Error> {
     let guard = arc_env.lock().expect("failed to lock env");
     let env = guard.env;
     let vector_clock_key = blake_hash("current_vector_clock");
@@ -1063,7 +957,7 @@ pub fn get_current_vector_clock(arc_env: &Arc<Mutex<LmdbEnv>>) -> Result<Option<
         let mut txn: *mut MDB_txn = std::ptr::null_mut();
         let rc = mdb_txn_begin(env, std::ptr::null_mut(), MDB_RDONLY, &mut txn);
         if rc != 0 {
-            return Err(from_lmdb_err(rc));
+            return Err(from_lmdb_err_anyhow(rc));
         }
 
         let mut key_val = MDB_val {
@@ -1081,7 +975,7 @@ pub fn get_current_vector_clock(arc_env: &Arc<Mutex<LmdbEnv>>) -> Result<Option<
             if getrc == liblmdb::MDB_NOTFOUND {
                 return Ok(None);
             } else {
-                return Err(from_lmdb_err(getrc));
+                return Err(from_lmdb_err_anyhow(getrc));
             }
         }
 
@@ -1093,7 +987,6 @@ pub fn get_current_vector_clock(arc_env: &Arc<Mutex<LmdbEnv>>) -> Result<Option<
         Ok(Some(*clock))
     }
 }
-
 
 pub fn get_children_entitities_by_entity_id(arc_env: &Arc<Mutex<LmdbEnv>>, entity_id: [u8; 32]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let guard = arc_env.lock().expect("failed to lock env");
@@ -1210,8 +1103,7 @@ pub fn get_mmr_meta(arc_env: &Arc<Mutex<LmdbEnv>>) -> Result<Option<MmrMeta>, Bo
 
         if slice.len() != std::mem::size_of::<MmrMeta>() {
             mdb_txn_abort(txn);
-            tracing::warn!("MMR metadata size mismatch: got {} bytes, expected {} bytes",
-                slice.len(), std::mem::size_of::<MmrMeta>());
+            tracing::warn!("MMR metadata size mismatch: got {} bytes, expected {} bytes", slice.len(), std::mem::size_of::<MmrMeta>());
             return Ok(None);
         }
 
@@ -1315,10 +1207,12 @@ pub fn get_event_key_by_hash(arc_env: &Arc<Mutex<LmdbEnv>>, event_hash: [u8; 32]
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::{Arc, Mutex};
+
     use tempfile::tempdir;
     use xaeroflux_core::{date_time::emit_secs, event::make_pinned, hash::blake_hash_slice, initialize};
+
+    use super::*;
 
     #[test]
     fn test_size_segregated_storage() {
@@ -1365,15 +1259,11 @@ mod tests {
         push_xaero_internal_event(&arc_env, &l_event).expect("Failed to push L event");
 
         // Verify events are in different databases by scanning
-        let xs_events = unsafe {
-            scan_range_sized::<XS_SIZE>(&arc_env, 0, u64::MAX).unwrap()
-        };
+        let xs_events = unsafe { scan_range_sized::<XS_SIZE>(&arc_env, 0, u64::MAX).unwrap() };
         assert_eq!(xs_events.len(), 1);
         assert_eq!(xs_events[0].evt.event_type, 100);
 
-        let l_events = unsafe {
-            scan_range_sized::<L_SIZE>(&arc_env, 0, u64::MAX).unwrap()
-        };
+        let l_events = unsafe { scan_range_sized::<L_SIZE>(&arc_env, 0, u64::MAX).unwrap() };
         assert_eq!(l_events.len(), 1);
         assert_eq!(l_events[0].evt.event_type, 200);
 

@@ -15,23 +15,23 @@ use std::{
 };
 
 use bytemuck::{Pod, Zeroable};
-use parking_lot::{lock_api::RwLockReadGuard, RawRwLock, RwLock};
+use parking_lot::{RawRwLock, RwLock, lock_api::RwLockReadGuard};
 use rusted_ring::{
-    EventPoolFactory, EventUtils, PooledEvent, Reader, RingBuffer, Writer, L_CAPACITY, L_TSHIRT_SIZE, M_CAPACITY, M_TSHIRT_SIZE, S_CAPACITY, S_TSHIRT_SIZE, XL_CAPACITY,
+    EventPoolFactory, EventUtils, L_CAPACITY, L_TSHIRT_SIZE, M_CAPACITY, M_TSHIRT_SIZE, PooledEvent, Reader, RingBuffer, S_CAPACITY, S_TSHIRT_SIZE, Writer, XL_CAPACITY,
     XL_TSHIRT_SIZE, XS_CAPACITY, XS_TSHIRT_SIZE,
 };
-use xaeroflux_core::{date_time::emit_secs, hash::blake_hash_slice, pipe::BusKind, pool::XaeroInternalEvent, system_paths, CONF};
+use xaeroflux_core::{CONF, date_time::emit_secs, hash::blake_hash_slice, pipe::BusKind, pool::XaeroInternalEvent, system_paths};
 
+// Import global ring buffers from subject.rs
+use crate::{L_RING, M_RING, S_RING, STANDARD_RING, XL_RING, XS_RING};
 use crate::{
     aof::storage::{
         format::{EventKey, MmrMeta},
-        lmdb::{generate_event_key, get_event_by_hash, get_mmr_meta, push_internal_event_universal, put_mmr_meta, LmdbEnv},
+        lmdb::{LmdbEnv, generate_event_key, get_event_by_hash, get_mmr_meta, push_internal_event_universal, put_mmr_meta},
     },
     indexing::mmr::{Peak, XaeroMmr, XaeroMmrOps},
     read_api::PointQuery,
 };
-// Import global ring buffers from subject.rs
-use crate::{L_RING, M_RING, STANDARD_RING, S_RING, XL_RING, XS_RING};
 
 // ================================================================================================
 // TYPES & STRUCTS
@@ -52,6 +52,12 @@ pub struct ReaderMultiplexer {
     pub m_reader: Reader<M_TSHIRT_SIZE, M_CAPACITY>,
     pub l_reader: Reader<L_TSHIRT_SIZE, L_CAPACITY>,
     pub xl_reader: Reader<XL_TSHIRT_SIZE, XL_CAPACITY>,
+}
+
+impl Default for ReaderMultiplexer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ReaderMultiplexer {
@@ -137,7 +143,7 @@ pub struct AofActor {
 
 impl AofState {
     /// Create new AOF state with LMDB environment and recovered MMR
-    pub fn new(env: Arc<Mutex<LmdbEnv>>) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(env: Arc<Mutex<LmdbEnv>>) -> Result<Self, anyhow::Error> {
         // Get base path from config
         let mmr = Self::recover_mmr_from_events(&env)?;
         tracing::info!("Recovered MMR with {} leaves", mmr.leaf_count());
@@ -150,7 +156,7 @@ impl AofState {
     }
 
     /// Recover MMR state by scanning all existing events in chronological order
-    fn recover_mmr_from_events(env: &Arc<Mutex<LmdbEnv>>) -> Result<XaeroMmr, Box<dyn std::error::Error>> {
+    fn recover_mmr_from_events(env: &Arc<Mutex<LmdbEnv>>) -> Result<XaeroMmr, anyhow::Error> {
         let mut mmr = XaeroMmr::new();
 
         if let Ok(Some(mmr_meta)) = get_mmr_meta(env) {
@@ -161,18 +167,17 @@ impl AofState {
         let mut all_events = Vec::new();
         // Helper macro to reduce repetition
         macro_rules! collect_events {
-        ($size:expr) => {
-            use crate::aof::storage::lmdb::*;
-            if let Ok(events) = unsafe { scan_range_sized::<$size>(env, 0, u64::MAX) } {
-                for event in events {
-                    let event_data = &event.evt.data[..event.evt.len as usize];
-                    let event_hash = blake_hash_slice(event_data);
-                    all_events.push((event.latest_ts, event_hash));
+            ($size:expr) => {
+                use crate::aof::storage::lmdb::*;
+                if let Ok(events) = unsafe { scan_range_sized::<$size>(env, 0, u64::MAX) } {
+                    for event in events {
+                        let event_data = &event.evt.data[..event.evt.len as usize];
+                        let event_hash = blake_hash_slice(event_data);
+                        all_events.push((event.latest_ts, event_hash));
+                    }
                 }
-            }
-        };
-    }
-
+            };
+        }
 
         collect_events!(XS_TSHIRT_SIZE);
         collect_events!(S_TSHIRT_SIZE);
@@ -196,8 +201,8 @@ impl AofState {
         event_data: &[u8],
         event_type: u32,
         timestamp: u64,
-        xaero_id_hash: [u8; 32],
-        vector_clock_hash: [u8; 32],
+        _xaero_id_hash: [u8; 32],
+        _vector_clock_hash: [u8; 32],
     ) -> Result<(), Box<dyn std::error::Error>> {
         // 1. Store event in LMDB (this also updates hash index automatically)
         match push_internal_event_universal(&self.env, event_data, event_type, timestamp) {
@@ -347,7 +352,7 @@ impl AofState {
 
 impl AofActor {
     /// Create and spawn AOF actor that reads from global ring buffers
-    pub fn spin(lmdb_env: Arc<Mutex<LmdbEnv>>) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn spin(lmdb_env: Arc<Mutex<LmdbEnv>>) -> Result<Self, anyhow::Error> {
         let mut state = AofState::new(lmdb_env)?;
         let read_only_clone = state.env.clone();
         let jh = thread::spawn(move || {
