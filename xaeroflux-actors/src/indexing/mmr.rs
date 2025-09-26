@@ -24,20 +24,24 @@ pub struct XaeroMmr {
     pub leaf_hashes: Vec<[u8; 32]>,
 }
 
+
+
 pub trait XaeroMmrOps {
     /// Append one new leaf hash.
-    ///
-    /// say you have a list of leaves [A, B, C, D, E]
-    /// START:
-    /// step 1: append(a) -> peaks [h(A)]
-    /// step 2: append(b) -> pop peak[h(A)] -> peak[h(h(A) || h(B))] -> peaks [h(h(A) || h(B))]
-    /// step 3: append(c) -> peaks [h(hA || hB), h(C)]
-    /// step 4: append(d) -> pop peak[h(C)] -> peak[h(h(c) || h(d))] -> peaks [h(hA || hB), h(h(c)
-    /// || h(d))] step 5: append(e) -> peaks [h(hA || hB), h(h(c) || h(d)), h(E)]
-    /// step 6: bag peaks -> `XaeroMerkleTree::neo(peaks)` -> tree.root() -> root
-    /// RETURN changed_peaks. Changed_peaks is a list of peaks that were created or merged in the
+    /// ```markdown
+    /// Say you have a list of leaves [A, B, C, D, E]
+    /// - START:
+    /// - step 1: append(a) -> peaks [h(A)]
+    /// - step 2: append(b) -> pop peak[h(A)] -> peak[h(h(A) || h(B))] -> peaks [h(h(A) || h(B))]
+    /// - step 3: append(c) -> peaks [h(hA || hB), h(C)]
+    /// - step 4: append(d) -> pop peak[h(C)] -> peak[h(h(c) || h(d))] -> peaks [h(hA || hB), h(h(c)
+    /// || h(d))]
+    /// - step 5: append(e) -> peaks [h(hA || hB), h(h(c) || h(d)), h(E)]
+    /// - step 6: bag peaks -> `XaeroMerkleTree::neo(peaks)` -> tree.root() -> root
+    /// - RETURN changed_peaks. Changed_peaks is a list of peaks that were created or merged in the
     /// process.
-    /// END
+    /// - END
+    /// ```
     /// Returns the list of Peaks that were created or merged in the process
     /// (so you can persist or broadcast them).
     fn append(&mut self, leaf_hash: [u8; 32]) -> Vec<Peak>;

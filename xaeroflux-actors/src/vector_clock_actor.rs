@@ -7,17 +7,19 @@ use std::{
 };
 
 use bytemuck::{Pod, Zeroable, from_bytes};
-use rusted_ring::{EventUtils, RingBuffer};
+use rusted_ring::{EventUtils, RingBuffer, Writer};
 use xaeroflux_core::{
     date_time::emit_secs,
     vector_clock::{XaeroClock, XaeroVectorClock, XaeroVectorClockEntry},
 };
 
-use crate::aof::storage::lmdb::{LmdbEnv, put_current_vc, put_vector_clock_meta};
+use crate::aof::storage::lmdb::{LmdbEnv, create_or_update_vector_clock};
 
 // Increase ring buffer size to support larger vector clocks (504 bytes)
-static VC_DELTA_INPUT_RING: OnceLock<RingBuffer<1024, 1000>> = OnceLock::new();
-static VC_DELTA_OUTPUT_RING: OnceLock<RingBuffer<1024, 1000>> = OnceLock::new();
+pub static VC_DELTA_INPUT_RING: OnceLock<RingBuffer<1024, 1>> = OnceLock::new();
+pub static VC_DELTA_OUTPUT_RING: OnceLock<RingBuffer<1024, 1>> = OnceLock::new();
+
+pub static VC_IN_WRITER: OnceLock<Writer<1024, 1>> = OnceLock::new();
 
 pub struct VectorClockState {
     clock: XaeroClock,
@@ -132,12 +134,14 @@ impl VectorClockState {
 
 pub struct VectorClockActor {
     pub state: VectorClockState,
+    pub writer: &'static Writer<1024, 1>,
 }
 
 impl VectorClockActor {
     pub fn new(lmdb_env: Arc<Mutex<LmdbEnv>>) -> Self {
         VectorClockActor {
             state: VectorClockState::new(lmdb_env),
+            writer: VC_IN_WRITER.get_or_init(|| rusted_ring::Writer::new(VC_DELTA_INPUT_RING.get().expect("VC input snapshotter not initialized"))),
         }
     }
 
@@ -170,16 +174,7 @@ impl VectorClockActor {
                         peers: self.state.peers_to_array(),
                         _pad: [0; 8],
                     };
-                    let vc_hash = put_vector_clock_meta(&self.state.env, &updated_clock).expect("failed to get vc hash after a put, something is seriously wrong");
-                    match put_current_vc(&self.state.env, vc_hash) {
-                        Ok(_) => {
-                            tracing::debug!("vc#clock updated: {vc_hash:?}");
-                        }
-                        Err(e) => {
-                            panic!("failed to put current vc, error: {}", e);
-                        }
-                    }
-                    // Serialize and send
+                    let vc_hash = create_or_update_vector_clock(&self.state.env, &updated_clock).expect("failed to get vc hash after a put, something is seriously wrong");
                     let event_data = bytemuck::bytes_of(&updated_clock);
                     let e = EventUtils::create_pooled_event::<1024>(event_data, 1).expect("failed to create auto-sized event!");
                     let res = writer.add(e);

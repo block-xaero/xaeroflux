@@ -15,23 +15,24 @@ use std::{
 };
 
 use bytemuck::{Pod, Zeroable};
-use parking_lot::{RawRwLock, RwLock, lock_api::RwLockReadGuard};
+use parking_lot::{lock_api::RwLockReadGuard, RawRwLock, RwLock};
 use rusted_ring::{
-    EventPoolFactory, EventUtils, L_CAPACITY, L_TSHIRT_SIZE, M_CAPACITY, M_TSHIRT_SIZE, PooledEvent, Reader, RingBuffer, S_CAPACITY, S_TSHIRT_SIZE, Writer, XL_CAPACITY,
+    EventPoolFactory, EventUtils, PooledEvent, Reader, RingBuffer, Writer, L_CAPACITY, L_TSHIRT_SIZE, M_CAPACITY, M_TSHIRT_SIZE, S_CAPACITY, S_TSHIRT_SIZE, XL_CAPACITY,
     XL_TSHIRT_SIZE, XS_CAPACITY, XS_TSHIRT_SIZE,
 };
-use xaeroflux_core::{CONF, date_time::emit_secs, hash::blake_hash_slice, pipe::BusKind, pool::XaeroInternalEvent, system_paths};
+use xaeroflux_core::{date_time::emit_secs, hash::blake_hash_slice, pipe::BusKind, pool::XaeroInternalEvent, system_paths, CONF};
 
-// Import global ring buffers from subject.rs
-use crate::{L_RING, M_RING, S_RING, XL_RING, XS_RING};
 use crate::{
     aof::storage::{
         format::{EventKey, MmrMeta},
-        lmdb::{LmdbEnv, generate_event_key, get_event_by_hash, get_mmr_meta, push_internal_event_universal, put_mmr_meta, scan_enhanced_range},
+        lmdb::{generate_event_key, get_event_by_hash, get_mmr_meta, push_internal_event_universal, put_mmr_meta, LmdbEnv},
     },
     indexing::mmr::{Peak, XaeroMmr, XaeroMmrOps},
     read_api::PointQuery,
 };
+// Import global ring buffers from subject.rs
+use crate::{L_RING, M_RING, STANDARD_RING, S_RING, XL_RING, XS_RING};
+
 // ================================================================================================
 // TYPES & STRUCTS
 // ================================================================================================
@@ -47,6 +48,7 @@ pub struct AofState {
 pub struct ReaderMultiplexer {
     pub xs_reader: Reader<XS_TSHIRT_SIZE, XS_CAPACITY>,
     pub s_reader: Reader<S_TSHIRT_SIZE, S_CAPACITY>,
+    pub standard_reader: Reader<512, 2048>,
     pub m_reader: Reader<M_TSHIRT_SIZE, M_CAPACITY>,
     pub l_reader: Reader<L_TSHIRT_SIZE, L_CAPACITY>,
     pub xl_reader: Reader<XL_TSHIRT_SIZE, XL_CAPACITY>,
@@ -59,10 +61,12 @@ impl ReaderMultiplexer {
         let m_ring = M_RING.get_or_init(RingBuffer::new);
         let l_ring = L_RING.get_or_init(RingBuffer::new);
         let xl_ring = XL_RING.get_or_init(RingBuffer::new);
+        let standard_ring = STANDARD_RING.get_or_init(RingBuffer::new);
 
         Self {
             xs_reader: Reader::new(xs_ring),
             s_reader: Reader::new(s_ring),
+            standard_reader: Reader::new(standard_ring),
             m_reader: Reader::new(m_ring),
             l_reader: Reader::new(l_ring),
             xl_reader: Reader::new(xl_ring),
@@ -71,7 +75,13 @@ impl ReaderMultiplexer {
 
     /// Process events using simple sequential selection (XS -> S -> M -> L -> XL)
     pub fn process_events(&mut self, state: &mut AofState) -> bool {
-        // Check XS first (highest priority)
+        // high priority
+        if let Some(event) = self.standard_reader.next() {
+            if AofActor::process_ring_event_sized::<512>(state, &event).is_ok() {
+                tracing::debug!("Processed XS event");
+            }
+            return true;
+        }
         if let Some(event) = self.xs_reader.next() {
             if AofActor::process_ring_event_sized::<XS_TSHIRT_SIZE>(state, &event).is_ok() {
                 tracing::debug!("Processed XS event");
@@ -143,60 +153,35 @@ impl AofState {
     fn recover_mmr_from_events(env: &Arc<Mutex<LmdbEnv>>) -> Result<XaeroMmr, Box<dyn std::error::Error>> {
         let mut mmr = XaeroMmr::new();
 
-        // Check if we have stored MMR metadata first
         if let Ok(Some(mmr_meta)) = get_mmr_meta(env) {
-            let mpc = mmr_meta.leaf_count;
-            tracing::info!("Found existing MMR metadata: {mpc:?} leaves");
+            let mmr_leaf_count = mmr_meta.leaf_count;
+            tracing::info!("Found existing MMR metadata: {mmr_leaf_count:?} leaves");
         }
 
-        // Scan all events in chronological order and rebuild MMR
         let mut all_events = Vec::new();
-
-        // Collect events from all possible sizes
-        if let Ok(xs_events) = unsafe { scan_enhanced_range::<XS_TSHIRT_SIZE>(env, 0, u64::MAX) } {
-            for event in xs_events {
-                let event_data = &event.evt.data[..event.evt.len as usize];
-                let event_hash = blake_hash_slice(event_data);
-                all_events.push((event.latest_ts, event_hash));
+        // Helper macro to reduce repetition
+        macro_rules! collect_events {
+        ($size:expr) => {
+            use crate::aof::storage::lmdb::*;
+            if let Ok(events) = unsafe { scan_range_sized::<$size>(env, 0, u64::MAX) } {
+                for event in events {
+                    let event_data = &event.evt.data[..event.evt.len as usize];
+                    let event_hash = blake_hash_slice(event_data);
+                    all_events.push((event.latest_ts, event_hash));
+                }
             }
-        }
+        };
+    }
 
-        if let Ok(s_events) = unsafe { scan_enhanced_range::<S_TSHIRT_SIZE>(env, 0, u64::MAX) } {
-            for event in s_events {
-                let event_data = &event.evt.data[..event.evt.len as usize];
-                let event_hash = blake_hash_slice(event_data);
-                all_events.push((event.latest_ts, event_hash));
-            }
-        }
 
-        if let Ok(m_events) = unsafe { scan_enhanced_range::<M_TSHIRT_SIZE>(env, 0, u64::MAX) } {
-            for event in m_events {
-                let event_data = &event.evt.data[..event.evt.len as usize];
-                let event_hash = blake_hash_slice(event_data);
-                all_events.push((event.latest_ts, event_hash));
-            }
-        }
+        collect_events!(XS_TSHIRT_SIZE);
+        collect_events!(S_TSHIRT_SIZE);
+        collect_events!(M_TSHIRT_SIZE);
+        collect_events!(L_TSHIRT_SIZE);
+        collect_events!(XL_TSHIRT_SIZE);
 
-        if let Ok(l_events) = unsafe { scan_enhanced_range::<L_TSHIRT_SIZE>(env, 0, u64::MAX) } {
-            for event in l_events {
-                let event_data = &event.evt.data[..event.evt.len as usize];
-                let event_hash = blake_hash_slice(event_data);
-                all_events.push((event.latest_ts, event_hash));
-            }
-        }
-
-        if let Ok(xl_events) = unsafe { scan_enhanced_range::<XL_TSHIRT_SIZE>(env, 0, u64::MAX) } {
-            for event in xl_events {
-                let event_data = &event.evt.data[..event.evt.len as usize];
-                let event_hash = blake_hash_slice(event_data);
-                all_events.push((event.latest_ts, event_hash));
-            }
-        }
-
-        // Sort events by timestamp to rebuild MMR in correct order
         all_events.sort_by_key(|(ts, _)| *ts);
 
-        // Rebuild MMR by appending events in chronological order
         for (_, event_hash) in all_events {
             mmr.append(event_hash);
         }

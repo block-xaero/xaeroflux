@@ -92,6 +92,7 @@ impl ReadApi for XaeroFlux {
     {
         let read_handle = self.read_handle.clone();
         let res = unsafe { get_events_by_event_type::<SIZE>(&read_handle.expect("read_api not ready!"), query.event_type) }?;
+        tracing::info!("found events raw: {res:#?}");
         let filtered_result = res.into_iter().filter(filter).collect();
         Ok(filtered_result)
     }

@@ -28,12 +28,12 @@ use crate::{
 pub static XS_RING: OnceLock<RingBuffer<XS_TSHIRT_SIZE, XS_CAPACITY>> = OnceLock::new();
 pub static S_RING: OnceLock<RingBuffer<S_TSHIRT_SIZE, S_CAPACITY>> = OnceLock::new();
 pub static M_RING: OnceLock<RingBuffer<M_TSHIRT_SIZE, M_CAPACITY>> = OnceLock::new();
+
+// FIXME: 512 is absent and is kinda useful size to keep.
+pub static STANDARD_RING: OnceLock<RingBuffer<512, 2048>> = OnceLock::new();
 pub static L_RING: OnceLock<RingBuffer<L_TSHIRT_SIZE, L_CAPACITY>> = OnceLock::new();
 pub static XL_RING: OnceLock<RingBuffer<XL_TSHIRT_SIZE, XL_CAPACITY>> = OnceLock::new();
 
-// ================================================================================================
-// GLOBAL RING BUFFERS - P2P (P2P actors write to these - for future use)
-// ================================================================================================
 
 pub static P2P_XS_RING: OnceLock<RingBuffer<XS_TSHIRT_SIZE, XS_CAPACITY>> = OnceLock::new();
 pub static P2P_S_RING: OnceLock<RingBuffer<S_TSHIRT_SIZE, S_CAPACITY>> = OnceLock::new();
@@ -47,7 +47,7 @@ static TOKIO_RUNTIME: OnceLock<Runtime> = OnceLock::new();
 fn get_runtime() -> &'static Runtime {
     TOKIO_RUNTIME.get_or_init(|| {
         tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(4) // FIXME: magic number needs to be part of config!
+            .worker_threads(4)
             .enable_all()
             .build()
             .expect("Failed to create Tokio runtime")
@@ -62,6 +62,7 @@ pub struct EventBus {
     xs_writer: Writer<XS_TSHIRT_SIZE, XS_CAPACITY>,
     s_writer: Writer<S_TSHIRT_SIZE, S_CAPACITY>,
     m_writer: Writer<M_TSHIRT_SIZE, M_CAPACITY>,
+    standard_writer: Writer<512, 2048>, // fixme:
     l_writer: Writer<L_TSHIRT_SIZE, L_CAPACITY>,
     xl_writer: Writer<XL_TSHIRT_SIZE, XL_CAPACITY>,
 }
@@ -84,10 +85,12 @@ impl EventBus {
         let m_ring = M_RING.get_or_init(RingBuffer::new);
         let l_ring = L_RING.get_or_init(RingBuffer::new);
         let xl_ring = XL_RING.get_or_init(RingBuffer::new);
+        let standard_ring = STANDARD_RING.get_or_init(RingBuffer::new);
 
         Self {
             xs_writer: Writer::new(xs_ring),
             s_writer: Writer::new(s_ring),
+            standard_writer: Writer::new(standard_ring),
             m_writer: Writer::new(m_ring),
             l_writer: Writer::new(l_ring),
             xl_writer: Writer::new(xl_ring),
@@ -109,6 +112,10 @@ impl EventBus {
         self.m_writer.add(event);
     }
 
+    pub fn write_standard(&mut self, event: PooledEvent<512>) {
+        self.standard_writer.add(event);
+    }
+
     /// Write L event
     pub fn write_l(&mut self, event: PooledEvent<L_TSHIRT_SIZE>) {
         self.l_writer.add(event);
@@ -122,13 +129,19 @@ impl EventBus {
     /// Helper to write data to optimal ring buffer
     pub fn write_optimal(&mut self, data: &[u8], event_type: u32) -> Result<(), XaeroFluxError> {
         let data_len = data.len();
-
+        let ids_encountered = data.chunks_exact(32).take_while(|e| if *e == [0u8; 32] { false } else { true }).count();
+        let entity_parent_ids = ids_encountered * 32 + 32;
+        tracing::info!("########## xaeroflux write_optimal recvd : {data_len:#?}");
+        tracing::info!("########## xaeroflux write_optimal recvd (- entity_parent_ids) : {:#?}", data_len - entity_parent_ids);
         if data_len <= XS_TSHIRT_SIZE {
             let event = Self::create_pooled_event::<XS_TSHIRT_SIZE>(data, event_type)?;
             self.write_xs(event);
         } else if data_len <= S_TSHIRT_SIZE {
             let event = Self::create_pooled_event::<S_TSHIRT_SIZE>(data, event_type)?;
             self.write_s(event);
+        } else if data_len <= 512 {
+            let event = Self::create_pooled_event::<512>(data, event_type)?;
+            self.write_standard(event);
         } else if data_len <= M_TSHIRT_SIZE {
             let event = Self::create_pooled_event::<M_TSHIRT_SIZE>(data, event_type)?;
             self.write_m(event);
@@ -211,9 +224,11 @@ pub struct VectorSearchStats {
 }
 
 use crate::{
+    aof::ring_buffer_actor::ReaderMultiplexer,
     indexing::vec_search_actor::{VectorQueryRequest, VectorQueryResponse, VectorSearchActor},
     vector_clock_actor::VectorClockActor,
 };
+
 
 pub struct XaeroFlux {
     pub event_bus: EventBus,
@@ -221,6 +236,7 @@ pub struct XaeroFlux {
     pub aof_handle: Option<JoinHandle<()>>,
     pub p2p_handle: Option<JoinHandle<()>>,
     pub read_handle: Option<Arc<Mutex<LmdbEnv>>>,
+    pub reader_multiplexer: ReaderMultiplexer,
     pub vector_clock_actor: Option<JoinHandle<()>>,
 }
 
@@ -243,6 +259,7 @@ impl XaeroFlux {
             p2p_handle: None,
             read_handle: None,
             vector_clock_actor: Some(jh),
+            reader_multiplexer: ReaderMultiplexer::new(),
         }
     }
 
@@ -276,10 +293,10 @@ impl XaeroFlux {
                 match P2pActor::<S_TSHIRT_SIZE, S_CAPACITY>::new(s_ring, xaero_id, aof_state, lmdb_env.clone()).await {
                     Ok((mut actor, writer, reader)) =>
                         if let Err(e) = actor.start(writer, reader).await {
-                            tracing::error!("P2P actor failed: {:?}", e);
+                            tracing::error!("P2P actor failed: {e:?}");
                         },
                     Err(e) => {
-                        tracing::error!("Failed to create P2P actor: {:?}", e);
+                        tracing::error!("Failed to create P2P actor: {e:?}");
                     }
                 }
             });
@@ -314,14 +331,10 @@ impl XaeroFlux {
         self.write_event(text.as_bytes(), 1) // event_type 1 for text
     }
 
-    /// Send file via P2P (convenience method)
     pub fn send_file_data(&mut self, file_data: &[u8]) -> Result<(), XaeroFluxError> {
         self.write_event(file_data, 2) // event_type 2 for files
     }
 
-    // ================================================================================================
-    // VECTOR SEARCH API
-    // ================================================================================================
 
     /// Search using a single vector
     pub fn search_vector(&self, vector: Vec<f32>, k: u32, similarity_threshold: f32) -> Result<VectorQueryResponse<5>, XaeroFluxError> {
