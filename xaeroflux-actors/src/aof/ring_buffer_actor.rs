@@ -8,6 +8,7 @@
 //! - Uses hash index for fast leaf hash lookups
 
 use std::{
+    collections::HashMap,
     ops::Range,
     sync::{Arc, Mutex, OnceLock},
     thread::{self, JoinHandle},
@@ -158,14 +159,12 @@ impl AofState {
     /// Recover MMR state by scanning all existing events in chronological order
     fn recover_mmr_from_events(env: &Arc<Mutex<LmdbEnv>>) -> Result<XaeroMmr, anyhow::Error> {
         let mut mmr = XaeroMmr::new();
-
         if let Ok(Some(mmr_meta)) = get_mmr_meta(env) {
             let mmr_leaf_count = mmr_meta.leaf_count;
             tracing::info!("Found existing MMR metadata: {mmr_leaf_count:?} leaves");
         }
 
         let mut all_events = Vec::new();
-        // Helper macro to reduce repetition
         macro_rules! collect_events {
             ($size:expr) => {
                 use crate::aof::storage::lmdb::*;
@@ -204,7 +203,6 @@ impl AofState {
         _xaero_id_hash: [u8; 32],
         _vector_clock_hash: [u8; 32],
     ) -> Result<(), Box<dyn std::error::Error>> {
-        // 1. Store event in LMDB (this also updates hash index automatically)
         match push_internal_event_universal(&self.env, event_data, event_type, timestamp) {
             Ok(_) => {
                 // 2. Add event hash to MMR index
@@ -366,7 +364,6 @@ impl AofActor {
             loop {
                 // Process events with priority (XS first, then S, M, L, XL)
                 if !multiplexer.process_events(&mut state) {
-                    // No events available, yield CPU briefly
                     thread::sleep(Duration::from_micros(100));
                 }
             }
@@ -414,11 +411,11 @@ mod tests {
         let multiplexer = ReaderMultiplexer::new();
 
         // Verify all readers are initialized
-        assert!(multiplexer.xs_reader.cursor == 0);
-        assert!(multiplexer.s_reader.cursor == 0);
-        assert!(multiplexer.m_reader.cursor == 0);
-        assert!(multiplexer.l_reader.cursor == 0);
-        assert!(multiplexer.xl_reader.cursor == 0);
+        assert_eq!(multiplexer.xs_reader.cursor, 0);
+        assert_eq!(multiplexer.s_reader.cursor, 0);
+        assert_eq!(multiplexer.m_reader.cursor, 0);
+        assert_eq!(multiplexer.l_reader.cursor, 0);
+        assert_eq!(multiplexer.xl_reader.cursor, 0);
 
         println!("✅ Reader multiplexer created successfully");
     }

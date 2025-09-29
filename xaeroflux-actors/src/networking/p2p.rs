@@ -23,7 +23,7 @@ use tokio::{
 use tracing::{error, warn};
 use xaeroflux_core::{
     date_time::emit_secs,
-    event::EventType,
+    event::{EventType, SYNC_EVENT_TYPE_BASE},
     hash::{blake_hash, blake_hash_slice},
     pool::XaeroPeerEvent,
     vector_clock::XaeroVectorClock,
@@ -328,7 +328,6 @@ impl<const TSHIRT: usize, const RING_CAPACITY: usize> P2pActor<TSHIRT, RING_CAPA
                     }
                 },
 
-                // Process incoming messages - energy efficient with backoff
                 _ = async {
                     let mut processed_any = false;
 
@@ -360,7 +359,7 @@ impl<const TSHIRT: usize, const RING_CAPACITY: usize> P2pActor<TSHIRT, RING_CAPA
                             let vc = bytemuck::from_bytes::<XaeroVectorClock>(&vc_buf);
                             let event = EventUtils::create_pooled_event(
                                 bytemuck::bytes_of(vc),
-                                10001u32
+                                SYNC_EVENT_TYPE_BASE
                             ).expect("failed to create VC event");
                             self.vector_clock_actor.writer.add(event);
                             had_activity = true;
@@ -410,7 +409,6 @@ impl<const TSHIRT: usize, const RING_CAPACITY: usize> P2pActor<TSHIRT, RING_CAPA
                 }
             }
         }
-
         Ok(())
     }
 

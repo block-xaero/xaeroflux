@@ -21,6 +21,7 @@ pub static EVENT_HEADER: &[u8; 4] = b"XAER";
 pub const CREATE_EVENT_TYPE_BASE: u32 = 1008;
 pub const UPDATE_EVENT_TYPE_BASE: u32 = 2008;
 pub const TOMBSTONE_EVENT_TYPE_BASE: u32 = 3008;
+pub const SYNC_EVENT_TYPE_BASE: u32 = 4008;
 
 pub enum OperationKind {
     Create,
