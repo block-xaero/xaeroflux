@@ -1,4 +1,7 @@
 *seg
+*db
+*db-shm
+*db-wal
 *mdb
 # Rust build artifacts
 /target/
