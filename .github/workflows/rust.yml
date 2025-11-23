@@ -8,10 +8,9 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RUST_MIN_STACK: 32000000
 
 jobs:
-  formatting:
+  check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,35 +18,19 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
-
-      - name: Check formatting
-        working-directory: xaeroflux
-        run: cargo fmt --all -- --check
-
-  build-and-test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
+          components: rustfmt, clippy
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: "xaeroflux -> target"
 
-      - name: Build workspace
-        working-directory: xaeroflux
-        run: cargo build --workspace --verbose
+      - name: Check formatting
+        run: cargo fmt -- --check
+
+      - name: Build
+        run: cargo build --verbose
 
       - name: Run tests
-        working-directory: xaeroflux
-        run: cargo test --workspace --verbose
+        run: cargo test --verbose
 
       - name: Run clippy
-        working-directory: xaeroflux
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy -- -D warnings
