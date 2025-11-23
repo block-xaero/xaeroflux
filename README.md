@@ -1,77 +1,209 @@
 # XaeroFlux
 
-Offline-first P2P storage engine in Rust.
+A decentralized peer-to-peer event log that syncs across devices using [Iroh](https://iroh.computer) and SQLite.
 
-## Architecture
+## What It Does
 
-- **Ring Buffers**: Lock-free, T-shirt sized (XS/S/M/L/XL), cache-aligned
-- **Storage**: LMDB + Merkle trees, content-addressed with Blake3
-- **Identity**: XaeroID (Falcon-512 + ZK proofs)
-- **Networking**: Iroh (QUIC + gossipsub), DHT discovery
-- **Vector Search**: HNSW indexing with configurable extractors
+- **Send events** from your app
+- **Receive events** synced from other peers
+- **Store events** in SQLite
+- **Sync events** over gossip (no central server)
 
-## Design Principles
+## Why Use It
 
-- Zero allocation hot paths
-- POD-first with bytemuck
-- `#[repr(C, align(64))]` structs
-- Actor model with bounded collections
+- Single discovery key controls who syncs with you
+- Events are deduplicated automatically
+- Works offline - syncs when connected
+- No configuration - just a discovery key and database path
+- 280 lines of Rust
 
-## Usage
+## Installation
+
+```toml
+[dependencies]
+xaeroflux = { git = "https://github.com/block-xaero/xaeroflux" }
+tokio = { version = "1", features = ["full"] }
+```
+
+## Basic Usage
 
 ```rust
-use xaeroflux::XaeroFlux;
-use xaeroid::XaeroID;
+use xaeroflux::{XaeroFlux, Event, generate_event_id};
 
-let mut xf = XaeroFlux::new();
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let mut xf = XaeroFlux::new(
+        "my-app-key".to_string(),
+        "events.db".to_string()
+    ).await?;
 
-// Start AOF persistence
-xf.start_aof()?;
+    // Send an event
+    let now = chrono::Utc::now().timestamp() as u64;
+    xf.event_tx.send(Event {
+        id: generate_event_id("hello world", &xf.node_id, now),
+        payload: "hello world".to_string(),
+        source: xf.node_id.clone(),
+        ts: now,
+    })?;
 
-// Start P2P networking  
-xf.start_p2p(my_xaero_id)?;
+    // Receive synced events from other peers
+    while let Some(event) = xf.event_rx.recv().await {
+        println!("Received: {} from {}", event.payload, event.source);
+    }
 
-// Send data
-xf.send_text("Hello world")?;
-xf.send_file_data(&file_bytes)?;
+    Ok(())
+}
 ```
 
-## Ring Buffer Sizes
+## Event Structure
 
-| Size | Capacity | Event Size |
-|------|----------|------------|
-| XS   | 1024     | 64 bytes   |
-| S    | 1024     | 256 bytes  |
-| M    | 512      | 1024 bytes |
-| L    | 256      | 4096 bytes |
-| XL   | 128      | 16384 bytes|
+```rust
+pub struct Event {
+    pub id: String,      // Unique ID (blake3 hash)
+    pub payload: String, // Your data (any string)
+    pub source: String,  // Node ID that created event
+    pub ts: u64,        // Unix timestamp
+}
+```
 
-## P2P Protocol
+## How It Works
 
-1. Vector clock synchronization
-2. Event discovery and exchange
-3. File transfer
-4. Audio/video streaming
+1. You send an event via `event_tx`
+2. XaeroFlux stores it in SQLite
+3. XaeroFlux broadcasts it on gossip topic `xsp-1.0/{discovery_key}/events`
+4. Other peers with same discovery key receive and store it
+5. You receive synced events via `event_rx`
 
-## Storage Format
+Events from your own node are not sent back to `event_rx` (you already have them).
 
-- Events: Append-only log in LMDB
-- Indexing: Hash tables + vector search
-- Merkle trees: Content verification
-- Vector clocks: Causal ordering
+## Discovery Keys
 
-## Build
+The discovery key determines which peers sync with each other:
+
+```rust
+// These sync together (same discovery key)
+let peer1 = XaeroFlux::new("project-alpha".to_string(), "db1.db".to_string()).await?;
+let peer2 = XaeroFlux::new("project-alpha".to_string(), "db2.db".to_string()).await?;
+
+// This syncs separately (different discovery key)
+let peer3 = XaeroFlux::new("project-beta".to_string(), "db3.db".to_string()).await?;
+```
+## CLI Demo
+
+### Build
 
 ```bash
-cargo build --release
+cargo build --release --bin xaeroflux-cli
 ```
 
-## Test
+### Terminal 1 - Sender
 
 ```bash
-cargo test
+./target/release/xaeroflux-cli \
+  --discovery-key demo \
+  --db peer1.db \
+  send "Hello from peer 1"
 ```
+
+### Terminal 2 - Receiver
+
+```bash
+./target/release/xaeroflux-cli \
+  --discovery-key demo \
+  --db peer2.db \
+  recv
+```
+
+The receiver will print events sent by the first peer (and any other peers on the same discovery key).
+
+### Send Multiple Events
+
+```bash
+# Terminal 1
+./target/release/xaeroflux-cli -k demo -d peer1.db send "Event 1"
+./target/release/xaeroflux-cli -k demo -d peer1.db send "Event 2"
+./target/release/xaeroflux-cli -k demo -d peer1.db send "Event 3"
+```
+
+### Interactive Mode
+
+```bash
+./target/release/xaeroflux-cli -k demo -d peer1.db interactive
+```
+
+Type messages and press Enter. Type `quit` to exit.
+
+## Example: Building a Chat App
+
+```rust
+use xaeroflux::{XaeroFlux, Event, generate_event_id};
+use serde::{Serialize, Deserialize};
+
+#[derive(Serialize, Deserialize)]
+struct ChatMessage {
+    user: String,
+    message: String,
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let mut xf = XaeroFlux::new("my-chat".to_string(), "chat.db".to_string()).await?;
+    let node_id = xf.node_id.clone();
+
+    // Send chat messages
+    let tx = xf.event_tx.clone();
+    tokio::spawn(async move {
+        let stdin = tokio::io::stdin();
+        let mut lines = tokio::io::BufReader::new(stdin).lines();
+        
+        while let Ok(Some(line)) = lines.next_line().await {
+            let msg = ChatMessage {
+                user: node_id[..8].to_string(),
+                message: line,
+            };
+            let payload = serde_json::to_string(&msg).unwrap();
+            let now = chrono::Utc::now().timestamp() as u64;
+            
+            tx.send(Event {
+                id: generate_event_id(&payload, &node_id, now),
+                payload,
+                source: node_id.clone(),
+                ts: now,
+            }).unwrap();
+        }
+    });
+
+    // Receive and display messages
+    while let Some(event) = xf.event_rx.recv().await {
+        let msg: ChatMessage = serde_json::from_str(&event.payload)?;
+        println!("[{}] {}", msg.user, msg.message);
+    }
+
+    Ok(())
+}
+```
+
+## Limitations
+
+- No snapshot sync - only events broadcast after joining
+- No compaction - events stored forever
+- No authentication - discovery key is only access control
+- No ordering guarantees beyond timestamps
+
+## Use Cases
+
+- Collaborative apps (docs, whiteboards, spreadsheets)
+- Chat applications
+- Activity feeds
+- Multiplayer game state sync
+- IoT sensor data collection
+- Distributed logging
+
+## Protocol
+
+**Topic**: `xsp-1.0/{discovery_key}/events`  
+**Transport**: Iroh gossip  
+**Format**: JSON-serialized Event struct
 
 ## License
-
-MPL-2.0
+MPL v2.0
