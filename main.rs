@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use xaeroflux::{generate_event_id, Event, XaeroFlux};
+use xaeroflux::{Event, XaeroFlux, generate_event_id};
 
 #[derive(Parser)]
 #[command(name = "xaeroflux-cli")]

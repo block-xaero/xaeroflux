@@ -87,7 +87,7 @@ impl XaeroFlux {
             sync_event_tx,
             bootstrap_peers,
         )
-            .await?;
+        .await?;
         tokio::spawn(network_actor.run());
 
         Ok(Self {
@@ -216,14 +216,13 @@ impl NetworkActor {
 
         // Create topic IDs
         let discovery_topic_id = TopicId::from_bytes(
-            blake3::hash(format!("xsp-1.0/{}/discovery", discovery_key).as_bytes())
-                .as_bytes()[..32]
+            blake3::hash(format!("xsp-1.0/{}/discovery", discovery_key).as_bytes()).as_bytes()
+                [..32]
                 .try_into()?,
         );
 
         let events_topic_id = TopicId::from_bytes(
-            blake3::hash(format!("xsp-1.0/{}/events", discovery_key).as_bytes())
-                .as_bytes()[..32]
+            blake3::hash(format!("xsp-1.0/{}/events", discovery_key).as_bytes()).as_bytes()[..32]
                 .try_into()?,
         );
 
@@ -234,7 +233,9 @@ impl NetworkActor {
             .collect();
 
         // Subscribe to events topic with bootstrap peers
-        let mut events_topic = gossip.subscribe(events_topic_id, bootstrap_ids.clone()).await?;
+        let mut events_topic = gossip
+            .subscribe(events_topic_id, bootstrap_ids.clone())
+            .await?;
 
         // Join discovery topic for peer exchange
         let mut discovery_topic = gossip.subscribe(discovery_topic_id, bootstrap_ids).await?;
@@ -243,10 +244,9 @@ impl NetworkActor {
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
         // Try to wait for at least one neighbor (don't fail if none found)
-        tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            events_topic.joined()
-        ).await.ok();
+        tokio::time::timeout(std::time::Duration::from_secs(2), events_topic.joined())
+            .await
+            .ok();
 
         tracing::info!("Subscribed to topics for discovery key: {}", discovery_key);
 
