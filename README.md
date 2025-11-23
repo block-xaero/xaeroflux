@@ -187,7 +187,7 @@ async fn main() -> anyhow::Result<()> {
 
 - No snapshot sync - only events broadcast after joining
 - No compaction - events stored forever
-- No authentication - discovery key is only access control
+- No authentication - discovery key is only access control -- See XaeroID for this.
 - No ordering guarantees beyond timestamps
 
 ## Use Cases
