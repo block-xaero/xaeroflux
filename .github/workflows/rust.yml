@@ -8,66 +8,46 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  RUST_MIN_STACK: 32000000
 
 jobs:
   formatting:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain (fmt + clippy)
-        uses: actions-rs/toolchain@v1
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
-          profile: minimal
-          toolchain: nightly
-          override: true
-          components: rustfmt, clippy
+          components: rustfmt
 
-      - name: Check formatting for all crates
+      - name: Check formatting
         working-directory: xaeroflux
         run: cargo fmt --all -- --check
 
-  build:
+  build-and-test:
     runs-on: ubuntu-latest
-    env:
-      RUST_MIN_STACK: 32000000
     steps:
       - uses: actions/checkout@v4
 
-      - name: Cache Cargo registry
-        uses: actions/cache@v3
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
-          path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Cache Cargo git index
-        uses: actions/cache@v3
-        with:
-          path: ~/.cargo/git
-          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Cache Cargo build output
-        uses: actions/cache@v3
-        with:
-          path: target
-          key: ${{ runner.os }}-cargo-target-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Install Rust toolchain (clippy)
-        uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: nightly
-          override: true
           components: clippy
 
-      - name: Build entire workspace
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "xaeroflux -> target"
+
+      - name: Build workspace
         working-directory: xaeroflux
         run: cargo build --workspace --verbose
 
-      - name: Run all workspace tests
+      - name: Run tests
         working-directory: xaeroflux
-        run: RUST_MIN_STACK=64000000 cargo test --lib --tests --workspace --verbose
+        run: cargo test --workspace --verbose
 
-      - name: Run clippy on all targets
+      - name: Run clippy
         working-directory: xaeroflux
-        run: RUSTFLAGS="-A  clippy::all" cargo clippy --all-targets --all-features
+        run: cargo clippy --all-targets --all-features -- -D warnings
