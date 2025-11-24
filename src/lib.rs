@@ -9,6 +9,7 @@ use bytes::Bytes;
 use futures::StreamExt;
 use iroh::{
     Endpoint, EndpointId, RelayMode, SecretKey,
+    protocol::Router,
     discovery::{dns::DnsDiscovery, mdns::MdnsDiscovery, pkarr::PkarrPublisher},
 };
 use iroh_gossip::{
@@ -87,7 +88,7 @@ impl XaeroFlux {
             sync_event_tx,
             bootstrap_peers,
         )
-        .await?;
+            .await?;
         tokio::spawn(network_actor.run());
 
         Ok(Self {
@@ -118,7 +119,7 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
 }
 
 // ---------- Storage Actor ----------
-// Stores events to SQLite and forwards to network
+// Responsible for persisting events and forwarding new events to the network
 struct StorageActor {
     db: Arc<Mutex<Connection>>,
     app_rx: mpsc::UnboundedReceiver<Event>,
@@ -180,6 +181,7 @@ struct NetworkActor {
     db: Arc<Mutex<Connection>>,
     endpoint: Endpoint,
     gossip: Arc<Gossip>,
+    router: Router,
     gossip_sender: GossipSender,
     gossip_receiver: GossipReceiver,
     outbound_rx: mpsc::UnboundedReceiver<Event>,
@@ -199,7 +201,7 @@ impl NetworkActor {
         // Setup Iroh endpoint with discovery
         let endpoint = Endpoint::builder()
             .secret_key(secret_key)
-            .alpns(vec![b"xsp-1.0".to_vec()])
+            .alpns(vec![iroh_gossip::ALPN.to_vec(), b"xsp-1.0".to_vec()])
             .relay_mode(RelayMode::Default)
             // Add discovery services
             .discovery(PkarrPublisher::n0_dns())
@@ -214,15 +216,21 @@ impl NetworkActor {
         // Setup gossip
         let gossip = Arc::new(Gossip::builder().spawn(endpoint.clone()));
 
+        // Attach gossip to the endpoint so we can accept incoming gossip connections
+        let router = Router::builder(endpoint.clone())
+            .accept(iroh_gossip::ALPN, gossip.clone())
+            .spawn();
+
         // Create topic IDs
         let discovery_topic_id = TopicId::from_bytes(
-            blake3::hash(format!("xsp-1.0/{}/discovery", discovery_key).as_bytes()).as_bytes()
-                [..32]
+            blake3::hash(format!("xsp-1.0/{}/discovery", discovery_key).as_bytes())
+                .as_bytes()[..32]
                 .try_into()?,
         );
 
         let events_topic_id = TopicId::from_bytes(
-            blake3::hash(format!("xsp-1.0/{}/events", discovery_key).as_bytes()).as_bytes()[..32]
+            blake3::hash(format!("xsp-1.0/{}/events", discovery_key).as_bytes())
+                .as_bytes()[..32]
                 .try_into()?,
         );
 
@@ -232,23 +240,31 @@ impl NetworkActor {
             .filter_map(|s| s.parse().ok())
             .collect();
 
-        // Subscribe to events topic with bootstrap peers
+        // Join events topic
         let mut events_topic = gossip
             .subscribe(events_topic_id, bootstrap_ids.clone())
             .await?;
 
         // Join discovery topic for peer exchange
-        let mut discovery_topic = gossip.subscribe(discovery_topic_id, bootstrap_ids).await?;
+        let mut discovery_topic = gossip
+            .subscribe(discovery_topic_id, bootstrap_ids)
+            .await?;
 
         // Wait a bit for mDNS discovery to work
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
         // Try to wait for at least one neighbor (don't fail if none found)
-        tokio::time::timeout(std::time::Duration::from_secs(2), events_topic.joined())
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            events_topic.joined(),
+        )
             .await
             .ok();
 
-        tracing::info!("Subscribed to topics for discovery key: {}", discovery_key);
+        tracing::info!(
+            "Subscribed to topics for discovery key: {}",
+            discovery_key
+        );
 
         // Split events topic for main operation
         let (gossip_sender, gossip_receiver) = events_topic.split();
@@ -260,7 +276,8 @@ impl NetworkActor {
             tracing::info!("Peer discovery task started");
 
             // Periodically announce our presence
-            let mut announce_interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
+            let mut announce_interval =
+                tokio::time::interval(tokio::time::Duration::from_secs(30));
 
             loop {
                 tokio::select! {
@@ -282,7 +299,10 @@ impl NetworkActor {
                                         if peer_id != endpoint_id {
                                             tracing::info!("Discovered peer via gossip: {}", peer_id);
                                             // Try to join this peer on events topic
-                                            if let Ok(mut topic) = gossip_clone.subscribe(events_topic_id, vec![peer_id]).await {
+                                            if let Ok(mut topic) = gossip_clone
+                                                .subscribe(events_topic_id, vec![peer_id])
+                                                .await
+                                            {
                                                 // Just subscribe to establish connection
                                                 drop(topic);
                                             }
@@ -304,7 +324,10 @@ impl NetworkActor {
                 }
             }
 
-            tracing::warn!("Peer discovery task stopped");
+            tracing::info!(
+                "Peer discovery task for key '{}' terminated",
+                discovery_key_clone
+            );
         });
 
         Ok(Self {
@@ -312,6 +335,7 @@ impl NetworkActor {
             db,
             endpoint,
             gossip,
+            router,
             gossip_sender,
             gossip_receiver,
             outbound_rx,
@@ -331,40 +355,36 @@ impl NetworkActor {
                         Ok(GossipEvent::Received(msg)) => {
                             match serde_json::from_slice::<Event>(&msg.content) {
                                 Ok(event) => {
-                                    // Don't process our own events
-                                    if event.source == self.node_id {
-                                        tracing::debug!("Ignoring own event: {}", event.id);
-                                        continue;
-                                    }
+                                    // Don't process our own events from network
+                                    if event.source != self.node_id {
+                                        tracing::info!("Received event from network: {}", event.id);
 
-                                    tracing::info!("Received event from network: {}", event.id);
+                                        // Store and forward to app
+                                        let mut db = self.db.lock().await;
+                                        match db.execute(
+                                            "INSERT OR IGNORE INTO events (id, payload, source, ts) VALUES (?1, ?2, ?3, ?4)",
+                                            params![event.id, event.payload, event.source, event.ts],
+                                        ) {
+                                            Ok(rows) => {
+                                                if rows > 0 {
+                                                    tracing::info!("Synced event {} from {}", event.id, event.source);
+                                                    drop(db);
 
-                                    // Store in DB
-                                    let db = self.db.lock().await;
-                                    match db.execute(
-                                        "INSERT OR IGNORE INTO events (id, payload, source, ts) VALUES (?1, ?2, ?3, ?4)",
-                                        params![event.id, event.payload, event.source, event.ts],
-                                    ) {
-                                        Ok(rows) => {
-                                            if rows > 0 {
-                                                tracing::info!("Synced event {} from {}", event.id, event.source);
-                                                drop(db); // Release lock before sending
-
-                                                // Forward to app
-                                                if let Err(e) = self.inbound_tx.send(event) {
-                                                    tracing::error!("Failed to forward event to app: {}", e);
+                                                    if let Err(e) = self.inbound_tx.send(event) {
+                                                        tracing::error!("Failed to forward synced event to app: {}", e);
+                                                    }
+                                                } else {
+                                                    tracing::debug!("Already have event {}, skipping", event.id);
                                                 }
-                                            } else {
-                                                tracing::debug!("Event {} already exists", event.id);
                                             }
-                                        }
-                                        Err(e) => {
-                                            tracing::error!("Failed to store synced event: {}", e);
+                                            Err(e) => {
+                                                tracing::error!("Failed to store synced event {}: {}", event.id, e);
+                                            }
                                         }
                                     }
                                 }
                                 Err(e) => {
-                                    tracing::warn!("Failed to deserialize event: {}", e);
+                                    tracing::warn!("Failed to decode gossip message as Event: {}", e);
                                 }
                             }
                         }
@@ -375,37 +395,32 @@ impl NetworkActor {
                             tracing::info!("Events neighbor down: {}", peer);
                         }
                         Ok(GossipEvent::Lagged) => {
-                            tracing::warn!("Gossip receiver lagged, may have missed messages");
+                            tracing::warn!("Gossip receiver lagged");
                         }
                         Err(e) => {
-                            tracing::error!("Gossip receiver error: {}", e);
-                            break;
+                            tracing::warn!("Error in gossip receiver: {}", e);
                         }
                     }
                 }
 
-                // Handle outgoing events to broadcast
+                // Handle outbound events (from storage)
                 Some(event) = self.outbound_rx.recv() => {
-                    tracing::info!("Broadcasting event: {}", event.id);
-
-                    let data = match serde_json::to_vec(&event) {
-                        Ok(d) => d,
-                        Err(e) => {
-                            tracing::error!("Failed to serialize event: {}", e);
-                            continue;
+                    match serde_json::to_vec(&event) {
+                        Ok(bytes) => {
+                            if let Err(e) = self.gossip_sender.broadcast(Bytes::from(bytes)).await {
+                                tracing::error!("Failed to broadcast event {}: {}", event.id, e);
+                            } else {
+                                tracing::info!("Broadcasted event {} to gossip network", event.id);
+                            }
                         }
-                    };
-
-                    if let Err(e) = self.gossip_sender.broadcast(Bytes::from(data)).await {
-                        tracing::error!("Failed to broadcast event: {}", e);
-                    } else {
-                        tracing::info!("Event {} broadcast successful", event.id);
+                        Err(e) => {
+                            tracing::error!("Failed to serialize event {}: {}", event.id, e);
+                        }
                     }
                 }
 
-                // Both channels closed, exit
                 else => {
-                    tracing::info!("NetworkActor channels closed, exiting");
+                    tracing::warn!("NetworkActor channel closed, exiting");
                     break;
                 }
             }
@@ -426,25 +441,11 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_xaeroflux_basic() {
-        let mut xf = XaeroFlux::new("test-key".to_string(), ":memory:".to_string())
+    async fn basic_integration_sanity() {
+        // Very simple sanity test to ensure XaeroFlux can be created and shut down.
+        let xf = XaeroFlux::new("test".to_string(), ":memory:".to_string())
             .await
-            .unwrap();
-
-        let event = Event {
-            id: generate_event_id("hello", &xf.node_id, 123),
-            payload: "hello".to_string(),
-            source: xf.node_id.clone(),
-            ts: 123,
-        };
-
-        xf.event_tx.send(event.clone()).unwrap();
-
-        // Event should be synced back
-        let received =
-            tokio::time::timeout(std::time::Duration::from_secs(1), xf.event_rx.recv()).await;
-
-        // Note: Will timeout since we don't sync our own events
-        // This is expected behavior
+            .expect("failed to create XaeroFlux");
+        assert!(!xf.node_id.is_empty());
     }
 }

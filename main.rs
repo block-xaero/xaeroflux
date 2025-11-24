@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use xaeroflux::{Event, XaeroFlux, generate_event_id};
+use xaeroflux::{generate_event_id, Event, XaeroFlux};
 
 #[derive(Parser)]
 #[command(name = "xaeroflux-cli")]
@@ -13,6 +13,10 @@ struct Cli {
     /// Database file path
     #[arg(short = 'd', long, default_value = "xaeroflux.db")]
     db: String,
+
+    /// Bootstrap peers (EndpointId strings)
+    #[arg(long = "bootstrap", value_name = "ENDPOINT_ID")]
+    bootstrap: Vec<String>,
 
     #[command(subcommand)]
     command: Commands,
@@ -47,25 +51,35 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Send { message } => {
-            send_event(&cli.discovery_key, &cli.db, message).await?;
+            send_event(&cli.discovery_key, &cli.db, &cli.bootstrap, message).await?;
         }
         Commands::Recv => {
-            receive_events(&cli.discovery_key, &cli.db).await?;
+            receive_events(&cli.discovery_key, &cli.db, &cli.bootstrap).await?;
         }
         Commands::Interactive => {
-            interactive_mode(&cli.discovery_key, &cli.db).await?;
+            interactive_mode(&cli.discovery_key, &cli.db, &cli.bootstrap).await?;
         }
         Commands::Info => {
-            show_info(&cli.discovery_key, &cli.db).await?;
+            show_info(&cli.discovery_key, &cli.db, &cli.bootstrap).await?;
         }
     }
 
     Ok(())
 }
 
-async fn send_event(discovery_key: &str, db_path: &str, message: String) -> Result<()> {
+async fn send_event(
+    discovery_key: &str,
+    db_path: &str,
+    bootstrap: &[String],
+    message: String,
+) -> Result<()> {
     println!("Initializing XaeroFlux...");
-    let xf = XaeroFlux::new(discovery_key.to_string(), db_path.to_string()).await?;
+    let xf = XaeroFlux::new_with_bootstrap(
+        discovery_key.to_string(),
+        db_path.to_string(),
+        bootstrap.to_vec(),
+    )
+        .await?;
 
     let now = chrono::Utc::now().timestamp() as u64;
     let event = Event {
@@ -90,9 +104,18 @@ async fn send_event(discovery_key: &str, db_path: &str, message: String) -> Resu
     Ok(())
 }
 
-async fn receive_events(discovery_key: &str, db_path: &str) -> Result<()> {
+async fn receive_events(
+    discovery_key: &str,
+    db_path: &str,
+    bootstrap: &[String],
+) -> Result<()> {
     println!("Initializing XaeroFlux...");
-    let mut xf = XaeroFlux::new(discovery_key.to_string(), db_path.to_string()).await?;
+    let mut xf = XaeroFlux::new_with_bootstrap(
+        discovery_key.to_string(),
+        db_path.to_string(),
+        bootstrap.to_vec(),
+    )
+        .await?;
 
     println!("Node ID: {}", xf.node_id);
     println!("Discovery Key: {}", discovery_key);
@@ -103,9 +126,8 @@ async fn receive_events(discovery_key: &str, db_path: &str) -> Result<()> {
             .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
             .unwrap_or_else(|| "unknown".to_string());
 
-        println!("─────────────────────────────────────────");
-        println!("Event ID: {}", event.id);
-        println!("From: {}", &event.source[..16]);
+        println!("ID: {}", event.id);
+        println!("Source: {}", event.source);
         println!("Time: {}", timestamp);
         println!("Payload: {}", event.payload);
         println!();
@@ -114,11 +136,20 @@ async fn receive_events(discovery_key: &str, db_path: &str) -> Result<()> {
     Ok(())
 }
 
-async fn interactive_mode(discovery_key: &str, db_path: &str) -> Result<()> {
+async fn interactive_mode(
+    discovery_key: &str,
+    db_path: &str,
+    bootstrap: &[String],
+) -> Result<()> {
     use tokio::io::{AsyncBufReadExt, BufReader};
 
     println!("Initializing XaeroFlux...");
-    let mut xf = XaeroFlux::new(discovery_key.to_string(), db_path.to_string()).await?;
+    let mut xf = XaeroFlux::new_with_bootstrap(
+        discovery_key.to_string(),
+        db_path.to_string(),
+        bootstrap.to_vec(),
+    )
+        .await?;
 
     println!("Node ID: {}", xf.node_id);
     println!("Discovery Key: {}", discovery_key);
@@ -150,10 +181,12 @@ async fn interactive_mode(discovery_key: &str, db_path: &str) -> Result<()> {
     loop {
         line.clear();
         match reader.read_line(&mut line).await {
-            Ok(0) => break, // EOF
+            Ok(0) => {
+                println!("\nEOF, exiting");
+                break;
+            }
             Ok(_) => {
                 let message = line.trim().to_string();
-
                 if message == "quit" {
                     println!("Exiting...");
                     break;
@@ -187,9 +220,18 @@ async fn interactive_mode(discovery_key: &str, db_path: &str) -> Result<()> {
     Ok(())
 }
 
-async fn show_info(discovery_key: &str, db_path: &str) -> Result<()> {
+async fn show_info(
+    discovery_key: &str,
+    db_path: &str,
+    bootstrap: &[String],
+) -> Result<()> {
     println!("Initializing XaeroFlux...");
-    let xf = XaeroFlux::new(discovery_key.to_string(), db_path.to_string()).await?;
+    let xf = XaeroFlux::new_with_bootstrap(
+        discovery_key.to_string(),
+        db_path.to_string(),
+        bootstrap.to_vec(),
+    )
+        .await?;
 
     println!("\n╔═══════════════════════════════════════════════════════╗");
     println!("║              XaeroFlux Node Info                      ║");
