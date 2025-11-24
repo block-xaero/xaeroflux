@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use xaeroflux::{generate_event_id, Event, XaeroFlux};
+use xaeroflux::{Event, XaeroFlux, generate_event_id};
 
 #[derive(Parser)]
 #[command(name = "xaeroflux-cli")]
@@ -79,7 +79,7 @@ async fn send_event(
         db_path.to_string(),
         bootstrap.to_vec(),
     )
-        .await?;
+    .await?;
 
     let now = chrono::Utc::now().timestamp() as u64;
     let event = Event {
@@ -104,18 +104,14 @@ async fn send_event(
     Ok(())
 }
 
-async fn receive_events(
-    discovery_key: &str,
-    db_path: &str,
-    bootstrap: &[String],
-) -> Result<()> {
+async fn receive_events(discovery_key: &str, db_path: &str, bootstrap: &[String]) -> Result<()> {
     println!("Initializing XaeroFlux...");
     let mut xf = XaeroFlux::new_with_bootstrap(
         discovery_key.to_string(),
         db_path.to_string(),
         bootstrap.to_vec(),
     )
-        .await?;
+    .await?;
 
     println!("Node ID: {}", xf.node_id);
     println!("Discovery Key: {}", discovery_key);
@@ -136,11 +132,7 @@ async fn receive_events(
     Ok(())
 }
 
-async fn interactive_mode(
-    discovery_key: &str,
-    db_path: &str,
-    bootstrap: &[String],
-) -> Result<()> {
+async fn interactive_mode(discovery_key: &str, db_path: &str, bootstrap: &[String]) -> Result<()> {
     use tokio::io::{AsyncBufReadExt, BufReader};
 
     println!("Initializing XaeroFlux...");
@@ -149,7 +141,7 @@ async fn interactive_mode(
         db_path.to_string(),
         bootstrap.to_vec(),
     )
-        .await?;
+    .await?;
 
     println!("Node ID: {}", xf.node_id);
     println!("Discovery Key: {}", discovery_key);
@@ -220,18 +212,14 @@ async fn interactive_mode(
     Ok(())
 }
 
-async fn show_info(
-    discovery_key: &str,
-    db_path: &str,
-    bootstrap: &[String],
-) -> Result<()> {
+async fn show_info(discovery_key: &str, db_path: &str, bootstrap: &[String]) -> Result<()> {
     println!("Initializing XaeroFlux...");
     let xf = XaeroFlux::new_with_bootstrap(
         discovery_key.to_string(),
         db_path.to_string(),
         bootstrap.to_vec(),
     )
-        .await?;
+    .await?;
 
     println!("\n╔═══════════════════════════════════════════════════════╗");
     println!("║              XaeroFlux Node Info                      ║");

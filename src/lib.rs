@@ -9,12 +9,12 @@ use bytes::Bytes;
 use futures::StreamExt;
 use iroh::{
     Endpoint, EndpointId, RelayMode, SecretKey,
-    protocol::Router,
     discovery::{dns::DnsDiscovery, mdns::MdnsDiscovery, pkarr::PkarrPublisher},
+    protocol::Router,
 };
 use iroh_gossip::{
     Gossip,
-    api::{Event as GossipEvent, GossipReceiver, GossipSender, GossipTopic},
+    api::{Event as GossipEvent, GossipReceiver, GossipSender},
     proto::state::TopicId,
 };
 use rand_chacha::rand_core::SeedableRng;
@@ -88,7 +88,7 @@ impl XaeroFlux {
             sync_event_tx,
             bootstrap_peers,
         )
-            .await?;
+        .await?;
         tokio::spawn(network_actor.run());
 
         Ok(Self {
@@ -223,14 +223,13 @@ impl NetworkActor {
 
         // Create topic IDs
         let discovery_topic_id = TopicId::from_bytes(
-            blake3::hash(format!("xsp-1.0/{}/discovery", discovery_key).as_bytes())
-                .as_bytes()[..32]
+            blake3::hash(format!("xsp-1.0/{}/discovery", discovery_key).as_bytes()).as_bytes()
+                [..32]
                 .try_into()?,
         );
 
         let events_topic_id = TopicId::from_bytes(
-            blake3::hash(format!("xsp-1.0/{}/events", discovery_key).as_bytes())
-                .as_bytes()[..32]
+            blake3::hash(format!("xsp-1.0/{}/events", discovery_key).as_bytes()).as_bytes()[..32]
                 .try_into()?,
         );
 
@@ -246,25 +245,17 @@ impl NetworkActor {
             .await?;
 
         // Join discovery topic for peer exchange
-        let mut discovery_topic = gossip
-            .subscribe(discovery_topic_id, bootstrap_ids)
-            .await?;
+        let mut discovery_topic = gossip.subscribe(discovery_topic_id, bootstrap_ids).await?;
 
         // Wait a bit for mDNS discovery to work
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
         // Try to wait for at least one neighbor (don't fail if none found)
-        tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            events_topic.joined(),
-        )
+        tokio::time::timeout(std::time::Duration::from_secs(2), events_topic.joined())
             .await
             .ok();
 
-        tracing::info!(
-            "Subscribed to topics for discovery key: {}",
-            discovery_key
-        );
+        tracing::info!("Subscribed to topics for discovery key: {}", discovery_key);
 
         // Split events topic for main operation
         let (gossip_sender, gossip_receiver) = events_topic.split();
@@ -276,8 +267,7 @@ impl NetworkActor {
             tracing::info!("Peer discovery task started");
 
             // Periodically announce our presence
-            let mut announce_interval =
-                tokio::time::interval(tokio::time::Duration::from_secs(30));
+            let mut announce_interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
 
             loop {
                 tokio::select! {
@@ -294,12 +284,12 @@ impl NetworkActor {
                     Some(event_result) = discovery_topic.next() => {
                         match event_result {
                             Ok(GossipEvent::Received(msg)) => {
-                                if let Ok(peer_id_str) = std::str::from_utf8(&msg.content) {
-                                    if let Ok(peer_id) = peer_id_str.parse::<EndpointId>() {
-                                        if peer_id != endpoint_id {
+                                if let Ok(peer_id_str) = std::str::from_utf8(&msg.content)
+                                    && let Ok(peer_id) = peer_id_str.parse::<EndpointId>()
+                                        && peer_id != endpoint_id {
                                             tracing::info!("Discovered peer via gossip: {}", peer_id);
                                             // Try to join this peer on events topic
-                                            if let Ok(mut topic) = gossip_clone
+                                            if let Ok(topic) = gossip_clone
                                                 .subscribe(events_topic_id, vec![peer_id])
                                                 .await
                                             {
@@ -307,8 +297,6 @@ impl NetworkActor {
                                                 drop(topic);
                                             }
                                         }
-                                    }
-                                }
                             }
                             Ok(GossipEvent::NeighborUp(peer)) => {
                                 tracing::info!("Discovery neighbor up: {}", peer);
@@ -360,7 +348,7 @@ impl NetworkActor {
                                         tracing::info!("Received event from network: {}", event.id);
 
                                         // Store and forward to app
-                                        let mut db = self.db.lock().await;
+                                        let db = self.db.lock().await;
                                         match db.execute(
                                             "INSERT OR IGNORE INTO events (id, payload, source, ts) VALUES (?1, ?2, ?3, ?4)",
                                             params![event.id, event.payload, event.source, event.ts],
