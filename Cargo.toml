@@ -3,6 +3,7 @@ name = "xaeroflux"
 version = "1.0.0"
 edition = "2024"
 description = "a decentralized, p2p, offline first event log built on tokio, rusqlite and iroh"
+license = "MPL-2.0"
 
 [[bin]]
 name = "xaeroflux-cli"
